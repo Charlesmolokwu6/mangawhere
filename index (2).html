@@ -1,0 +1,1832 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Manga Where</title>
+<style>
+:root{--bg:#14101a;--surf:#1e1826;--surf2:#271f31;--line:#372c44;--text:#f0ebf5;
+--dim:#a094ad;--mint:#3fe0c8;--mintd:#0e3a34;--warn:#ffb454;--bad:#ff6b6b}
+*{box-sizing:border-box}html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--text);min-height:100vh;
+font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5}
+img{display:block;max-width:100%}button{font-family:inherit;cursor:pointer}
+.mono{font-family:ui-monospace,Consolas,monospace}
+.top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;
+border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:20}
+.logo{font-weight:700;font-size:17px;letter-spacing:-.02em;background:none;border:none;color:var(--text);padding:0}
+.logo b{color:var(--mint)}
+.listbtn{background:var(--surf);border:1px solid var(--line);color:var(--text);
+font-size:13px;font-weight:600;padding:7px 13px;border-radius:9px;display:flex;
+align-items:center;gap:7px}
+.listbtn:hover{border-color:var(--mint)}
+.badge{background:var(--mint);color:#0d2b26;border-radius:20px;padding:1px 7px;
+font-size:11px;font-weight:700;display:none}
+.badge.on{display:inline-block}
+.diag{font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace;text-align:right}
+main{max-width:820px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:clamp(20px,5.5vw,27px);font-weight:700;letter-spacing:-.03em;margin:0 0 6px;line-height:1.15}
+.sub{color:var(--dim);font-size:14px;margin:0 0 18px}
+.paste{display:flex;gap:8px;margin-bottom:8px}
+.paste input{flex:1;min-width:0;background:var(--surf);border:1px solid var(--line);
+color:var(--text);border-radius:11px;padding:14px;font-size:15px;font-family:inherit}
+.paste input:focus{outline:none;border-color:var(--mint)}
+.paste input::placeholder{color:#6d6178}
+.paste button{background:var(--mint);color:#0d2b26;border:none;border-radius:11px;
+padding:0 20px;font-weight:700;font-size:14px}
+.paste button:disabled{opacity:.45}
+.searchwrap{position:relative;z-index:30}
+.suggest{position:absolute;top:100%;left:0;right:0;margin-top:6px;background:var(--surf);
+border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 12px 30px rgba(0,0,0,.55);
+max-height:340px;overflow-y:auto}
+.sug{display:flex;align-items:center;gap:11px;width:100%;background:none;border:none;
+padding:9px 12px;text-align:left;color:inherit;border-bottom:1px solid var(--line)}
+.sug:last-child{border-bottom:none}
+.sug:hover,.sug.on{background:var(--surf2)}
+.sug img,.sug .sph{width:34px;height:48px;object-fit:cover;border-radius:5px;
+flex-shrink:0;background:var(--surf2);display:block}
+.sinfo{min-width:0;display:flex;flex-direction:column}
+.st{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pop{color:var(--mint)}
+.sm{font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hint{font-size:11px;color:var(--dim);margin:0 0 24px;font-family:ui-monospace,Consolas,monospace}
+h3{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin:26px 0 12px}
+/* Horizontal rail. Native scroll + scroll-snap so touch, trackpad and
+   momentum all behave the way the OS does them — a JS transform carousel
+   fights the platform and feels wrong on a phone. */
+/* Explicit pixel sizes throughout. aspect-ratio inside a flex <button>
+   is where this broke once already, and a carousel that renders as an
+   empty strip is worse than a plain grid. */
+.railwrap{position:relative;overflow:hidden}
+/* Marquee by CSS transform, not scrollLeft. scrollLeft rounds to whole
+   pixels, so a slow drift of ~0.4px per frame rounds to zero and never
+   moves. transform is sub-pixel accurate and runs on the compositor. */
+.rail{overflow:hidden}
+.track{display:flex;align-items:flex-start;gap:12px;width:max-content;
+padding:2px 0 10px;will-change:transform}
+.track.run{animation:marquee linear infinite}
+.track.rev{animation-direction:reverse}
+.railwrap+.railwrap{margin-top:14px}
+.railwrap:hover .track,.track.hold{animation-play-state:paused}
+@keyframes marquee{from{transform:translateX(0)}to{transform:translateX(var(--shift))}}
+.tile{background:none;border:none;padding:0;text-align:left;color:inherit;
+width:132px;min-width:132px;flex:0 0 132px}
+@media(max-width:600px){.tile{width:116px;min-width:116px;flex:0 0 116px}}
+@media(prefers-reduced-motion:reduce){.track.run{animation:none}}
+/* Automatic fallback: if the marquee can't lay out, this turns it back
+   into the grid that was already working. */
+.rail.grid{overflow:visible}
+.rail.grid .track{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));
+gap:16px 12px;width:auto;animation:none;transform:none}
+.rail.grid .tile{width:100%;min-width:0}
+@media(hover:none){}
+.dots{display:flex;gap:5px;justify-content:center;margin-top:6px}
+.dots i{width:5px;height:5px;border-radius:50%;background:var(--line);transition:background .2s}
+.dots i.on{background:var(--mint)}
+.tile img,.tile .ph,.tile .skel{display:block;width:132px;height:198px;
+object-fit:cover;border-radius:9px;background:var(--surf2);transition:transform .13s}
+@media(max-width:600px){.tile img,.tile .ph,.tile .skel{width:116px;height:174px}}
+.rail.grid .tile img,.rail.grid .tile .ph,.rail.grid .tile .skel{width:100%;height:auto;aspect-ratio:2/3}
+.tile:hover img{transform:translateY(-3px)}
+.tile h4{font-size:12px;font-weight:600;margin:7px 0 1px;line-height:1.3;
+display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.tile .meta{font-size:10px;color:var(--dim);margin:0;font-family:ui-monospace,Consolas,monospace}
+.card{background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:15px;margin-bottom:14px}
+.hit{display:flex;gap:14px}
+.hit img,.hit .ph{width:86px;height:126px;object-fit:cover;border-radius:9px;flex-shrink:0;background:var(--surf2)}
+.hit h2{font-size:18px;font-weight:700;margin:0 0 4px;line-height:1.2}
+.hit .meta{font-size:11px;color:var(--dim);margin:0;font-family:ui-monospace,Consolas,monospace}
+.pill{display:inline-block;font-size:10px;padding:2px 8px;border-radius:20px;margin-top:8px;
+font-family:ui-monospace,Consolas,monospace;background:#2b2438;color:var(--dim)}
+.pill.on{background:var(--mintd);color:var(--mint)}
+.boxes{display:flex;gap:8px;margin-top:13px}
+.boxes div{flex:1;background:var(--surf2);border-radius:9px;padding:9px 11px}
+.boxes .k{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.09em;
+font-family:ui-monospace,Consolas,monospace}
+.boxes .v{font-size:17px;font-weight:700;margin-top:1px}
+
+.behind{color:var(--mint);font-size:12px;margin-top:10px;font-weight:600}
+.verdict{font-size:13px;margin:12px 0 0;padding:9px 12px;border-radius:9px;line-height:1.45}
+.verdict.done{background:#2a2340;color:#c4b5ff}
+.verdict.live{background:var(--mintd);color:var(--mint)}
+.verdict.warn{background:#3a2d1a;color:var(--warn)}
+.fresh.stale{color:var(--warn)}
+.fresh.authoritative{color:var(--mint)}
+.seasontag{font-size:11px;background:var(--surf);color:var(--mint);padding:2px 6px;
+border-radius:5px;margin-right:6px;vertical-align:middle;font-family:ui-monospace,Consolas,monospace}
+.trackbtn{width:100%;margin-top:16px;background:var(--mint);color:#0d2b26;border:none;
+border-radius:11px;padding:13px;font-weight:700;font-size:15px}
+.trackbtn.on{background:var(--surf2);color:var(--mint);border:1px solid var(--mint)}
+.listrows{display:flex;flex-direction:column;gap:9px}
+.lrow{display:flex;align-items:center;gap:12px;background:var(--surf);cursor:pointer;
+border:1px solid var(--line);border-radius:12px;padding:10px}
+.lrow:hover{border-color:var(--mint)}
+.lrow.unread{border-left:3px solid var(--mint)}
+.lrow img,.lrow .ph{width:44px;height:64px;object-fit:cover;border-radius:6px;
+flex-shrink:0;background:var(--surf2)}
+.linfo{flex:1;min-width:0}
+.linfo h4{font-size:14px;font-weight:600;margin:0 0 3px;white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis}
+.lmeta{font-size:11px;color:var(--dim);margin:0;font-family:ui-monospace,Consolas,monospace}
+.newtag{color:var(--mint);font-weight:700}
+.lacts{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.lread{background:var(--mintd);color:var(--mint);border:none;border-radius:7px;
+padding:6px 10px;font-size:11px;font-weight:600}
+.lx{background:none;border:none;color:var(--dim);font-size:20px;padding:2px 7px;line-height:1}
+.lx:hover{color:var(--bad)}
+.seasons{margin-top:14px}
+.schip{display:inline-block;font-family:ui-monospace,Consolas,monospace;font-size:11px;
+background:var(--surf2);color:var(--dim);padding:4px 9px;border-radius:20px;margin:0 6px 6px 0}
+.schip.on{background:var(--mintd);color:var(--mint)}
+.rawdump{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--dim);
+background:var(--surf2);padding:10px;border-radius:8px;margin-top:10px;
+white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto}
+.needproxy{color:var(--warn);text-decoration:underline;font-size:13px}
+.fresh{font-size:11px;color:var(--dim);margin:9px 0 0;font-family:ui-monospace,Consolas,monospace}
+.boxes .v.sm{font-size:14px;line-height:1.6}
+.approx{font-size:11px;color:var(--dim);margin-left:2px;vertical-align:super}
+.read{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surf);
+border:1px solid var(--line);border-left:3px solid var(--mint);border-radius:11px;padding:14px 15px;
+text-decoration:none;color:var(--text);margin-bottom:8px}
+.read:hover{border-color:var(--mint)}.read.no{border-left-color:var(--line)}
+.read .n{font-weight:600;font-size:15px}
+.read .t{font-size:10px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+.read .go{color:var(--mint);font-weight:600;font-size:13px;flex-shrink:0}
+.mu-note{}
+.tagcost{font-size:10px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:20px;
+flex-shrink:0;margin-left:auto;font-family:ui-monospace,Consolas,monospace}
+.tagcost.free{background:var(--mintd);color:var(--mint)}
+.tagcost.mixed{background:#2f3a22;color:#b6d97a}
+.tagcost.sub{background:#33294a;color:#b9a6ff}
+.tagcost.paid{background:#3d2f1c;color:var(--warn)}
+.read.c-free{border-left-color:var(--mint)}
+.read.c-mixed{border-left-color:#b6d97a}
+.read.c-sub{border-left-color:#b9a6ff}
+.read.c-paid{border-left-color:var(--warn)}
+.pick{display:flex;gap:11px;background:var(--surf);border:1px solid var(--line);border-radius:12px;
+padding:10px;width:100%;text-align:left;color:inherit;margin-bottom:8px}
+.pick:hover{border-color:var(--mint)}
+.pick img,.pick .ph{width:46px;height:66px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surf2)}
+.pick h4{font-size:14px;font-weight:600;margin:2px 0 3px;line-height:1.25}
+.pick .meta{font-size:10px;color:var(--dim);margin:0;font-family:ui-monospace,Consolas,monospace}
+.note{background:var(--surf);border:1px solid var(--line);border-left:3px solid var(--warn);
+border-radius:0 12px 12px 0;padding:14px 16px;margin-bottom:14px}
+.note p{margin:0;font-size:13px;color:var(--dim)}
+.note strong{color:var(--text);display:block;margin-bottom:3px}
+.note.bad{border-left-color:var(--bad)}
+.cap{font-size:11px;color:var(--dim);background:var(--surf2);border-radius:8px;padding:9px 11px;
+margin-bottom:14px;font-family:ui-monospace,Consolas,monospace}
+.spin{text-align:center;padding:30px;color:var(--dim);font-size:13px}
+.skel{width:100%;aspect-ratio:2/3;border-radius:9px;background:var(--surf2);animation:p 1.3s infinite}
+@keyframes p{0%,100%{opacity:.45}50%{opacity:.8}}
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}
+.chip{background:var(--surf);border:1px solid var(--line);color:var(--dim);border-radius:100px;
+padding:6px 13px;font-size:12px;font-weight:600}
+.chip[aria-pressed="true"]{background:var(--mint);color:#0d2b26;border-color:var(--mint)}
+.pill.kind{background:var(--surf2);color:var(--text);margin-left:6px}
+.pill.adult{background:#4a2030;color:#ff8fa8;margin-left:6px}
+.adultflag{color:#ff8fa8}
+.back{background:none;border:none;color:var(--dim);font-size:13px;padding:0;margin-bottom:14px}
+.foot{border-top:1px solid var(--line);padding:14px;text-align:center;font-size:12px;color:var(--dim)}
+.ver{display:block;margin-top:4px;font-family:ui-monospace,Consolas,monospace;font-size:10px;opacity:.5}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <button class="logo" id="home">manga<b>where</b></button>
+  <button class="listbtn" id="listbtn">My list <span class="badge" id="badge"></span></button>
+</div>
+
+<main>
+  <div id="app"></div>
+</main>
+
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 13</span></div>
+
+<script>
+/* ================= proxy =================
+   MangaUpdates and TikTok refuse browser requests (no CORS headers), and
+   they hold the two pieces of data this product is built on: the current
+   chapter, and the video's caption. A tiny proxy fixes both.
+
+   Set it either way:
+     - edit PROXY below, or
+     - open the page with ?proxy=https://yours.workers.dev
+   Leave it empty and the app still runs — it just can't show chapter
+   counts for ongoing series.                                            */
+var PROXY = "https://bland-swallow-2310.charlesmolokwu6.deno.net";
+
+/* Adult titles. Off means everything shows, which is how AniList and
+   MyAnimeList work too. Flip to true if you ever need to hide them —
+   ad networks and the app stores have their own rules about this, so
+   it's worth being able to switch without a rewrite. */
+var HIDE_ADULT = false;
+(function(){
+  var q=new URLSearchParams(location.search).get("proxy");
+  if(q) PROXY=q.replace(/\/$/,"");
+})();
+function via(url){
+  return PROXY ? PROXY+"/?url="+encodeURIComponent(url) : url;
+}
+
+/* ================= notifications =================
+   Set API_BASE to your deployed backend and the Track button starts
+   registering for real push notifications instead of only saving
+   locally. Leave it empty and everything still works — the list just
+   stays on this device.
+
+   Push needs HTTPS. Opening this file from your computer will never
+   work; that's a browser rule, not a bug.                              */
+var API_BASE = "";
+(function(){
+  var q=new URLSearchParams(location.search).get("api");
+  if(q) API_BASE=q.replace(/\/$/,"");
+})();
+
+var pushState={ supported:false, subscribed:false, endpoint:null, reason:"" };
+
+function isIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+}
+function isStandalone(){
+  return window.matchMedia("(display-mode: standalone)").matches ||
+         window.navigator.standalone===true;
+}
+
+function pushSupport(){
+  if(!API_BASE) return {ok:false, reason:"no backend configured"};
+  if(location.protocol!=="https:" && location.hostname!=="localhost")
+    return {ok:false, reason:"notifications need https — deploy the site first"};
+  if(!("serviceWorker" in navigator) || !("PushManager" in window))
+    return {ok:false, reason:"this browser doesn't support notifications"};
+  // Apple only allows web push once the site is on the home screen.
+  if(isIOS() && !isStandalone())
+    return {ok:false, reason:"ios:add-to-home-screen"};
+  return {ok:true};
+}
+
+function urlB64ToUint8Array(base64){
+  var padding="=".repeat((4-base64.length%4)%4);
+  var raw=atob((base64+padding).replace(/-/g,"+").replace(/_/g,"/"));
+  var out=new Uint8Array(raw.length);
+  for(var i=0;i<raw.length;i++) out[i]=raw.charCodeAt(i);
+  return out;
+}
+
+/* Registers the device once, then reuses it. Safe to call repeatedly. */
+function enablePush(){
+  var sup=pushSupport();
+  if(!sup.ok) return Promise.resolve({ok:false, reason:sup.reason});
+
+  return navigator.serviceWorker.register("/sw.js")
+    .then(function(reg){ return navigator.serviceWorker.ready.then(function(){ return reg; }); })
+    .then(function(reg){
+      return Notification.requestPermission().then(function(perm){
+        if(perm!=="granted") throw new Error("permission "+perm);
+        return fetch(API_BASE+"/api/config").then(function(r){ return r.json(); })
+          .then(function(cfg){
+            if(!cfg.vapid_public_key) throw new Error("server has no push keys set");
+            return reg.pushManager.getSubscription().then(function(existing){
+              return existing || reg.pushManager.subscribe({
+                userVisibleOnly:true,
+                applicationServerKey:urlB64ToUint8Array(cfg.vapid_public_key)
+              });
+            });
+          });
+      });
+    })
+    .then(function(sub){
+      var j=sub.toJSON();
+      return fetch(API_BASE+"/api/subscribe",{
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
+      }).then(function(){
+        pushState.subscribed=true;
+        pushState.endpoint=j.endpoint;
+        return {ok:true, endpoint:j.endpoint};
+      });
+    })
+    .catch(function(e){
+      return {ok:false, reason:(e.message||String(e))};
+    });
+}
+
+/* Mirrors a local track to the server so the poller can notify them. */
+function syncWatch(m, chapter){
+  if(!API_BASE || !pushState.endpoint) return Promise.resolve();
+  return fetch(API_BASE+"/api/watch",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      endpoint:pushState.endpoint,
+      seen_chapter:chapter||null,
+      title:{key:String(m.id), name:m.title, cover:m.cover||"", kind:m.kind||"",
+             country:m.country||"", links:m.links||[]}
+    })
+  }).catch(function(){});
+}
+function syncUnwatch(id){
+  if(!API_BASE || !pushState.endpoint) return Promise.resolve();
+  return fetch(API_BASE+"/api/unwatch",{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({endpoint:pushState.endpoint, key:String(id)})
+  }).catch(function(){});
+}
+
+/* ================= saved list =================
+   Kept in the browser. No account, no server, nothing to sign up for —
+   which means it works today and costs nothing to run. The trade-off is
+   that it lives on one device and can't email anyone; both need the
+   backend, and both can be added without changing this shape.
+
+   Wrapped in try/catch because some embedded contexts block storage
+   outright, and a reading list that throws is worse than one that
+   forgets. */
+var store=(function(){
+  var mem={}, ok=false;
+  try{ localStorage.setItem("__mw","1"); localStorage.removeItem("__mw"); ok=true; }catch(e){}
+  return {
+    get:function(k){ try{ return ok?localStorage.getItem(k):mem[k]; }catch(e){ return mem[k]; } },
+    set:function(k,v){ try{ if(ok) localStorage.setItem(k,v); else mem[k]=v; }catch(e){ mem[k]=v; } },
+    persistent: ok
+  };
+})();
+
+function getList(){
+  try{ return JSON.parse(store.get("mw.list")||"[]"); }catch(e){ return []; }
+}
+function saveList(l){ store.set("mw.list", JSON.stringify(l)); updateBadge(); }
+function inList(id){ return getList().some(function(x){ return x.id===id; }); }
+
+function addToList(m, chapter){
+  var l=getList();
+  if(l.some(function(x){ return x.id===m.id; })) return;
+  l.push({
+    id:m.id, title:m.title, cover:m.cover, kind:m.kind, status:m.status,
+    country:m.country, links:m.links||[],
+    seen: chapter||null,        // the chapter they were on when they added it
+    latest: chapter||null,      // most recent number we've observed
+    added: Date.now()
+  });
+  saveList(l);
+}
+function removeFromList(id){
+  saveList(getList().filter(function(x){ return x.id!==id; }));
+}
+function markRead(id){
+  var l=getList();
+  l.forEach(function(x){ if(x.id===id) x.seen=x.latest; });
+  saveList(l);
+}
+function unreadCount(){
+  return getList().filter(function(x){
+    return x.latest && x.seen && x.latest>x.seen;
+  }).length;
+}
+
+/* ================= caption parsing (ported from the tested Python) ================= */
+var CH=[/\bchapters?\s*[.:#-]?\s*(\d{1,4})/i,/\bch\s*[.:#-]?\s*(\d{1,4})\b/i,
+/\bepisodes?\s*[.:#-]?\s*(\d{1,4})/i,/\bep\s*[.:#-]?\s*(\d{1,4})\b/i,/\bpart\s*[.:#-]?\s*(\d{1,4})\b/i];
+var NOISE=new Set(("recap recaps recapped explained explanation review reviewed summary edit edits amv "+
+"manhwa manhua manga anime webtoon comic full story series part chapter chapters ch episode episodes ep "+
+"spoiler spoilers reaction shorts short viral fyp foryou foryoupage trending new latest update read "+
+"reading watch watching best top the a an of and or in on manhwarecap mangarecap animerecap recapmanhwa").split(" "));
+var SENT=new Set(("he she they we you when after before why how what who because so then but finally "+
+"just never always everyone nobody his her their").split(" "));
+var SPLIT=/[|｜•·—–\-\[\]()「」『』:：\/\\]/;
+function clean(s){return (s||"").replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu,"");}
+function exCh(c){var l=clean(c);for(var i=0;i<CH.length;i++){var m=l.match(CH[i]);
+ if(m){var n=+m[1];if(n>0&&n<5000)return n;}}return null;}
+function exTitle(c){
+ var t=clean(c).replace(/#\w+/g," ").replace(/@\w+/g," ").replace(/https?:\/\/\S+/g," ");
+ var cut=t.length;
+ for(var i=0;i<CH.length;i++){var m=t.match(CH[i]);if(m&&m.index<cut)cut=m.index;}
+ var h=cut>0?t.slice(0,cut):t;
+ if(h.trim().length<3)h=t.split(SPLIT)[0]||"";
+ var segs=h.split(SPLIT).map(function(s){return s.trim();}).filter(Boolean);
+ if(!segs.length)return null;
+ var cand=segs.reduce(function(a,b){return b.length>a.length?b:a;});
+ var w=(cand.match(/[\w']+/g)||[]);
+ while(w.length&&NOISE.has(w[0].toLowerCase()))w.shift();
+ while(w.length&&NOISE.has(w[w.length-1].toLowerCase()))w.pop();
+ var s=w.join(" ").trim();
+ return (s.length<3||/^\d+$/.test(s))?null:s;
+}
+function trail(t){if(!t)return[t,null];var m=t.trim().match(/^(.*?)[\s#:-]+(\d{1,4})$/);
+ if(!m)return[t,null];var h=m[1].trim();return h.length<3?[t,null]:[h,+m[2]];}
+function prose(t){if(!t)return false;var w=t.toLowerCase().split(/\s+/);
+ if(w.length<4)return false;if(SENT.has(w[0]))return true;
+ return w.filter(function(x){return SENT.has(x);}).length>=2;}
+function parseCaption(c){var t=exTitle(c),ch=exCh(c);
+ if(ch===null&&t){var r=trail(t);t=r[0];if(r[1]!==null)ch=r[1];}
+ var p=prose(t);
+ return {title:t,chapter:ch,confidence:p?"low":(t&&ch?"high":(t?"medium":"none"))};}
+
+/* ================= matching ================= */
+function bg(s){s=(s||"").toLowerCase().replace(/[^a-z0-9 ]/g,"").trim();
+ var o=[];for(var i=0;i<s.length-1;i++)o.push(s.slice(i,i+2));return o;}
+function similar(a,b){var A=bg(a),B=bg(b);if(!A.length||!B.length)return a===b?1:0;
+ var m={},h=0;A.forEach(function(g){m[g]=(m[g]||0)+1;});
+ B.forEach(function(g){if(m[g]>0){m[g]--;h++;}});return 2*h/(A.length+B.length);}
+/* Licensed platforms, with how they charge. "Can I read this without
+   paying?" is the first thing a reader wants to know — especially when
+   putting a card on a foreign site is itself the obstacle. Ordered most
+   specific first so "naver webtoon" wins over "webtoon". */
+var PLATFORMS=[
+ {m:"manga plus",   cost:"free",  note:"Free"},
+ {m:"mangaplus",    cost:"free",  note:"Free"},
+ {m:"naver webtoon",cost:"free",  note:"Free (Korean)"},
+ {m:"naver",        cost:"free",  note:"Free (Korean)"},
+ {m:"bilibili",     cost:"free",  note:"Free"},
+ {m:"webtoon",      cost:"mixed", note:"Free, paid early access"},
+ {m:"tapas",        cost:"mixed", note:"Free, paid early access"},
+ {m:"comikey",      cost:"mixed", note:"Free after a wait"},
+ {m:"inkr",         cost:"mixed", note:"Some free"},
+ {m:"shonen jump",  cost:"sub",   note:"Subscription"},
+ {m:"viz",          cost:"sub",   note:"Some free, subscription"},
+ {m:"k manga",      cost:"sub",   note:"Subscription"},
+ {m:"kodansha",     cost:"sub",   note:"Subscription"},
+ {m:"azuki",        cost:"sub",   note:"Subscription"},
+ {m:"mangamo",      cost:"sub",   note:"Subscription"},
+ {m:"tappytoon",    cost:"paid",  note:"Pay per chapter"},
+ {m:"lezhin",       cost:"paid",  note:"Pay per chapter"},
+ {m:"manta",        cost:"sub",   note:"Subscription"},
+ {m:"kakao",        cost:"paid",  note:"Pay per chapter"},
+ {m:"ridibooks",    cost:"paid",  note:"Pay per chapter"},
+ {m:"pocket comics",cost:"paid",  note:"Pay per chapter"},
+ {m:"netcomics",    cost:"paid",  note:"Pay per chapter"},
+ {m:"coolmic",      cost:"paid",  note:"Pay per chapter"},
+ {m:"yen press",    cost:"paid",  note:"Buy volumes"},
+ {m:"seven seas",   cost:"paid",  note:"Buy volumes"},
+ {m:"square enix",  cost:"paid",  note:"Buy volumes"},
+ {m:"alphapolis",   cost:"free",  note:"Free (Japanese)"},
+ {m:"shueisha",     cost:"free",  note:"Free"}
+];
+var COST_ORDER={free:0, mixed:1, sub:2, paid:3};
+
+var MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtDate(d){
+  if(!d) return "";
+  if(typeof d==="string"){ var t=new Date(d); if(isNaN(t)) return ""; 
+    return MONTHS[t.getMonth()]+" "+t.getFullYear(); }
+  if(!d.year) return "";
+  return (d.month?MONTHS[d.month-1]+" ":"")+d.year;
+}
+function yearOf(d){
+  if(!d) return "";
+  if(typeof d==="string"){ var t=new Date(d); return isNaN(t)?"":t.getFullYear(); }
+  return d.year||"";
+}
+function ago(ts){
+  if(!ts) return "";
+  var secs=Math.floor(Date.now()/1000)-ts;
+  if(secs<0) return "";
+  var d=Math.floor(secs/86400);
+  if(d<1) return "today";
+  if(d===1) return "yesterday";
+  if(d<30) return d+" days ago";
+  var mo=Math.floor(d/30);
+  if(mo<12) return mo+(mo===1?" month ago":" months ago");
+  var y=Math.floor(d/365);
+  return y+(y===1?" year ago":" years ago");
+}
+
+/* Normalise the two providers' status vocabularies into one. A reader
+   only cares about three things: can I binge it, am I waiting, or is it
+   stalled. */
+function statusInfo(raw){
+  var v=(raw||"").toLowerCase().replace(/[\s_]+/g," ").trim();
+  if(v.indexOf("finish")>-1 || v==="complete") return {key:"complete", label:"Complete", tone:"done"};
+  if(v.indexOf("releasing")>-1||v.indexOf("publishing")>-1||v.indexOf("ongoing")>-1)
+    return {key:"ongoing", label:"Ongoing", tone:"live"};
+  if(v.indexOf("hiatus")>-1) return {key:"hiatus", label:"On hiatus", tone:"warn"};
+  if(v.indexOf("cancel")>-1||v.indexOf("discontinu")>-1)
+    return {key:"cancelled", label:"Cancelled", tone:"warn"};
+  if(v.indexOf("not yet")>-1) return {key:"upcoming", label:"Not out yet", tone:"warn"};
+  return {key:"unknown", label:raw||"Unknown", tone:""};
+}
+function platformInfo(site){
+  var l=(site||"").toLowerCase();
+  for(var i=0;i<PLATFORMS.length;i++)
+    if(l.indexOf(PLATFORMS[i].m)>-1) return PLATFORMS[i];
+  return null;
+}
+function official(s){ return !!platformInfo(s); }
+
+/* AniList lists the same publisher once per language, which is why
+   WEBTOON showed up four times. Keep one entry per site, preferring the
+   English edition. */
+function dedupeLinks(links){
+  var seen={}, out=[];
+  links.forEach(function(l){
+    var key=(l.site||"").toLowerCase().trim();
+    if(!key) return;
+    var lang=(l.language||"").toLowerCase();
+    var isEn = !lang || lang.indexOf("english")>-1;
+    if(!(key in seen)){ seen[key]=out.length; out.push(l); return; }
+    // Already have this site — swap in the English one if we found it later.
+    var prev=out[seen[key]];
+    var prevLang=(prev.language||"").toLowerCase();
+    var prevEn = !prevLang || prevLang.indexOf("english")>-1;
+    if(isEn && !prevEn) out[seen[key]]=l;
+  });
+  return out;
+}
+
+function sortLinks(links){
+  return dedupeLinks(links).sort(function(a,b){
+    if(a.official!==b.official) return a.official?-1:1;
+    var ai=platformInfo(a.site), bi=platformInfo(b.site);
+    var ac=ai?COST_ORDER[ai.cost]:9, bc=bi?COST_ORDER[bi.cost]:9;
+    return ac-bc;               // free options first
+  });
+}
+function score(c,g,cap){var names=[c.title].concat(c.alts||[]);
+ g=(g||"").toLowerCase();cap=(cap||"").toLowerCase();var best=0;
+ names.forEach(function(n){if(!n)return;var nn=n.toLowerCase(),r=similar(g,nn);
+  if(nn===g)r=1;else if(nn.length>4&&cap.indexOf(nn)>-1)r=Math.max(r,.92);
+  best=Math.max(best,r);});return best;}
+
+/* ================= providers, with failover =================
+   Jikan 504s regularly — it's a free community scraper under load.
+   So: retry transient errors, then fall back to AniList entirely.
+   Never let one flaky source take the product down.                     */
+var sourceUsed="";
+
+function withRetry(fn,tries){
+  tries = tries||3;
+  return fn().catch(function(e){
+    var transient = /50\d|429|timeout|Failed to fetch|NetworkError/i.test(e.message||"");
+    if(tries>1 && transient)
+      return new Promise(function(r){setTimeout(r,900);}).then(function(){return withRetry(fn,tries-1);});
+    throw e;
+  });
+}
+
+/* --- Jikan --- */
+function jikanShape(m){
+  var links=(m.external||[]).map(function(l){
+    return {site:l.name||"",url:l.url||"",language:"",official:official(l.name)};});
+  if(m.url)links.push({site:"MyAnimeList",url:m.url,language:"",official:false});
+  links=sortLinks(links);
+  var img=(m.images&&(m.images.webp||m.images.jpg))||{};
+  // MyAnimeList states this outright: type is "Manga", "Manhwa", "Manhua",
+  // "Novel", "One-shot" or "Doujinshi".
+  var ty=(m.type||"").toLowerCase();
+  var kind = ty.indexOf("manhwa")>-1 ? "Manhwa"
+           : ty.indexOf("manhua")>-1 ? "Manhua" : "Manga";
+  return {id:"mal-"+m.mal_id,title:m.title_english||m.title||"",
+   alts:[m.title,m.title_japanese].concat(m.title_synonyms||[]).filter(Boolean),
+   chapters:m.chapters,volumes:m.volumes,status:m.status||"",
+   country:kind==="Manhwa"?"KR":(kind==="Manhua"?"CN":"JP"), kind:kind,
+   started:(m.published&&m.published.from)||null,
+   ended:(m.published&&m.published.to)||null,updatedAt:null,
+   popularity:(m.members||0)+(m.favorites||0)*3,
+   adult:(m.genres||[]).some(function(g){
+     return /hentai|ecchi|erotica/i.test(g.name||""); }),
+   cover:img.large_image_url||img.image_url||"",links:links};
+}
+function jikanCall(path){
+  return fetch("https://api.jikan.moe/v4"+path).then(function(r){
+    if(!r.ok) throw new Error("Jikan "+r.status);
+    return r.json();
+  }).then(function(j){return (j.data||[]).map(jikanShape);});
+}
+var jikanSearch=function(q,n){
+  var base="/manga?q="+encodeURIComponent(q)+"&limit="+(n||8)+
+    (HIDE_ADULT?"&sfw=true":"");
+  // Sorting by member count puts the widely-read titles first, which is
+  // what makes a two-letter search useful. If Jikan rejects that combo,
+  // fall back to plain relevance rather than losing the provider.
+  return jikanCall(base+"&order_by=members&sort=desc")
+    .catch(function(){ return jikanCall(base); });
+};
+var jikanTop=function(){return jikanCall("/top/manga?filter=publishing&limit=25");};
+
+/* --- AniList --- */
+var AL_FIELDS="id title{romaji english native} synonyms chapters volumes status countryOfOrigin "+
+ "popularity favourites isAdult genres "+
+ "startDate{year month day} endDate{year month day} updatedAt "+
+ "coverImage{large} externalLinks{url site language} siteUrl";
+
+/* Origin decides where a title is legally readable, so it isn't cosmetic:
+   Korean manhwa lives on Webtoon/Tappytoon/Lezhin/Manta, Japanese manga on
+   MANGA Plus/Viz. Showing it also tells the reader what they're getting. */
+var KIND={JP:"Manga",KR:"Manhwa",CN:"Manhua",TW:"Manhua",HK:"Manhua"};
+function kindFromCountry(c){ return KIND[(c||"").toUpperCase()] || "Manga"; }
+
+function alShape(m){
+  var t=m.title||{};
+  var links=(m.externalLinks||[]).map(function(l){
+    return {site:l.site||"",url:l.url||"",language:l.language||"",official:official(l.site)};});
+  if(m.siteUrl)links.push({site:"AniList",url:m.siteUrl,language:"",official:false});
+  links=sortLinks(links);
+  return {id:"al-"+m.id,title:t.english||t.romaji||t.native||"",
+   alts:[t.romaji,t.native].concat(m.synonyms||[]).filter(Boolean),
+   chapters:m.chapters,volumes:m.volumes,status:m.status||"",country:m.countryOfOrigin||"",
+   kind:kindFromCountry(m.countryOfOrigin),
+   started:m.startDate,ended:m.endDate,updatedAt:m.updatedAt,
+   popularity:(m.popularity||0)+(m.favourites||0),
+   adult:!!m.isAdult || (m.genres||[]).some(function(g){
+     return /hentai|ecchi|erotica/i.test(g); }),
+   cover:(m.coverImage||{}).large||"",links:links};
+}
+function alCall(query,vars){
+  return fetch("https://graphql.anilist.co",{method:"POST",
+    headers:{"Content-Type":"application/json","Accept":"application/json"},
+    body:JSON.stringify({query:query,variables:vars||{}})
+  }).then(function(r){
+    if(!r.ok) throw new Error("AniList "+r.status);
+    return r.json();
+  }).then(function(j){
+    if(j.errors&&j.errors.length) throw new Error(j.errors[0].message);
+    return j.data.Page.media.map(alShape);
+  });
+}
+var alSearch=function(q,n){
+  n=n||8;
+  return alCall("query($s:String,$n:Int){Page(perPage:$n){media(search:$s,type:MANGA,"+
+    "sort:SEARCH_MATCH){"+AL_FIELDS+"}}}",{s:q,n:n});};
+var alTrending=function(country){
+  var filter = country ? ',countryOfOrigin:"'+country+'"' : "";
+  return alCall("query{Page(perPage:40){media(type:MANGA,sort:TRENDING_DESC,status:RELEASING"+
+    filter+"){"+AL_FIELDS+"}}}");};
+
+/* --- unified --- */
+function dropAdult(rows){
+  if(!HIDE_ADULT) return rows||[];
+  return (rows||[]).filter(function(m){ return !m.adult; });
+}
+
+function search(q,n){
+  return withRetry(function(){return jikanSearch(q,n);})
+    .then(function(r){ sourceUsed="Jikan"; return dropAdult(r); })
+    .catch(function(){
+      return alSearch(q,n).then(function(r){
+        sourceUsed="AniList (Jikan down)"; return dropAdult(r); });
+    });
+}
+function trending(country){
+  // AniList first here — its TRENDING_DESC is genuinely "what people are
+  // reading now", while Jikan's top list is all-time ranking. AniList is
+  // also the stronger of the two for Korean webtoons, which is most of
+  // what gets recapped.
+  return withRetry(function(){return alTrending(country);})
+    .then(function(r){ sourceUsed="AniList"; return dropAdult(r); })
+    .catch(function(){
+      // Jikan's top list can't filter by origin, so filter after the fact.
+      return jikanTop().then(function(r){
+        r=dropAdult(r);
+        sourceUsed="Jikan (AniList down)";
+        if(!country) return r;
+        var want = country==="KR" ? "Manhwa" : country==="CN" ? "Manhua" : "Manga";
+        return r.filter(function(m){ return m.kind===want; });
+      });
+    });
+}
+
+/* ================= MangaUpdates: latest released chapter =================
+   AniList and MyAnimeList only publish a chapter count once a series has
+   FINISHED — their own staff have said tracking ongoing counts is
+   unworkable. MangaUpdates does track it, keyless, via its v1 API.
+
+   Caveat carried into the UI: MangaUpdates counts scanlation releases,
+   so this is where the story has got to, not necessarily what is legally
+   readable in English yet. Those are different numbers and we label them
+   differently.                                                          */
+var MU="https://api.mangaupdates.com/v1";
+var muCache={};
+
+var DEBUG = new URLSearchParams(location.search).has("debug");
+var lastMuRaw = null;   // kept so the debug view can show what came back
+
+/* Ask MangaUpdates for a series. Returns either {chapter,...} or
+   {error:"reason"} — never a bare null, because "it didn't work" without
+   a reason is what made this hard to diagnose in the first place. */
+/* Two calls, because MangaUpdates splits the data:
+     1. POST /series/search  -> finds the series, gives its id
+     2. GET  /series/{id}    -> the actual latest_chapter and last_updated
+   The search result alone has no chapter number, which is what "no
+   chapter field" was telling us.                                        */
+/* Two calls, because MangaUpdates splits the data:
+     1. POST /series/search  -> finds candidates and their ids
+     2. GET  /series/{id}    -> the actual latest_chapter and last_updated
+
+   And we check several candidates, not just the best-named one. Long
+   manhwa get split into separate season records ("X", "X Season 2"),
+   each numbered from 1, so the closest title match is often the lowest
+   number. Taking the highest across strong matches gets us the real
+   position in the story.                                                */
+/* Season detection. Long manhwa are split into separate MangaUpdates
+   records, each numbered from 1 — "Overgeared", "Overgeared (Season 2)",
+   and so on. Readers think in seasons, so we keep them apart instead of
+   flattening them into one misleading number. */
+function seasonOf(title){
+  var t=(title||"");
+  var m=t.match(/season\s*(\d+)/i)
+      || t.match(/\bs(\d+)\b/i)
+      || t.match(/\bpart\s*(\d+)/i)
+      || t.match(/\b(\d+)(?:nd|rd|th)\s+season/i);
+  if(m) return parseInt(m[1],10);
+  if(/\bseason\s*ii\b/i.test(t)) return 2;
+  if(/\bseason\s*iii\b/i.test(t)) return 3;
+  return 1;
+}
+
+/* MangaUpdates indexes novels next to comics, and a web novel usually
+   runs far more chapters than its manhwa adaptation. Matching one gives
+   a wildly wrong number, so exclude anything that isn't a comic. */
+var COMIC_TYPES=["manga","manhwa","manhua","manhpa","oel","comic"];
+function isComic(rec){
+  var t=(rec && rec.type ? String(rec.type) : "").toLowerCase();
+  if(!t) return true;                       // no type stated: allow it
+  if(t.indexOf("novel")>-1) return false;
+  if(t.indexOf("artbook")>-1||t.indexOf("doujin")>-1) return false;
+  return COMIC_TYPES.some(function(c){ return t.indexOf(c)>-1; }) || true;
+}
+
+function muFetch(title){
+  return fetch(via(MU+"/series/search"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({search:title})
+  }).then(function(r){
+    return r.text().then(function(txt){
+      lastMuRaw="SEARCH: "+txt.slice(0,1500);
+      if(!r.ok) return {error:"search HTTP "+r.status};
+      var j;
+      try{ j=JSON.parse(txt); }catch(e){ return {error:"search returned non-JSON"}; }
+      if(j && j.error) return {error:"proxy: "+j.error};
+      var results=(j&&j.results)||[];
+      if(!results.length) return {error:"no results"};
+
+      var scored=[];
+      results.forEach(function(x){
+        var rec=x.record||x;
+        if(!rec || !(rec.series_id||rec.id)) return;
+        if(!isComic(rec)) return;                       // drop novels
+        var names=[rec.title].concat(
+          rec.associated? rec.associated.map(function(a){return a.title;}) : []);
+        var best=0;
+        names.forEach(function(n){ best=Math.max(best, similar(title, n||"")); });
+        if(best>=0.5) scored.push({rec:rec, score:best});
+      });
+      if(!scored.length) return {error:"no comic match (novels excluded)"};
+      scored.sort(function(a,b){ return b.score-a.score; });
+
+      var picks=scored.slice(0,4);
+      return Promise.all(picks.map(function(p){
+        return muSeries(p.rec.series_id||p.rec.id, p.rec.title, p.score, p.rec.type);
+      })).then(function(all){
+        var good=all.filter(function(x){ return x && x.chapter; });
+        if(!good.length){
+          var firstErr=(all.find(function(x){ return x && x.error; })||{}).error;
+          return {error: firstErr || "no chapter number on any record"};
+        }
+
+        // Build the season list, newest last.
+        var seasons=good.map(function(g){
+          return {n:seasonOf(g.title), title:g.title, chapter:g.chapter,
+                  completed:g.completed, updated:g.updated};
+        }).sort(function(a,b){ return a.n-b.n; });
+
+        // Deduplicate: same season number can come back twice.
+        var byN={};
+        seasons.forEach(function(s){
+          if(!byN[s.n] || s.chapter>byN[s.n].chapter) byN[s.n]=s;
+        });
+        seasons=Object.keys(byN).map(function(k){return byN[k];})
+                      .sort(function(a,b){ return a.n-b.n; });
+
+        // The reader's current position is the newest season, not the
+        // biggest number — season 3 chapter 24 comes after season 2's 180.
+        var current=seasons[seasons.length-1];
+        var src=good.filter(function(g){ return g.title===current.title; })[0]||good[0];
+
+        return {chapter:current.chapter, season:current.n,
+                seasons:seasons.length>1?seasons:null,
+                title:current.title, updated:current.updated,
+                completed:current.completed, licensed:src.licensed};
+      });
+    });
+  }).catch(function(e){
+    return {error:"search failed: "+(e.message||e)};
+  });
+}
+
+function muSeries(id, fallbackTitle, score, type){
+  return fetch(via(MU+"/series/"+id)).then(function(r){
+    return r.text().then(function(txt){
+      lastMuRaw=(lastMuRaw||"")+"\n\nSERIES "+id+": "+txt.slice(0,700);
+      if(!r.ok) return {error:"series HTTP "+r.status};
+      var d;
+      try{ d=JSON.parse(txt); }catch(e){ return {error:"series returned non-JSON"}; }
+      if(d && d.error) return {error:"proxy: "+d.error};
+      if(!isComic(d)) return {error:"novel, skipped"};
+
+      var raw=d.latest_chapter;
+      if(raw==null && d.status){
+        var m=String(d.status).match(/(\d{1,4})\s*chapters?/i);
+        if(m) raw=m[1];
+      }
+      var n=parseInt(raw,10);
+
+      var updated=null;
+      if(d.last_updated){
+        if(d.last_updated.timestamp) updated=d.last_updated.timestamp;
+        else if(d.last_updated.as_rfc3339){
+          var t=new Date(d.last_updated.as_rfc3339);
+          if(!isNaN(t)) updated=Math.floor(t.getTime()/1000);
+        }
+      }
+      if(!(n>0)) return {error:"no chapter number on series record"};
+      return {chapter:n, title:d.title||fallbackTitle||"", score:score,
+              updated:updated, completed:!!d.completed, licensed:!!d.licensed};
+    });
+  }).catch(function(e){
+    return {error:"series lookup failed: "+(e.message||e)};
+  });
+}
+
+function muLatestRaw(title){
+  return muFetch(title).then(function(r){
+    if(r.error) throw new Error(r.error);
+    return r;
+  });
+}
+
+function muLatest(title){
+  var key=(title||"").toLowerCase();
+  if(key in muCache) return Promise.resolve(muCache[key]);
+  return muFetch(title).then(function(r){
+    if(r.error){ setDiag("MangaUpdates: "+r.error); muCache[key]={fail:r.error}; return muCache[key]; }
+    muCache[key]=r;
+    return r;
+  });
+}
+
+/* ================= WEBTOON: the publisher's own number =================
+   MangaUpdates counts fan releases, which stop the moment a series is
+   licensed — that's why Overgeared read 24 when Bilibili said 308. The
+   publisher always knows. WEBTOON exposes a per-series RSS feed, so for
+   anything hosted there we can read the true latest episode.
+
+   Turn any series URL into its feed by swapping the path segment for
+   /rss and keeping title_no:
+     .../en/action/tower-of-god/list?title_no=95
+     .../en/action/tower-of-god/rss?title_no=95                          */
+function webtoonRssUrl(seriesUrl){
+  try{
+    var u=new URL(seriesUrl);
+    if(u.hostname.indexOf("webtoons.com")===-1) return null;
+    var titleNo=u.searchParams.get("title_no");
+    if(!titleNo) return null;
+    // Keep language/genre/slug and drop everything after it. A viewer URL
+    // is [en, fantasy, slug, episode-1, viewer]; a list URL is
+    // [en, action, slug, list]. Both reduce to the same feed.
+    var parts=u.pathname.split("/").filter(Boolean);
+    if(parts.length<3) return null;
+    return u.origin+"/"+parts.slice(0,3).join("/")+"/rss?title_no="+titleNo;
+  }catch(e){ return null; }
+}
+
+function webtoonLatest(links){
+  var wt=(links||[]).filter(function(l){
+    return /webtoons\.com/i.test(l.url||"") && webtoonRssUrl(l.url);
+  })[0];
+  if(!wt) return Promise.resolve(null);
+  var feed=webtoonRssUrl(wt.url);
+
+  return fetch(via(feed)).then(function(r){
+    if(!r.ok) throw new Error("WEBTOON RSS "+r.status);
+    return r.text();
+  }).then(function(xml){
+    var doc=new DOMParser().parseFromString(xml,"text/xml");
+    var items=doc.querySelectorAll("item");
+    if(!items.length) return null;
+    // The episode number lives in each item's link as episode_no=N.
+    var highest=0, when=null;
+    items.forEach(function(it){
+      var link=(it.querySelector("link")||{}).textContent||"";
+      var m=link.match(/episode_no=(\d+)/);
+      if(m){
+        var n=parseInt(m[1],10);
+        if(n>highest){
+          highest=n;
+          var d=(it.querySelector("pubDate")||{}).textContent;
+          var t=d? new Date(d):null;
+          when=(t && !isNaN(t))? Math.floor(t.getTime()/1000) : null;
+        }
+      }
+    });
+    return highest>0 ? {chapter:highest, updated:when, source:"WEBTOON",
+                        url:wt.url} : null;
+  }).catch(function(e){
+    setDiag("WEBTOON feed: "+(e.message||e));
+    return null;
+  });
+}
+
+/* ================= oEmbed ================= */
+function oembed(url){
+  var tt=/tiktok\.com/i.test(url), yt=/youtube\.com|youtu\.be/i.test(url);
+  if(!tt&&!yt) return Promise.reject(new Error("unsupported"));
+  var ep = tt ? "https://www.tiktok.com/oembed?url="+encodeURIComponent(url)
+              : "https://www.youtube.com/oembed?format=json&url="+encodeURIComponent(url);
+  return fetch(via(ep)).then(function(r){
+    // A real HTTP response means CORS allowed the request — the platform
+    // answered, it just didn't like the URL.
+    if(r.status===404) throw new Error("notfound|That video is private, deleted, or the link is wrong.");
+    if(!r.ok) throw new Error("http|"+(tt?"TikTok":"YouTube")+" returned "+r.status+".");
+    return r.json();
+  }).then(function(d){
+    return {caption:d.title||"", author:d.author_name||"", platform:tt?"TikTok":"YouTube"};
+  }).catch(function(e){
+    if(e.message && e.message.indexOf("|")>-1) throw e;
+    // fetch() rejects (rather than resolving) only for CORS or network
+    // failures, so this branch is the CORS answer we've been waiting for.
+    throw new Error("cors|"+(tt?"TikTok":"YouTube")+" blocked the request from this page "+
+      "(no CORS header). Reading captions has to happen server-side.");
+  });
+}
+
+/* ================= ui ================= */
+var app=document.getElementById("app");
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
+ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
+function setDiag(t){ try{ console.log("[mangawhere]", t); }catch(e){} }
+
+function homeView(){
+  app.innerHTML=
+   '<h1>Saw a manga edit? Find where to read it.</h1>'+
+   '<p class="sub">Paste the video link, or just type the manga name.</p>'+
+   '<div class="searchwrap"><div class="paste">'+
+   '<input id="q" placeholder="Paste TikTok / YouTube link, or type a name" '+
+   'autocomplete="off" autocorrect="off" spellcheck="false"><button id="go">Find</button></div>'+
+   '<div class="suggest" id="suggest" hidden></div></div>'+
+   '<p class="hint">Free to use. No account needed.</p>'+
+   '<div id="out"></div>'+
+   '<div id="trend"></div>';
+  document.getElementById("go").onclick=run;
+  wireSuggest(document.getElementById("q"));
+  loadTrending(curFilter);
+}
+
+var curFilter="";
+function chips(active){
+  var opts=[["","Everything"],["KR","Manhwa"],["JP","Manga"],["CN","Manhua"]];
+  return '<div class="chips">'+opts.map(function(o){
+    return '<button class="chip" data-c="'+o[0]+'" aria-pressed="'+(active===o[0])+'">'+
+      o[1]+'</button>';}).join("")+'</div>';
+}
+
+function loadTrending(country){
+  curFilter=country||"";
+  var el=document.getElementById("trend");
+  if(!el) return;
+  el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
+    ['a','b'].map(function(){ return '<div class="railwrap"><div class="rail"><div class="track">'+
+    Array(8).fill('<div class="tile"><div class="skel"></div></div>').join("")+
+    '</div></div></div>'; }).join("");
+  wireChips();
+  trending(curFilter).then(function(rows){
+    setDiag("source: "+sourceUsed);
+    var el=document.getElementById("trend");
+    if(!el) return;
+    if(!rows.length){
+      el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
+        '<div class="note"><p><strong>Nothing came back for that filter</strong>'+
+        'The fallback source can\'t filter by origin as precisely. Try Everything.</p></div>';
+      wireChips(); return;
+    }
+    // Split into two rows so more of the list is visible at once, and run
+    // them in opposite directions — a single direction reads as one long
+    // conveyor and you lose track of what you've already seen.
+    var mid=Math.ceil(rows.length/2);
+    var rowA=rows.slice(0,mid), rowB=rows.slice(mid);
+    if(!rowB.length){ rowB=rowA; }
+
+    function railHtml(list,id,rev){
+      return '<div class="railwrap"><div class="rail" id="rail-'+id+'">'+
+        '<div class="track'+(rev?" rev":"")+'" id="track-'+id+'">'+
+        list.concat(list).map(function(m,i){
+          var dup=i>=list.length;
+          return '<button class="tile" data-row="'+id+'" data-i="'+(i%list.length)+'"'+
+            (dup?' aria-hidden="true" tabindex="-1"':'')+'>'+
+            (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
+            '<h4>'+esc(m.title)+'</h4><p class="meta">'+esc(m.kind||"")+
+            (m.chapters?" · "+m.chapters+" ch":"")+
+            (statusInfo(m.status).key==="complete"?' · done':"")+'</p></button>';
+        }).join("")+'</div></div></div>';
+    }
+
+    el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
+      railHtml(rowA,"a",false)+railHtml(rowB,"b",true);
+    railData={a:rowA,b:rowB};
+    wireChips();
+    startRail();
+    var t=el.querySelectorAll(".tile");
+    for(var k=0;k<t.length;k++)
+      t[k].onclick=(function(m){return function(){showDetail(m,null);};})(
+        railData[t[k].dataset.row][+t[k].dataset.i]);
+  }).catch(function(e){
+    setDiag("both sources down: "+e.message);
+    var el=document.getElementById("trend");
+    if(el){ el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
+      '<div class="note bad"><p><strong>Both data sources are unreachable</strong>'+
+      esc(e.message)+'. Jikan and AniList are free community APIs with no uptime '+
+      'commitment. This is the argument for caching results in your own database.</p></div>';
+      wireChips(); }
+  });
+}
+
+/* Search-as-you-type. Typing "over" should offer Overgeared, not tell
+   you there's no match — nobody types a full manhwa title, and half of
+   them have three different romanisations anyway. */
+var sugTimer=null, sugSeq=0, sugRows=[], sugIndex=-1;
+
+function wireSuggest(input){
+  if(!input) return;
+  input.addEventListener("input", function(){
+    var v=input.value.trim();
+    if(/^https?:\/\//i.test(v)){ hideSuggest(); return; }   // a link isn't a search
+    clearTimeout(sugTimer);
+    if(v.length<2){ hideSuggest(); return; }   // 1 char matches everything
+    // Wait for a pause in typing — one request per word, not per letter.
+    sugTimer=setTimeout(function(){ fetchSuggest(v); }, 280);
+  });
+  input.addEventListener("keydown", function(e){
+    var box=document.getElementById("suggest");
+    var open=box && !box.hidden && sugRows.length;
+    if(e.key==="Enter"){
+      if(open && sugIndex>=0){ e.preventDefault(); pickSuggest(sugIndex); }
+      else { hideSuggest(); run(); }
+      return;
+    }
+    if(!open) return;
+    if(e.key==="ArrowDown"){ e.preventDefault(); moveSuggest(1); }
+    else if(e.key==="ArrowUp"){ e.preventDefault(); moveSuggest(-1); }
+    else if(e.key==="Escape"){ hideSuggest(); }
+  });
+  input.addEventListener("blur", function(){
+    // Delay so a click on a suggestion still registers.
+    setTimeout(hideSuggest, 160);
+  });
+}
+
+function fetchSuggest(q){
+  var seq=++sugSeq;
+  // Cast a wider net for suggestions than for a full search — the title
+  // you want may be the 15th result the provider returns, and we're
+  // about to re-rank anyway.
+  search(q, 25).then(function(rows){
+    if(seq!==sugSeq) return;          // a newer keystroke already won
+    showSuggest(rankSuggestions(rows, q).slice(0,7));
+  }).catch(function(){ hideSuggest(); });
+}
+
+/* Rank by how the title matches, then by how many people read it.
+   Typing "over" was returning "Over! Over! Over!" and "OVER OVER OVER!"
+   — both technically better string matches than Overgeared, and both
+   read by almost nobody. Popularity is what separates them. */
+function rankSuggestions(rows, q){
+  var ql=q.toLowerCase().trim();
+  var maxPop=1;
+  rows.forEach(function(m){ maxPop=Math.max(maxPop, m.popularity||0); });
+
+  function tier(m){
+    var names=[m.title].concat(m.alts||[]).filter(Boolean)
+                .map(function(t){ return t.toLowerCase(); });
+    if(names.some(function(t){ return t===ql; })) return 0;         // exact
+    if(names.some(function(t){ return t.indexOf(ql)===0; })) return 1; // starts with
+    if(names.some(function(t){                                        // word starts with
+      return t.split(/[\s:,\-]+/).some(function(w){ return w.indexOf(ql)===0; });
+    })) return 2;
+    if(names.some(function(t){ return t.indexOf(ql)>-1; })) return 3;  // contains
+    return 4;
+  }
+
+  return rows.map(function(m){
+    var t=tier(m);
+    var pop=Math.log10(1+(m.popularity||0))/Math.log10(1+maxPop);   // 0..1
+    // Tier dominates, popularity breaks ties within it. Half a tier of
+    // weight is enough to float a hugely popular title above an obscure
+    // one that matched slightly better.
+    return {m:m, score:t - pop*0.6};
+  }).sort(function(a,b){ return a.score-b.score; })
+    .map(function(x){ return x.m; });
+}
+
+function showSuggest(rows){
+  var box=document.getElementById("suggest");
+  if(!box) return;
+  sugRows=rows; sugIndex=-1;
+  if(!rows.length){ hideSuggest(); return; }
+  box.innerHTML=rows.map(function(m,i){
+    return '<button class="sug" data-i="'+i+'">'+
+      (m.cover?'<img alt="" src="'+esc(m.cover)+'">':'<span class="sph"></span>')+
+      '<span class="sinfo"><span class="st">'+esc(m.title)+'</span>'+
+      '<span class="sm">'+esc(m.kind||"")+
+      (m.chapters?" · "+m.chapters+" ch":"")+' · '+esc(statusInfo(m.status).label)+
+      (m.adult?' · <span class="adultflag">18+</span>':"")+
+      (m.popularity>5000?' · <span class="pop">popular</span>':"")+
+      '</span></span></button>';
+  }).join("");
+  box.hidden=false;
+  var els=box.querySelectorAll(".sug");
+  for(var i=0;i<els.length;i++){
+    els[i].onmousedown=(function(n){ return function(e){ e.preventDefault(); pickSuggest(n); }; })(i);
+  }
+}
+
+function moveSuggest(d){
+  var box=document.getElementById("suggest");
+  if(!box) return;
+  var els=box.querySelectorAll(".sug");
+  if(!els.length) return;
+  sugIndex=(sugIndex+d+els.length)%els.length;
+  for(var i=0;i<els.length;i++) els[i].classList.toggle("on", i===sugIndex);
+  els[sugIndex].scrollIntoView({block:"nearest"});
+}
+
+function pickSuggest(i){
+  var m=sugRows[i];
+  if(!m) return;
+  hideSuggest();
+  var input=document.getElementById("q");
+  if(input) input.value=m.title;
+  showDetail(m, null);
+}
+
+function hideSuggest(){
+  var box=document.getElementById("suggest");
+  if(box){ box.hidden=true; box.innerHTML=""; }
+  sugRows=[]; sugIndex=-1;
+}
+
+function wireChips(){
+  var cs=document.querySelectorAll(".chip");
+  for(var i=0;i<cs.length;i++)
+    cs[i].onclick=(function(c){return function(){ loadTrending(c); };})(cs[i].dataset.c);
+}
+
+/* ---- carousel ----
+   Auto-advances, but stops the moment the user touches it. Nothing is more
+   irritating than a shelf that slides away while you're reaching for a cover,
+   so any interaction pauses it and it only resumes after a few idle seconds. */
+var RAIL_SPEED = 22;   // pixels per second — a slow, readable drift
+var railData = {a:[], b:[]};
+
+function startRail(){
+  ["a","b"].forEach(function(id){ initRail("rail-"+id, "track-"+id); });
+}
+
+function initRail(railId, trackId){
+  var rail=document.getElementById(railId), track=document.getElementById(trackId);
+  if(!rail||!track) return;
+
+  function begin(){
+    var tiles=track.querySelectorAll(".tile");
+    if(!tiles.length) return;
+    // The track holds its list twice, so shifting by exactly one set
+    // lands on an identical frame and the loop is seamless.
+    var cardW=tiles[0].getBoundingClientRect().width;
+    if(cardW<20){ fallback("cover width "+Math.round(cardW)+"px"); return; }
+    var oneSet=(tiles.length/2)*(cardW+12);
+    track.style.setProperty("--shift","-"+oneSet+"px");
+    track.style.animationDuration=(oneSet/RAIL_SPEED)+"s";
+    track.classList.add("run");
+
+    var before=getComputedStyle(track).transform;
+    setTimeout(function(){
+      if(!document.body.contains(track)) return;
+      if(getComputedStyle(track).transform===before &&
+         getComputedStyle(track).transform!=="none") fallback("animation not running");
+    },900);
+  }
+  function fallback(why){
+    rail.classList.add("grid");
+    track.classList.remove("run");
+    setDiag("grid mode ("+why+")");
+  }
+  if(document.readyState==="complete") setTimeout(begin,60);
+  else window.addEventListener("load",function(){setTimeout(begin,60);},{once:true});
+  setTimeout(begin,300);
+}
+
+function stopRail(){
+  ["track-a","track-b"].forEach(function(id){
+    var t=document.getElementById(id); if(t) t.classList.remove("run");
+  });
+}
+
+function run(){
+  var raw=document.getElementById("q").value.trim(); if(!raw) return;
+  stopRail();
+  var out=document.getElementById("out"), btn=document.getElementById("go");
+  var tr=document.getElementById("trend"); if(tr) tr.style.display="none";
+  btn.disabled=true; out.innerHTML='<div class="spin">Working…</div>';
+  var isLink=/^https?:\/\//i.test(raw);
+  var job = isLink
+    ? oembed(raw).then(function(meta){
+        var p=parseCaption(meta.caption);
+        if(!p.title) return {kind:"noTitle",caption:meta.caption};
+        return search(p.title).then(function(rows){
+          return {kind:"results",rows:rows,parsed:p,caption:meta.caption,
+                  author:meta.author,platform:meta.platform};});
+      }).catch(function(e){
+        if(e.message==="unsupported") return {kind:"unsupported"};
+        return {kind:"oembedFail",err:e.message};
+      })
+    : search(raw).then(function(rows){
+        return {kind:"results",rows:rows,parsed:{title:raw,chapter:null,confidence:"medium"}};});
+  job.then(render).catch(function(e){
+    out.innerHTML='<div class="note bad"><p><strong>Error</strong>'+esc(e.message)+'</p></div>';
+  }).then(function(){btn.disabled=false; setDiag("source: "+(sourceUsed||"-"));});
+}
+
+function render(r){
+  var out=document.getElementById("out");
+  if(r.kind==="unsupported"){
+    out.innerHTML='<div class="note"><p><strong>Link not supported</strong>Only TikTok and '+
+      'YouTube can be read. Type the manga name instead.</p></div>'; return;}
+  if(r.kind==="oembedFail"){
+    var parts=(r.err||"").split("|");
+    var code=parts[0], msg=parts[1]||r.err;
+    var heading = code==="cors" ? "Caption blocked by the platform"
+                : code==="notfound" ? "Video not found"
+                : "Couldn't read that video";
+    out.innerHTML='<div class="note bad"><p><strong>'+heading+'</strong>'+esc(msg)+
+      (code==="cors"
+        ? ' This is exactly the job the Python backend does — it fetches the caption '+
+          'server-side where CORS doesn\'t apply.'
+        : "")+'</p></div>'+
+      '<div class="note"><p><strong>Test the matching anyway</strong>'+
+      'Copy the video\'s caption text and paste it here — everything after the caption '+
+      'fetch is identical, so this still proves the parser and matcher work.</p></div>'+
+      '<div class="paste"><input id="capin" placeholder="Paste the video caption text">'+
+      '<button id="capgo">Parse</button></div><div id="capout"></div>';
+    var ci=document.getElementById("capin");
+    function capRun(){
+      var text=ci.value.trim(); if(!text) return;
+      var p=parseCaption(text);
+      var co=document.getElementById("capout");
+      co.innerHTML='<div class="cap">parsed &rarr; title: '+esc(p.title||"(none)")+
+        ' · chapter: '+(p.chapter===null?"(none)":p.chapter)+
+        ' · confidence: '+esc(p.confidence)+'</div>';
+      if(!p.title){
+        co.innerHTML+='<div class="note"><p><strong>No manga name in that caption</strong>'+
+          'Type the name into the main box instead.</p></div>'; return;
+      }
+      co.innerHTML+='<div class="spin">Searching…</div>';
+      search(p.title).then(function(rows){
+        co.innerHTML='<div class="cap">parsed &rarr; title: '+esc(p.title)+
+          ' · chapter: '+(p.chapter===null?"(none)":p.chapter)+'</div>';
+        if(!rows.length){ co.innerHTML+='<div class="note"><p>No match for '+
+          esc(p.title)+'.</p></div>'; return; }
+        var sc=rows.map(function(m){return {m:m,s:score(m,p.title,text)};})
+                   .sort(function(a,b){return b.s-a.s;});
+        co.innerHTML+=detailHtml(sc[0].m,p.chapter);
+        fillChapters(sc[0].m,p.chapter);
+      }).catch(function(e){
+        co.innerHTML='<div class="note bad"><p>'+esc(e.message)+'</p></div>';
+      });
+    }
+    document.getElementById("capgo").onclick=capRun;
+    ci.addEventListener("keydown",function(e){if(e.key==="Enter")capRun();});
+    return;
+  }
+  if(r.kind==="noTitle"){
+    out.innerHTML='<div class="cap">'+esc(r.caption)+'</div><div class="note"><p>'+
+      '<strong>No manga name in that caption</strong>Type it instead — guessing wrong is '+
+      'worse than asking.</p></div>'; return;}
+  var rows=r.rows||[];
+  if(!rows.length){
+    out.innerHTML='<div class="note"><p><strong>Nothing found for that</strong>'+
+      'Try a shorter search — two or three words is usually enough, and the '+
+      'suggestions appear as you type.</p></div>'; return;}
+  var scored=rows.map(function(m){return {m:m,s:score(m,r.parsed.title,r.caption||r.parsed.title)};})
+                 .sort(function(a,b){return b.s-a.s;});
+  var top=scored[0], next=scored[1]?scored[1].s:0;
+  var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
+  var head=r.caption
+    ? '<div class="cap">'+(r.platform?esc(r.platform)+(r.author?" · @"+esc(r.author):"")+' &rarr; ':"")
+      +esc(r.caption)+'</div>'
+    : "";
+  if(sure){ out.innerHTML=head+detailHtml(top.m,r.parsed.chapter);
+            fillChapters(top.m,r.parsed.chapter); return; }
+  out.innerHTML=head+'<div class="note"><p><strong>Which one is it?</strong>Not certain — '+
+    'pick the right title.</p></div>'+
+    scored.slice(0,5).map(function(x,i){var m=x.m;
+      return '<button class="pick" data-i="'+i+'">'+
+        (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
+        '<div><h4>'+esc(m.title)+'</h4><p class="meta">'+esc(m.kind||"")+' · '+
+        (m.chapters?m.chapters+" ch":"? ch")+' · '+esc(statusInfo(m.status).label)+
+        '</p></div></button>';}).join("");
+  var els=out.querySelectorAll(".pick");
+  for(var i=0;i<els.length;i++)
+    els[i].onclick=(function(m){return function(){
+      out.innerHTML=head+detailHtml(m,r.parsed.chapter);
+      fillChapters(m,r.parsed.chapter); window.scrollTo(0,0);};})(scored[+els[i].dataset.i].m);
+}
+
+function showDetail(m,ch){
+  stopRail();
+  var tr=document.getElementById("trend"); if(tr) tr.style.display="none";
+  document.getElementById("out").innerHTML=
+    '<button class="back" id="bk">← Back</button>'+detailHtml(m,ch);
+  fillChapters(m,ch);
+  document.getElementById("bk").onclick=function(){ homeView(); };
+  window.scrollTo(0,0);
+}
+
+function detailHtml(m,videoCh){
+  var off=m.links.filter(function(l){return l.official;});
+  var other=m.links.filter(function(l){return !l.official;});
+  var st=statusInfo(m.status);
+  var done = st.key==="complete";
+
+  var behind=(videoCh&&m.chapters&&m.chapters>videoCh)
+    ? '<p class="behind">'+(m.chapters-videoCh)+' more chapters out since that video</p>' : "";
+
+  /* Third box changes with status, because the useful date changes too:
+     for a finished series it's when it ended, for a running one it's how
+     long it's been going. */
+  var thirdK, thirdV;
+  if(done && (m.ended||m.started)){
+    thirdK="Ended"; thirdV=fmtDate(m.ended)||yearOf(m.ended)||"—";
+  }else if(m.started){
+    thirdK="Running since"; thirdV=fmtDate(m.started)||yearOf(m.started)||"—";
+  }else{
+    thirdK="Volumes"; thirdV=m.volumes||"—";
+  }
+
+  // Ongoing series have no count from AniList/MAL, so leave a slot that
+  // the MangaUpdates lookup fills in a moment later.
+  var chapCell = m.chapters
+    ? '<div class="v">'+m.chapters+'</div>'
+    : '<div class="v sm" id="chapslot">checking…</div>';
+
+  // A completed series is a different proposition to an ongoing one, so
+  // say it in words rather than making them read a status chip.
+  var verdict;
+  if(done){
+    verdict='<p class="verdict done">Complete'+
+      (m.chapters?' &middot; all '+m.chapters+' chapters are out':'')+
+      (m.ended?' &middot; ended '+fmtDate(m.ended):'')+'. You can read the whole thing.</p>';
+  }else if(st.key==="ongoing"){
+    verdict='<p class="verdict live" id="verdictslot">Still running'+
+      (m.chapters?' &middot; '+m.chapters+' chapters so far':'')+
+      '. New chapters keep coming.</p>';
+  }else if(st.key==="hiatus"){
+    verdict='<p class="verdict warn">On hiatus &mdash; no new chapters for now.</p>';
+  }else if(st.key==="cancelled"){
+    verdict='<p class="verdict warn">Cancelled &mdash; it was never finished.</p>';
+  }else{ verdict=""; }
+
+  // updatedAt is when the listing changed, not when a chapter dropped.
+  // Labelled honestly rather than dressed up as a release date.
+  var freshness = (!done && m.updatedAt)
+    ? '<p class="fresh">Chapter count last checked '+ago(m.updatedAt)+'</p>' : "";
+
+  return '<div class="card"><div class="hit">'+
+    (m.cover?'<img alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
+    '<div><h2>'+esc(m.title)+'</h2><p class="meta" id="metaline">'+
+    (m.kind?esc(m.kind)+" &middot; ":"")+
+    '<span id="metachap">'+(m.chapters?m.chapters+" chapters":"chapter count unknown")+
+    '</span></p>'+
+    '<span class="pill '+esc(st.tone)+'">'+esc(st.label)+'</span>'+
+    (m.kind?'<span class="pill kind">'+esc(m.kind)+'</span>':"")+
+    (m.adult?'<span class="pill adult">18+</span>':"")+'</div></div>'+
+    verdict+
+    '<div class="boxes">'+
+    (videoCh?'<div><div class="k">Video was at</div><div class="v">'+videoCh+'</div></div>':"")+
+    '<div><div class="k">'+(done?"Final chapter":"Latest out")+'</div>'+chapCell+'</div>'+
+    '<div><div class="k">'+thirdK+'</div><div class="v sm">'+esc(String(thirdV))+'</div></div>'+
+    '</div>'+behind+freshness+
+    '<button class="trackbtn'+(inList(m.id)?" on":"")+'" id="trackbtn">'+
+      (inList(m.id)?"✓ Tracking":"Track this")+'</button>'+
+    '</div>'+
+    '<h3>'+(off.length?"Read it here":"Where to read")+'</h3>'+
+    (off.length?off.map(linkRow).join(""):noEnglishBlock(m))+
+    (other.length?'<h3>More info</h3>'+other.slice(0,3).map(linkRow).join(""):"");
+}
+
+/* Called right after a detail card is painted. Fills the "Latest out"
+   slot for ongoing series, where AniList and MAL have nothing. */
+function wireTrack(m, videoCh){
+  var b=document.getElementById("trackbtn");
+  if(!b) return;
+  b.onclick=function(){
+    if(inList(m.id)){
+      removeFromList(m.id); syncUnwatch(m.id);
+      b.className="trackbtn"; b.textContent="Track this";
+      var n0=document.getElementById("pushnote"); if(n0) n0.remove();
+      updateBadge();
+      return;
+    }
+    // Remember the chapter they're on now, so "new" means new to them.
+    var slot=document.getElementById("chapslot");
+    var known=m.chapters || (slot? parseInt(slot.textContent,10) : null) || videoCh || null;
+    addToList(m, known);
+    b.className="trackbtn on"; b.textContent="✓ Tracking";
+    updateBadge();
+
+    // Then offer to actually reach them. Asking at this moment works
+    // because they've just shown they care about this series — a
+    // permission prompt on page load gets refused by almost everyone.
+    enablePush().then(function(r){
+      if(r.ok){ syncWatch(m, known); showPushNote(b, "on"); }
+      else showPushNote(b, r.reason);
+    });
+  };
+}
+
+function showPushNote(btn, state){
+  var old=document.getElementById("pushnote"); if(old) old.remove();
+  var p=document.createElement("p");
+  p.id="pushnote"; p.className="fresh";
+  if(state==="on"){
+    p.className="fresh authoritative";
+    p.textContent="We'll notify this device when a new chapter is out.";
+  }else if(state==="ios:add-to-home-screen"){
+    p.textContent="To get alerts on iPhone, tap Share then \"Add to Home Screen\", "+
+      "and open it from there. Apple only allows notifications that way.";
+  }else if(state==="no backend configured"){
+    p.textContent="Saved to this device. Alerts when you're away need the backend "+
+      "connected.";
+  }else{
+    p.textContent="Saved to this device. Notifications unavailable — "+state+".";
+  }
+  btn.parentNode.insertBefore(p, btn.nextSibling);
+}
+
+function fillChapters(m, videoCh){
+  wireTrack(m, videoCh);
+  var slot=document.getElementById("chapslot");
+  if(!slot) return;                       // count already known
+
+  // Publisher first — it's authoritative. MangaUpdates only as fallback.
+  webtoonLatest(m.links).then(function(pub){
+    if(pub){ applyChapter(m, videoCh, {chapter:pub.chapter, updated:pub.updated,
+             title:m.title, publisher:"WEBTOON"}); return null; }
+    return muLatest(m.title).then(function(hit){ applyChapter(m, videoCh, hit); });
+  });
+}
+
+function applyChapter(m, videoCh, hitPromise){
+  Promise.resolve(hitPromise).then(function(hit){
+    slot=document.getElementById("chapslot");
+    if(!slot) return;                     // user navigated away
+    if(hit && hit.fail){
+      slot.className="v sm";
+      slot.textContent="unavailable";
+      slot.title="MangaUpdates: "+hit.fail;
+      var card0=slot.closest(".card");
+      if(card0 && !card0.querySelector(".mu-why")){
+        var w=document.createElement("p");
+        w.className="fresh mu-why";
+        w.textContent="Chapter count unavailable — "+hit.fail+
+          (DEBUG?"":"  (add ?debug=1 to the URL to see the raw response)");
+        card0.appendChild(w);
+        if(DEBUG && lastMuRaw){
+          var pre=document.createElement("pre");
+          pre.className="rawdump";
+          pre.textContent=lastMuRaw;
+          card0.appendChild(pre);
+        }
+      }
+      return;
+    }
+    if(!hit || !hit.chapter){
+      slot.className="v sm";
+      if(!PROXY){
+        slot.innerHTML='<a class="needproxy" href="#" onclick="showHelp();return false;">'+
+                       'needs setup</a>';
+        slot.title="Chapter counts for ongoing series need the proxy — tap to see how.";
+      }else{
+        slot.textContent="not published";
+        slot.title="No source publishes a chapter count for this one yet.";
+      }
+      return;
+    }
+    slot.className="v";
+    slot.innerHTML=(hit.season&&hit.season>1?'<span class="seasontag">S'+hit.season+'</span>':"")+
+      hit.chapter+(hit.publisher?"":'<span class="approx">~</span>');
+    slot.title="Latest chapter tracked by MangaUpdates"+
+      (hit.alternates>1?" (highest of "+hit.alternates+" matching records)":"");
+
+    var cur=getList();
+    var touched=false;
+    cur.forEach(function(y){
+      if(String(y.id)===String(m.id)){
+        if(y.latest!==hit.chapter){ y.latest=hit.chapter; touched=true; }
+        if(y.seen==null){ y.seen=hit.chapter; touched=true; }
+      }
+    });
+    if(touched){ saveList(cur); }
+
+    var mc=document.getElementById("metachap");
+    if(mc) mc.textContent = (hit.season&&hit.season>1)
+      ? ("season "+hit.season+", chapter "+hit.chapter)
+      : (hit.chapter+" chapters");
+
+    // Label the box honestly when the number is per-season.
+    var box=slot.parentNode;
+    if(box && hit.season && hit.season>1){
+      var k0=box.querySelector(".k");
+      if(k0) k0.textContent="Season "+hit.season+" chapter";
+    }
+
+    // Seasons run from separate records with their own numbering, so
+    // list them — otherwise "chapter 24" looks like the series barely started.
+    if(hit.seasons && hit.seasons.length>1){
+      var card1=slot.closest(".card");
+      if(card1 && !card1.querySelector(".seasons")){
+        var sl=document.createElement("div");
+        sl.className="seasons";
+        sl.innerHTML='<div class="k" style="margin-bottom:6px">Seasons</div>'+
+          hit.seasons.map(function(se){
+            var cur=(se.n===hit.season);
+            return '<span class="schip'+(cur?" on":"")+'">S'+se.n+' · '+se.chapter+
+                   ' ch'+(se.completed?"":" ·")+(se.completed?"":" ongoing")+'</span>';
+          }).join("");
+        card1.appendChild(sl);
+      }
+    }
+
+    var box=slot.parentNode;
+    if(box){
+      var k=box.querySelector(".k");
+      if(k) k.textContent="Latest chapter";
+    }
+    var v=document.getElementById("verdictslot");
+    if(v) v.innerHTML="Still running &middot; up to chapter "+hit.chapter+
+      " so far. New chapters keep coming.";
+
+    // If the video's chapter is behind, say how far — the single most
+    // useful sentence on the page for someone who just watched a recap.
+    if(videoCh && hit.chapter>videoCh){
+      var card=slot.closest(".card");
+      if(card && !card.querySelector(".behind")){
+        var p=document.createElement("p");
+        p.className="behind";
+        p.textContent=(hit.chapter-videoCh)+" more chapters out since that video";
+        card.appendChild(p);
+      }
+    }
+    // Replace the vague AniList "last checked" line with the real one.
+    var old=document.querySelector(".card .fresh");
+    if(old && /last checked/i.test(old.textContent)) old.remove();
+
+    if(hit.updated){
+      var upd=document.createElement("p");
+      upd.className="behind";
+      upd.textContent=(hit.season&&hit.season>1?"Season "+hit.season+" chapter ":"Chapter ")+
+        hit.chapter+" released "+ago(hit.updated)+(hit.publisher?" on "+hit.publisher:"");
+      var c0=slot.closest(".card");
+      if(c0 && !c0.querySelector(".mu-upd")){ upd.classList.add("mu-upd"); c0.appendChild(upd); }
+    }
+
+    var note=document.createElement("p");
+    note.className="fresh";
+    // A licensed series is precisely where this number goes stale: fan
+    // translation stops, the official platform carries on. Say so, and
+    // point them at the publisher, who always has the true count.
+    if(hit.publisher){
+      note.textContent="Chapter count from "+hit.publisher+".";
+      note.classList.add("authoritative");
+    } else {
+      note.textContent="";
+    }
+    var card2=slot.closest(".card");
+    if(card2 && !card2.querySelector(".mu-note")){ note.classList.add("mu-note");
+      card2.appendChild(note); }
+  });
+}
+
+/* No English licence doesn't mean nowhere to read it — it almost always
+   means the original-language platform. Point there instead of showing a
+   dead end. We link to their search, not a guessed series URL, so the
+   link never 404s. */
+var ORIGIN_HOMES={
+  KR:[{site:"Naver Series",  url:"https://series.naver.com/search/search.series?t=comic&q="},
+      {site:"KakaoPage",     url:"https://page.kakao.com/search?word="}],
+  JP:[{site:"MANGA Plus",    url:"https://mangaplus.shueisha.co.jp/manga_list/all"},
+      {site:"Comic Walker",  url:"https://comic-walker.com/search?q="}],
+  CN:[{site:"Bilibili Comics",url:"https://manga.bilibili.com/search?keyword="}]
+};
+
+function noEnglishBlock(m){
+  var homes=ORIGIN_HOMES[(m.country||"").toUpperCase()]||[];
+  var langName={KR:"Korean",JP:"Japanese",CN:"Chinese"}[(m.country||"").toUpperCase()]||"original";
+  var head='<div class="note"><p><strong>No English publisher yet</strong>'+
+    'Nobody has licensed this one in English so far'+
+    (homes.length?'. It should still be readable on the '+langName+
+      ' platform it was published on — your browser can translate the page.':'.')+
+    '</p></div>';
+  if(!homes.length) return head;
+  return head+homes.map(function(h){
+    var url=h.url.indexOf("=")===h.url.length-1
+      ? h.url+encodeURIComponent(m.title) : h.url;
+    return '<a class="read no" target="_blank" rel="noopener" href="'+esc(url)+'">'+
+      '<span><span class="n">Search '+esc(h.site)+'</span><br>'+
+      '<span class="t">Official '+esc(langName)+' platform</span></span>'+
+      '<span class="go">Open →</span></a>';
+  }).join("");
+}
+
+function linkRow(l){
+  var info=platformInfo(l.site);
+  var cost=info?info.cost:"";
+  var label=info?info.note:(l.official?"Official publisher":"Reference");
+  var lang=(l.language&&l.language.toLowerCase().indexOf("english")===-1)?" · "+esc(l.language):"";
+  return '<a class="read'+(l.official?"":" no")+(cost?" c-"+cost:"")+
+   '" target="_blank" rel="noopener" href="'+esc(l.url)+'">'+
+   '<span><span class="n">'+esc(l.site||"Link")+'</span><br>'+
+   '<span class="t">'+esc(label)+lang+'</span></span>'+
+   (cost?'<span class="tagcost '+cost+'">'+(cost==="free"?"FREE":cost==="mixed"?"FREE-ISH":
+     cost==="sub"?"SUB":"PAID")+'</span>':'')+
+   '<span class="go">Open →</span></a>';
+}
+
+/* A visible answer to "why isn't it showing chapters" — tests each
+   source in turn and reports which one is blocked. */
+function showHelp(){
+  stopRail();
+  var out=document.getElementById("out")||document.getElementById("app");
+  out.innerHTML='<button class="back" id="hb">← Back</button>'+
+    '<h1 style="font-size:20px;margin:0 0 8px">Why chapters don\'t show</h1>'+
+    '<p class="sub">Ongoing series have no chapter count in AniList or MyAnimeList — '+
+    'their teams don\'t track it. MangaUpdates does, but blocks browser requests. '+
+    'A small proxy fixes that, and the TikTok captions too.</p>'+
+    '<div class="note"><p><strong>Set it up once</strong>'+
+    'Deploy <code>worker.js</code> to Cloudflare Workers (free, ~5 min), then open '+
+    'this page with <code>?proxy=https://yours.workers.dev</code> on the end of the URL.'+
+    '</p></div>'+
+    '<h3>Source check</h3><div id="probe" class="reads"></div>';
+  document.getElementById("hb").onclick=function(){ homeView(); };
+  runProbes();
+  window.scrollTo(0,0);
+}
+
+function runProbes(){
+  var box=document.getElementById("probe");
+  var tests=[
+    {name:"AniList", why:"covers, titles, official links",
+     run:function(){ return alSearch("tower of god").then(function(r){
+       return r.length+" results"; }); }},
+    {name:"Jikan", why:"backup source",
+     run:function(){ return jikanSearch("tower of god").then(function(r){
+       return r.length+" results"; }); }},
+    {name:"MangaUpdates", why:"chapter counts for ongoing series",
+     run:function(){ return muLatestRaw("Tower of God").then(function(r){
+       return r? "chapter "+r.chapter : "no match"; }); }},
+    {name:"TikTok oEmbed", why:"reads video captions",
+     run:function(){ return fetch(via("https://www.tiktok.com/oembed?url="+
+       encodeURIComponent("https://www.tiktok.com/@tiktok/video/6584647400055377158")))
+       .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return "reachable"; }); }}
+  ];
+  box.innerHTML=tests.map(function(t,i){
+    return '<div class="read no" id="p'+i+'"><span><span class="n">'+t.name+'</span><br>'+
+      '<span class="t">'+t.why+'</span></span><span class="go" id="pr'+i+'">testing…</span></div>';
+  }).join("");
+  tests.forEach(function(t,i){
+    t.run().then(function(msg){
+      var el=document.getElementById("pr"+i);
+      if(el){ el.textContent="OK · "+msg; el.style.color="var(--mint)"; }
+    }).catch(function(e){
+      var el=document.getElementById("pr"+i);
+      if(el){ el.textContent="blocked"; el.style.color="var(--bad)"; }
+      var row=document.getElementById("p"+i);
+      if(row) row.title=String(e.message||e);
+    });
+  });
+}
+
+/* ================= my list ================= */
+function updateBadge(){
+  var b=document.getElementById("badge");
+  if(!b) return;
+  var n=unreadCount();
+  b.textContent=n;
+  b.className=n?"badge on":"badge";
+}
+
+function listView(){
+  stopRail();
+  var l=getList();
+  var view=document.getElementById("app");
+  if(!l.length){
+    view.innerHTML='<button class="back" id="lb">← Back</button>'+
+      '<h1>Your list is empty</h1>'+
+      '<p class="sub">Find a manga and tap "Track this". We\'ll check for new '+
+      'chapters whenever you open this page.</p>';
+    document.getElementById("lb").onclick=function(){ homeView(); };
+    return;
+  }
+
+  view.innerHTML='<button class="back" id="lb">← Back</button>'+
+    '<h1>Your list</h1>'+
+    '<p class="sub">'+l.length+' title'+(l.length===1?"":"s")+'. '+
+    (store.persistent
+      ? 'Saved on this device.'
+      : 'Not saved — this browser is blocking storage, so the list resets on reload.')+
+    '</p>'+
+    '<div class="listrows" id="listrows">'+
+      l.map(function(x,i){ return listRow(x,i); }).join("")+
+    '</div>';
+
+  document.getElementById("lb").onclick=function(){ homeView(); };
+  wireListRows();
+  refreshList(l);
+  window.scrollTo(0,0);
+}
+
+function listRow(x,i){
+  var unread = x.latest && x.seen && x.latest>x.seen;
+  return '<div class="lrow'+(unread?" unread":"")+'" data-id="'+esc(String(x.id))+'">'+
+    (x.cover?'<img alt="" src="'+esc(x.cover)+'">':'<div class="ph"></div>')+
+    '<div class="linfo">'+
+      '<h4>'+esc(x.title)+'</h4>'+
+      '<p class="lmeta" id="lm-'+i+'">'+
+        (x.latest? ("chapter "+x.latest) : "checking…")+
+        (x.seen&&x.latest&&x.latest>x.seen
+          ? ' · <span class="newtag">'+(x.latest-x.seen)+' new</span>' : "")+
+      '</p>'+
+    '</div>'+
+    '<div class="lacts">'+
+      (unread?'<button class="lread" data-act="read">Mark read</button>':"")+
+      '<button class="lx" data-act="remove" aria-label="Remove">×</button>'+
+    '</div></div>';
+}
+
+function wireListRows(){
+  var rows=document.querySelectorAll(".lrow");
+  for(var i=0;i<rows.length;i++){
+    (function(row){
+      var id=row.dataset.id;
+      row.querySelectorAll("button").forEach(function(b){
+        b.onclick=function(e){
+          e.stopPropagation();
+          if(b.dataset.act==="remove") removeFromList(id);
+          else markRead(id);
+          listView();
+        };
+      });
+      row.onclick=function(){
+        var item=getList().filter(function(x){ return String(x.id)===String(id); })[0];
+        if(item) showDetail(item, null);
+      };
+    })(rows[i]);
+  }
+}
+
+/* This is the monitoring. No server involved — every time you open the
+   list we re-check each title and compare against the number you last
+   saw. Real push notifications need the backend; this needs nothing. */
+function refreshList(l){
+  l.forEach(function(x,i){
+    latestFor(x).then(function(n){
+      if(!n) return;
+      var cur=getList();
+      var changed=false;
+      cur.forEach(function(y){
+        if(String(y.id)===String(x.id) && y.latest!==n){ y.latest=n; changed=true; }
+      });
+      if(changed) saveList(cur);
+      var el=document.getElementById("lm-"+i);
+      if(el){
+        var item=cur.filter(function(y){ return String(y.id)===String(x.id); })[0]||{};
+        var diff=(item.seen&&item.latest&&item.latest>item.seen)?(item.latest-item.seen):0;
+        el.innerHTML="chapter "+n+(diff?' · <span class="newtag">'+diff+' new</span>':"");
+        if(diff){
+          var row=el.closest(".lrow");
+          if(row && !row.classList.contains("unread")){ row.classList.add("unread"); }
+        }
+      }
+      updateBadge();
+    });
+  });
+}
+
+/* One number, best source first: the publisher if we can read it,
+   otherwise the release tracker. */
+function latestFor(x){
+  return webtoonLatest(x.links).then(function(pub){
+    if(pub && pub.chapter) return pub.chapter;
+    return muLatest(x.title).then(function(hit){
+      return (hit && hit.chapter) ? hit.chapter : null;
+    });
+  }).catch(function(){ return null; });
+}
+
+document.getElementById("listbtn").onclick=function(){ listView(); };
+document.getElementById("home").onclick=function(){homeView();};
+homeView();
+updateBadge();
+</script>
+</body>
+</html>
