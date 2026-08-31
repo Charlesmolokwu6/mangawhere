@@ -72,7 +72,7 @@ padding:2px 0 10px;will-change:transform}
 @keyframes marquee{from{transform:translateX(0)}to{transform:translateX(var(--shift))}}
 .tile{background:none;border:none;padding:0;text-align:left;color:inherit;
 width:132px;min-width:132px;flex:0 0 132px}
-@media(max-width:600px){.tile{width:116px;min-width:116px;flex:0 0 116px}}
+
 @media(prefers-reduced-motion:reduce){.track.run{animation:none}}
 /* Automatic fallback: if the marquee can't lay out, this turns it back
    into the grid that was already working. */
@@ -86,7 +86,7 @@ gap:16px 12px;width:auto;animation:none;transform:none}
 .dots i.on{background:var(--mint)}
 .tile img,.tile .ph,.tile .skel{display:block;width:132px;height:198px;
 object-fit:cover;border-radius:9px;background:var(--surf2);transition:transform .13s}
-@media(max-width:600px){.tile img,.tile .ph,.tile .skel{width:116px;height:174px}}
+
 .rail.grid .tile img,.rail.grid .tile .ph,.rail.grid .tile .skel{width:100%;height:auto;aspect-ratio:2/3}
 .tile:hover img{transform:translateY(-3px)}
 .tile h4{font-size:12px;font-weight:600;margin:7px 0 1px;line-height:1.3;
@@ -203,7 +203,7 @@ padding:6px 13px;font-size:12px;font-weight:600}
   <div id="app"></div>
 </main>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 13</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 15</span></div>
 
 <script>
 /* ================= proxy =================
@@ -239,7 +239,7 @@ function via(url){
 
    Push needs HTTPS. Opening this file from your computer will never
    work; that's a browser rule, not a bug.                              */
-var API_BASE = "";
+var API_BASE = "https://bland-swallow-2310.charlesmolokwu6.deno.net";
 (function(){
   var q=new URLSearchParams(location.search).get("api");
   if(q) API_BASE=q.replace(/\/$/,"");
@@ -281,7 +281,7 @@ function enablePush(){
   var sup=pushSupport();
   if(!sup.ok) return Promise.resolve({ok:false, reason:sup.reason});
 
-  return navigator.serviceWorker.register("/sw.js")
+  return navigator.serviceWorker.register("sw.js")
     .then(function(reg){ return navigator.serviceWorker.ready.then(function(){ return reg; }); })
     .then(function(reg){
       return Notification.requestPermission().then(function(perm){
@@ -961,9 +961,9 @@ function setDiag(t){ try{ console.log("[mangawhere]", t); }catch(e){} }
 function homeView(){
   app.innerHTML=
    '<h1>Saw a manga edit? Find where to read it.</h1>'+
-   '<p class="sub">Paste the video link, or just type the manga name.</p>'+
+   '<p class="sub">Paste the video link, or type the manga name.</p>'+
    '<div class="searchwrap"><div class="paste">'+
-   '<input id="q" placeholder="Paste TikTok / YouTube link, or type a name" '+
+   '<input id="q" placeholder="Paste a link or type a name" '+
    'autocomplete="off" autocorrect="off" spellcheck="false"><button id="go">Find</button></div>'+
    '<div class="suggest" id="suggest" hidden></div></div>'+
    '<p class="hint">Free to use. No account needed.</p>'+
