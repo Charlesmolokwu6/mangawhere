@@ -142,6 +142,9 @@ background:var(--surf2);color:var(--dim);padding:4px 9px;border-radius:20px;marg
 .rawdump{font-family:ui-monospace,Consolas,monospace;font-size:10px;color:var(--dim);
 background:var(--surf2);padding:10px;border-radius:8px;margin-top:10px;
 white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto}
+.testpush{background:var(--mintd);color:var(--mint);border:1px solid var(--mint);
+border-radius:7px;padding:4px 10px;font-size:11px;font-weight:600;margin-left:4px}
+.testpush:disabled{opacity:.6}
 .needproxy{color:var(--warn);text-decoration:underline;font-size:13px}
 .fresh{font-size:11px;color:var(--dim);margin:9px 0 0;font-family:ui-monospace,Consolas,monospace}
 .boxes .v.sm{font-size:14px;line-height:1.6}
@@ -203,7 +206,7 @@ padding:6px 13px;font-size:12px;font-weight:600}
   <div id="app"></div>
 </main>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 16</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 17</span></div>
 
 <script>
 /* ================= proxy =================
@@ -1471,7 +1474,25 @@ function showPushNote(btn, state){
   p.id="pushnote"; p.className="fresh";
   if(state==="on"){
     p.className="fresh authoritative";
-    p.textContent="We'll notify this device when a new chapter is out.";
+    p.innerHTML="We'll notify this device when a new chapter is out. "+
+      '<button class="testpush" id="testpush">Send a test</button>';
+    setTimeout(function(){
+      var t=document.getElementById("testpush");
+      if(!t) return;
+      t.onclick=function(){
+        t.disabled=true; t.textContent="sending…";
+        fetch(API_BASE+"/api/test-push",{
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({endpoint:pushState.endpoint, key:""})
+        }).then(function(r){ return r.json(); })
+          .then(function(d){
+            t.textContent = d.ok ? "sent — check your notifications"
+                                 : "failed: "+(d.error||"see console");
+            if(!d.ok) console.log("[mangawhere] test push:", d);
+          })
+          .catch(function(e){ t.textContent="failed: "+e.message; });
+      };
+    },0);
   }else if(state==="ios:add-to-home-screen"){
     p.textContent="To get alerts on iPhone, tap Share then \"Add to Home Screen\", "+
       "and open it from there. Apple only allows notifications that way.";
