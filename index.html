@@ -58,27 +58,46 @@ h3{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
 /* Explicit pixel sizes throughout. aspect-ratio inside a flex <button>
    is where this broke once already, and a carousel that renders as an
    empty strip is worse than a plain grid. */
-.railwrap{position:relative;overflow:hidden}
-/* Marquee by CSS transform, not scrollLeft. scrollLeft rounds to whole
-   pixels, so a slow drift of ~0.4px per frame rounds to zero and never
-   moves. transform is sub-pixel accurate and runs on the compositor. */
-.rail{overflow:hidden}
+.railwrap{position:relative}
+/* Native horizontal scroll, driven forward by JS rather than a CSS
+   transform. A transform can't be scrolled back — if a cover drifts past
+   you there's no way to reach it — whereas this stays a real scroller you
+   can swipe, drag, or nudge with the arrows.
+
+   The catch scrollLeft brings is that it only takes whole pixels, so a
+   22px/sec drift of ~0.37px per frame rounds to zero and never moves. The
+   loop below banks the fraction and spends it once it reaches a pixel. */
+.rail{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
+-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+.rail::-webkit-scrollbar{display:none}
 .track{display:flex;align-items:flex-start;gap:12px;width:max-content;
-padding:2px 0 10px;will-change:transform}
-.track.run{animation:marquee linear infinite}
-.track.rev{animation-direction:reverse}
+padding:2px 0 10px}
 .railwrap+.railwrap{margin-top:14px}
-.railwrap:hover .track,.track.hold{animation-play-state:paused}
-@keyframes marquee{from{transform:translateX(0)}to{transform:translateX(var(--shift))}}
 .tile{background:none;border:none;padding:0;text-align:left;color:inherit;
 width:132px;min-width:132px;flex:0 0 132px}
 
-@media(prefers-reduced-motion:reduce){.track.run{animation:none}}
+/* Arrows. Hidden from screen readers because the rail itself is already
+   reachable and scrollable by keyboard. */
+.arrow{position:absolute;top:50%;transform:translateY(-50%);z-index:3;
+width:34px;height:34px;border-radius:50%;border:1px solid var(--line);
+background:rgba(18,16,28,.92);color:var(--text);font-size:16px;line-height:1;
+display:flex;align-items:center;justify-content:center;cursor:pointer;
+opacity:0;transition:opacity .18s;backdrop-filter:blur(4px)}
+.railwrap:hover .arrow,.arrow:focus-visible{opacity:1}
+.arrow:hover{border-color:var(--mint);color:var(--mint)}
+.arrow.l{left:-4px}
+.arrow.r{right:-4px}
+/* On touch there's no hover, and swiping is the natural gesture — but the
+   arrows still help anyone who doesn't think to try. */
+@media(hover:none){.arrow{opacity:.85}}
+
+
 /* Automatic fallback: if the marquee can't lay out, this turns it back
    into the grid that was already working. */
 .rail.grid{overflow:visible}
 .rail.grid .track{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));
-gap:16px 12px;width:auto;animation:none;transform:none}
+gap:16px 12px;width:auto}
+.rail.grid+.arrow,.rail.grid~.arrow{display:none}
 .rail.grid .tile{width:100%;min-width:0}
 @media(hover:none){}
 .dots{display:flex;gap:5px;justify-content:center;margin-top:6px}
@@ -183,12 +202,27 @@ margin-bottom:14px;font-family:ui-monospace,Consolas,monospace}
 .spin{text-align:center;padding:30px;color:var(--dim);font-size:13px}
 .skel{width:100%;aspect-ratio:2/3;border-radius:9px;background:var(--surf2);animation:p 1.3s infinite}
 @keyframes p{0%,100%{opacity:.45}50%{opacity:.8}}
-.chips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 14px}
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px}
+/* Fourteen genres would wrap to four rows, so this one scrolls sideways. */
+.chips.genres{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;
+padding-bottom:2px;margin-bottom:14px}
+.chips.genres::-webkit-scrollbar{display:none}
+.chip.g{flex:0 0 auto;font-size:12px;padding:5px 12px;font-weight:500}
+.chip.g[aria-pressed="true"]{font-weight:700}
 .chip{background:var(--surf);border:1px solid var(--line);color:var(--dim);border-radius:100px;
 padding:6px 13px;font-size:12px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--mint);color:#0d2b26;border-color:var(--mint)}
 .pill.kind{background:var(--surf2);color:var(--text);margin-left:6px}
 .pill.adult{background:#4a2030;color:#ff8fa8;margin-left:6px}
+.pill.genre{background:transparent;border:1px solid var(--line);color:var(--dim);
+font-weight:500;margin:0}
+.gwrap{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.synop{position:relative;margin:14px 0 0;color:var(--text);font-size:14px;line-height:1.6}
+.synop p{margin:0;white-space:pre-line}
+.synop.clamp p{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;
+overflow:hidden}
+.more{background:none;border:none;color:var(--mint);font-size:13px;font-weight:600;
+padding:6px 0 0;cursor:pointer}
 .adultflag{color:#ff8fa8}
 .back{background:none;border:none;color:var(--dim);font-size:13px;padding:0;margin-bottom:14px}
 .foot{border-top:1px solid var(--line);padding:14px;text-align:center;font-size:12px;color:var(--dim)}
@@ -206,7 +240,7 @@ padding:6px 13px;font-size:12px;font-weight:600}
   <div id="app"></div>
 </main>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 17</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 19</span></div>
 
 <script>
 /* ================= proxy =================
@@ -590,6 +624,24 @@ function withRetry(fn,tries){
 }
 
 /* --- Jikan --- */
+/* Both sources hand back prose that isn't display-ready: AniList leaves
+   <br> and <i> in even when asked for plain text, and MyAnimeList tacks a
+   credit line on the end. */
+function cleanSynopsis(raw){
+  if(!raw) return "";
+  var t=String(raw)
+    .replace(/<br\s*\/?>/gi,"\n")
+    .replace(/<\/p>/gi,"\n")
+    .replace(/<[^>]+>/g,"")
+    .replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+    .replace(/&quot;/g,'"').replace(/&#0?39;|&apos;/g,"'").replace(/&nbsp;/g," ")
+    .replace(/\[Written by MAL Rewrite\]/gi,"")
+    .replace(/\(Source:[^)]*\)/gi,"")
+    .replace(/\n{3,}/g,"\n\n")
+    .trim();
+  return t;
+}
+
 function jikanShape(m){
   var links=(m.external||[]).map(function(l){
     return {site:l.name||"",url:l.url||"",language:"",official:official(l.name)};});
@@ -610,6 +662,8 @@ function jikanShape(m){
    popularity:(m.members||0)+(m.favorites||0)*3,
    adult:(m.genres||[]).some(function(g){
      return /hentai|ecchi|erotica/i.test(g.name||""); }),
+   genres:(m.genres||[]).map(function(g){ return g.name||""; }).filter(Boolean),
+   synopsis:cleanSynopsis(m.synopsis),
    cover:img.large_image_url||img.image_url||"",links:links};
 }
 function jikanCall(path){
@@ -631,7 +685,7 @@ var jikanTop=function(){return jikanCall("/top/manga?filter=publishing&limit=25"
 
 /* --- AniList --- */
 var AL_FIELDS="id title{romaji english native} synonyms chapters volumes status countryOfOrigin "+
- "popularity favourites isAdult genres "+
+ "popularity favourites isAdult genres description(asHtml:false) "+
  "startDate{year month day} endDate{year month day} updatedAt "+
  "coverImage{large} externalLinks{url site language} siteUrl";
 
@@ -655,6 +709,8 @@ function alShape(m){
    popularity:(m.popularity||0)+(m.favourites||0),
    adult:!!m.isAdult || (m.genres||[]).some(function(g){
      return /hentai|ecchi|erotica/i.test(g); }),
+   genres:(m.genres||[]),
+   synopsis:cleanSynopsis(m.description),
    cover:(m.coverImage||{}).large||"",links:links};
 }
 function alCall(query,vars){
@@ -673,8 +729,11 @@ var alSearch=function(q,n){
   n=n||8;
   return alCall("query($s:String,$n:Int){Page(perPage:$n){media(search:$s,type:MANGA,"+
     "sort:SEARCH_MATCH){"+AL_FIELDS+"}}}",{s:q,n:n});};
-var alTrending=function(country){
+var alTrending=function(country,genre){
   var filter = country ? ',countryOfOrigin:"'+country+'"' : "";
+  // AniList filters genres server-side, which beats fetching 40 titles and
+  // throwing most of them away.
+  if(genre) filter += ',genre_in:["'+genre.replace(/"/g,"")+'"]';
   return alCall("query{Page(perPage:40){media(type:MANGA,sort:TRENDING_DESC,status:RELEASING"+
     filter+"){"+AL_FIELDS+"}}}");};
 
@@ -692,21 +751,30 @@ function search(q,n){
         sourceUsed="AniList (Jikan down)"; return dropAdult(r); });
     });
 }
-function trending(country){
+function trending(country,genre){
   // AniList first here — its TRENDING_DESC is genuinely "what people are
   // reading now", while Jikan's top list is all-time ranking. AniList is
   // also the stronger of the two for Korean webtoons, which is most of
   // what gets recapped.
-  return withRetry(function(){return alTrending(country);})
+  return withRetry(function(){return alTrending(country,genre);})
     .then(function(r){ sourceUsed="AniList"; return dropAdult(r); })
     .catch(function(){
-      // Jikan's top list can't filter by origin, so filter after the fact.
+      // Jikan's top list filters by neither origin nor genre, so both are
+      // applied after the fact.
       return jikanTop().then(function(r){
         r=dropAdult(r);
         sourceUsed="Jikan (AniList down)";
-        if(!country) return r;
-        var want = country==="KR" ? "Manhwa" : country==="CN" ? "Manhua" : "Manga";
-        return r.filter(function(m){ return m.kind===want; });
+        if(country){
+          var want = country==="KR" ? "Manhwa" : country==="CN" ? "Manhua" : "Manga";
+          r=r.filter(function(m){ return m.kind===want; });
+        }
+        if(genre){
+          r=r.filter(function(m){
+            return (m.genres||[]).some(function(g){
+              return String(g).toLowerCase()===genre.toLowerCase(); });
+          });
+        }
+        return r;
       });
     });
 }
@@ -999,15 +1067,30 @@ function homeView(){
 }
 
 var curFilter="";
+var curGenre="";
+
+/* Origin and genre answer different questions — "what kind of comic is
+   this" versus "what's it about" — so they're two rows, not one merged
+   list. Genre order is roughly what gets recapped most. */
+var GENRES=["Action","Romance","Fantasy","Drama","Comedy","Adventure",
+  "Supernatural","Mystery","Psychological","Horror","Sci-Fi","Sports",
+  "Slice of Life","Thriller"];
+
 function chips(active){
   var opts=[["","Everything"],["KR","Manhwa"],["JP","Manga"],["CN","Manhua"]];
   return '<div class="chips">'+opts.map(function(o){
     return '<button class="chip" data-c="'+o[0]+'" aria-pressed="'+(active===o[0])+'">'+
-      o[1]+'</button>';}).join("")+'</div>';
+      o[1]+'</button>';}).join("")+'</div>'+
+    '<div class="chips genres">'+
+    '<button class="chip g" data-g="" aria-pressed="'+(curGenre==="")+'">All genres</button>'+
+    GENRES.map(function(g){
+      return '<button class="chip g" data-g="'+esc(g)+'" aria-pressed="'+
+        (curGenre===g)+'">'+esc(g)+'</button>'; }).join("")+'</div>';
 }
 
-function loadTrending(country){
+function loadTrending(country,genre){
   curFilter=country||"";
+  if(genre!==undefined) curGenre=genre||"";
   var el=document.getElementById("trend");
   if(!el) return;
   el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
@@ -1015,14 +1098,17 @@ function loadTrending(country){
     Array(8).fill('<div class="tile"><div class="skel"></div></div>').join("")+
     '</div></div></div>'; }).join("");
   wireChips();
-  trending(curFilter).then(function(rows){
+  trending(curFilter,curGenre).then(function(rows){
     setDiag("source: "+sourceUsed);
     var el=document.getElementById("trend");
     if(!el) return;
     if(!rows.length){
       el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
-        '<div class="note"><p><strong>Nothing came back for that filter</strong>'+
-        'The fallback source can\'t filter by origin as precisely. Try Everything.</p></div>';
+        '<div class="note"><p><strong>Nothing trending in that combination</strong>'+
+        (curGenre&&curFilter
+          ? "No "+esc(curGenre.toLowerCase())+" titles are trending in that category right now. "+
+            "Try widening one of the two filters."
+          : "Nothing came back for that filter. Try Everything.")+'</p></div>';
       wireChips(); return;
     }
     // Split into two rows so more of the list is visible at once, and run
@@ -1033,8 +1119,11 @@ function loadTrending(country){
     if(!rowB.length){ rowB=rowA; }
 
     function railHtml(list,id,rev){
-      return '<div class="railwrap"><div class="rail" id="rail-'+id+'">'+
-        '<div class="track'+(rev?" rev":"")+'" id="track-'+id+'">'+
+      return '<div class="railwrap">'+
+        '<button class="arrow l" aria-hidden="true" tabindex="-1">&#8249;</button>'+
+        '<button class="arrow r" aria-hidden="true" tabindex="-1">&#8250;</button>'+
+        '<div class="rail" id="rail-'+id+'">'+
+        '<div class="track" id="track-'+id+'">' +
         list.concat(list).map(function(m,i){
           var dup=i>=list.length;
           return '<button class="tile" data-row="'+id+'" data-i="'+(i%list.length)+'"'+
@@ -1192,58 +1281,120 @@ function hideSuggest(){
 
 function wireChips(){
   var cs=document.querySelectorAll(".chip");
-  for(var i=0;i<cs.length;i++)
-    cs[i].onclick=(function(c){return function(){ loadTrending(c); };})(cs[i].dataset.c);
+  for(var i=0;i<cs.length;i++){
+    (function(el){
+      el.onclick=function(){
+        // Origin chips carry data-c, genre chips data-g. Changing one
+        // leaves the other alone, so the two filters combine.
+        if(el.dataset.g!==undefined) loadTrending(curFilter, el.dataset.g);
+        else loadTrending(el.dataset.c, curGenre);
+      };
+    })(cs[i]);
+  }
 }
 
 /* ---- carousel ----
-   Auto-advances, but stops the moment the user touches it. Nothing is more
-   irritating than a shelf that slides away while you're reaching for a cover,
-   so any interaction pauses it and it only resumes after a few idle seconds. */
+   Drifts along on its own, but it is a real scroller underneath: swipe it,
+   drag it, or use the arrows, and a cover that has gone past is one gesture
+   away. Auto-advance stops the moment you touch it and only picks up again
+   after a few idle seconds. */
 var RAIL_SPEED = 22;   // pixels per second — a slow, readable drift
+var RESUME_MS  = 2500; // idle time before the drift starts again
 var railData = {a:[], b:[]};
+var railTimers = [];
 
 function startRail(){
-  ["a","b"].forEach(function(id){ initRail("rail-"+id, "track-"+id); });
+  stopRail();
+  ["a","b"].forEach(function(id,i){ initRail("rail-"+id, "track-"+id, i===1); });
 }
 
-function initRail(railId, trackId){
+function initRail(railId, trackId, reverse){
   var rail=document.getElementById(railId), track=document.getElementById(trackId);
   if(!rail||!track) return;
 
-  function begin(){
-    var tiles=track.querySelectorAll(".tile");
-    if(!tiles.length) return;
-    // The track holds its list twice, so shifting by exactly one set
-    // lands on an identical frame and the loop is seamless.
-    var cardW=tiles[0].getBoundingClientRect().width;
-    if(cardW<20){ fallback("cover width "+Math.round(cardW)+"px"); return; }
-    var oneSet=(tiles.length/2)*(cardW+12);
-    track.style.setProperty("--shift","-"+oneSet+"px");
-    track.style.animationDuration=(oneSet/RAIL_SPEED)+"s";
-    track.classList.add("run");
+  var oneSet=0, paused=false, idleTimer=null, raf=null, last=0, carry=0;
 
-    var before=getComputedStyle(track).transform;
-    setTimeout(function(){
-      if(!document.body.contains(track)) return;
-      if(getComputedStyle(track).transform===before &&
-         getComputedStyle(track).transform!=="none") fallback("animation not running");
-    },900);
+  function measure(){
+    var tiles=track.querySelectorAll(".tile");
+    if(!tiles.length) return false;
+    var w=tiles[0].getBoundingClientRect().width;
+    if(w<20){ fallback("cover width "+Math.round(w)+"px"); return false; }
+    // The list is rendered twice, so one set's width is the point at which
+    // the view is identical again and the position can be reset unseen.
+    oneSet=(tiles.length/2)*(w+12);
+    return true;
   }
+
+  function wrap(){
+    if(!oneSet) return;
+    if(rail.scrollLeft >= oneSet) rail.scrollLeft -= oneSet;
+    else if(rail.scrollLeft <= 0) rail.scrollLeft += oneSet;
+  }
+
+  function frame(now){
+    if(!document.body.contains(rail)) return;
+    var dt=last ? (now-last)/1000 : 0;
+    last=now;
+    if(!paused && dt>0 && dt<0.5){
+      carry += RAIL_SPEED*dt*(reverse?-1:1);
+      // scrollLeft is integer-only, so spend whole pixels and bank the rest.
+      var whole = carry>0 ? Math.floor(carry) : Math.ceil(carry);
+      if(whole){ rail.scrollLeft += whole; carry -= whole; wrap(); }
+    }
+    raf=requestAnimationFrame(frame);
+  }
+
+  function pause(){
+    paused=true;
+    if(idleTimer) clearTimeout(idleTimer);
+    idleTimer=setTimeout(function(){ paused=false; }, RESUME_MS);
+  }
+
   function fallback(why){
     rail.classList.add("grid");
-    track.classList.remove("run");
+    if(raf) cancelAnimationFrame(raf);
     setDiag("grid mode ("+why+")");
   }
+
+  function begin(){
+    if(!measure()) return;
+    // Reversed row starts a set in, so it has somewhere to scroll back to.
+    if(reverse && rail.scrollLeft===0) rail.scrollLeft=oneSet;
+    if(raf) cancelAnimationFrame(raf);
+    last=0; carry=0;
+    raf=requestAnimationFrame(frame);
+    railTimers.push(function(){ if(raf) cancelAnimationFrame(raf); });
+  }
+
+  ["pointerdown","touchstart","wheel","mouseenter"].forEach(function(ev){
+    rail.addEventListener(ev, pause, {passive:true});
+  });
+  rail.addEventListener("scroll", function(){ wrap(); }, {passive:true});
+  rail.addEventListener("mouseleave", function(){
+    if(idleTimer) clearTimeout(idleTimer);
+    idleTimer=setTimeout(function(){ paused=false; }, 400);
+  });
+
+  // Arrows move by roughly a screenful, so it feels like paging rather
+  // than nudging one cover at a time.
+  var wrapEl=rail.parentNode;
+  wrapEl.querySelectorAll(".arrow").forEach(function(btn){
+    btn.onclick=function(){
+      pause();
+      var step=Math.max(rail.clientWidth*0.8, 200);
+      rail.scrollBy({left: btn.classList.contains("l") ? -step : step,
+                     behavior:"smooth"});
+    };
+  });
+
   if(document.readyState==="complete") setTimeout(begin,60);
   else window.addEventListener("load",function(){setTimeout(begin,60);},{once:true});
   setTimeout(begin,300);
 }
 
 function stopRail(){
-  ["track-a","track-b"].forEach(function(id){
-    var t=document.getElementById(id); if(t) t.classList.remove("run");
-  });
+  railTimers.forEach(function(cancel){ try{ cancel(); }catch(e){} });
+  railTimers=[];
 }
 
 function run(){
@@ -1412,8 +1563,7 @@ function detailHtml(m,videoCh){
 
   // updatedAt is when the listing changed, not when a chapter dropped.
   // Labelled honestly rather than dressed up as a release date.
-  var freshness = (!done && m.updatedAt)
-    ? '<p class="fresh">Chapter count last checked '+ago(m.updatedAt)+'</p>' : "";
+  var freshness = "";
 
   return '<div class="card"><div class="hit">'+
     (m.cover?'<img alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
@@ -1423,7 +1573,9 @@ function detailHtml(m,videoCh){
     '</span></p>'+
     '<span class="pill '+esc(st.tone)+'">'+esc(st.label)+'</span>'+
     (m.kind?'<span class="pill kind">'+esc(m.kind)+'</span>':"")+
-    (m.adult?'<span class="pill adult">18+</span>':"")+'</div></div>'+
+    (m.adult?'<span class="pill adult">18+</span>':"")+
+    genrePills(m.genres)+'</div></div>'+
+    synopsisBlock(m.synopsis)+
     verdict+
     '<div class="boxes">'+
     (videoCh?'<div><div class="k">Video was at</div><div class="v">'+videoCh+'</div></div>':"")+
@@ -1440,6 +1592,36 @@ function detailHtml(m,videoCh){
 
 /* Called right after a detail card is painted. Fills the "Latest out"
    slot for ongoing series, where AniList and MAL have nothing. */
+/* Someone arriving from a thirty-second recap has no idea what the story
+   actually is. This is the first thing they should be able to read. */
+function synopsisBlock(text){
+  if(!text) return "";
+  var short = text.length > 260;
+  return '<div class="synop'+(short?" clamp":"")+'" id="synop">'+
+    '<p>'+esc(text).replace(/\n/g,"<br>")+'</p>'+
+    (short?'<button class="more" id="synmore">Read more</button>':"")+
+    '</div>';
+}
+
+/* Genres come back in a different shape from each source, so both are
+   normalised to plain strings before they get here. */
+function genrePills(genres){
+  var g=(genres||[]).filter(function(x){ return x && !/hentai|erotica/i.test(x); });
+  if(!g.length) return "";
+  return '<div class="gwrap">'+g.slice(0,6).map(function(x){
+    return '<span class="pill genre">'+esc(x)+'</span>'; }).join("")+'</div>';
+}
+
+function wireSynopsis(){
+  var b=document.getElementById("synmore");
+  if(!b) return;
+  b.onclick=function(){
+    var box=document.getElementById("synop");
+    var open=box.classList.toggle("clamp");
+    b.textContent = open ? "Read more" : "Show less";
+  };
+}
+
 function wireTrack(m, videoCh){
   var b=document.getElementById("trackbtn");
   if(!b) return;
@@ -1474,7 +1656,7 @@ function showPushNote(btn, state){
   p.id="pushnote"; p.className="fresh";
   if(state==="on"){
     p.className="fresh authoritative";
-    p.innerHTML="We'll notify this device when a new chapter is out. "+
+    p.innerHTML="You'll get a notification when a new chapter is out. "+
       '<button class="testpush" id="testpush">Send a test</button>';
     setTimeout(function(){
       var t=document.getElementById("testpush");
@@ -1494,25 +1676,25 @@ function showPushNote(btn, state){
       };
     },0);
   }else if(state==="ios:add-to-home-screen"){
-    p.textContent="To get alerts on iPhone, tap Share then \"Add to Home Screen\", "+
-      "and open it from there. Apple only allows notifications that way.";
+    p.textContent="For alerts on iPhone, tap Share then \"Add to Home Screen\" and "+
+      "open it from there.";
   }else if(state==="no backend configured"){
-    p.textContent="Saved to this device. Alerts when you're away need the backend "+
-      "connected.";
+    p.textContent="Saved to this device.";
   }else if(state==="blocked"){
-    p.textContent="Saved to this device. You've blocked notifications for this site — "+
-      "tap the padlock in the address bar to allow them.";
+    p.textContent="Notifications are blocked for this site. Tap the padlock in the "+
+      "address bar to turn them on.";
   }else if(state==="dismissed"){
-    p.textContent="Saved to this device. Tap Tracking again if you want alerts when "+
-      "a new chapter is out.";
+    p.textContent="Saved. Tap again if you'd like alerts for new chapters.";
   }else{
-    p.textContent="Saved to this device. Notifications unavailable — "+state+".";
+    p.textContent="Saved to this device.";
+    console.log("[mangawhere] push unavailable:", state);
   }
   btn.parentNode.insertBefore(p, btn.nextSibling);
 }
 
 function fillChapters(m, videoCh){
   wireTrack(m, videoCh);
+  wireSynopsis();
   var slot=document.getElementById("chapslot");
   if(!slot) return;                       // count already known
 
@@ -1536,8 +1718,10 @@ function applyChapter(m, videoCh, hitPromise){
       if(card0 && !card0.querySelector(".mu-why")){
         var w=document.createElement("p");
         w.className="fresh mu-why";
-        w.textContent="Chapter count unavailable — "+hit.fail+
-          (DEBUG?"":"  (add ?debug=1 to the URL to see the raw response)");
+        w.textContent = DEBUG
+          ? ("Chapter count unavailable — "+hit.fail)
+          : "No chapter count published for this one yet.";
+        if(!DEBUG) console.log("[mangawhere] chapter lookup:", hit.fail);
         card0.appendChild(w);
         if(DEBUG && lastMuRaw){
           var pre=document.createElement("pre");
@@ -1550,14 +1734,8 @@ function applyChapter(m, videoCh, hitPromise){
     }
     if(!hit || !hit.chapter){
       slot.className="v sm";
-      if(!PROXY){
-        slot.innerHTML='<a class="needproxy" href="#" onclick="showHelp();return false;">'+
-                       'needs setup</a>';
-        slot.title="Chapter counts for ongoing series need the proxy — tap to see how.";
-      }else{
-        slot.textContent="not published";
-        slot.title="No source publishes a chapter count for this one yet.";
-      }
+      slot.textContent="not published";
+      slot.title="No source publishes a chapter count for this one yet.";
       return;
     }
     slot.className="v";
@@ -1644,7 +1822,7 @@ function applyChapter(m, videoCh, hitPromise){
     // translation stops, the official platform carries on. Say so, and
     // point them at the publisher, who always has the true count.
     if(hit.publisher){
-      note.textContent="Chapter count from "+hit.publisher+".";
+      note.textContent="Source: "+hit.publisher;
       note.classList.add("authoritative");
     } else {
       note.textContent="";
