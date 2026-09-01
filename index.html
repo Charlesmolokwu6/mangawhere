@@ -203,7 +203,7 @@ padding:6px 13px;font-size:12px;font-weight:600}
   <div id="app"></div>
 </main>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 15</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 16</span></div>
 
 <script>
 /* ================= proxy =================
@@ -276,42 +276,63 @@ function urlB64ToUint8Array(base64){
   return out;
 }
 
-/* Registers the device once, then reuses it. Safe to call repeatedly. */
+/* Registers the device once, then reuses it. Safe to call repeatedly.
+
+   Order matters more than it looks. Chrome only honours a permission
+   request that is still connected to the tap that triggered it, and any
+   await in between breaks that connection — the prompt silently never
+   appears and you get back "default". So we ask first, and do the
+   service worker registration afterwards. */
 function enablePush(){
   var sup=pushSupport();
   if(!sup.ok) return Promise.resolve({ok:false, reason:sup.reason});
 
-  return navigator.serviceWorker.register("sw.js")
-    .then(function(reg){ return navigator.serviceWorker.ready.then(function(){ return reg; }); })
-    .then(function(reg){
-      return Notification.requestPermission().then(function(perm){
-        if(perm!=="granted") throw new Error("permission "+perm);
-        return fetch(API_BASE+"/api/config").then(function(r){ return r.json(); })
-          .then(function(cfg){
-            if(!cfg.vapid_public_key) throw new Error("server has no push keys set");
-            return reg.pushManager.getSubscription().then(function(existing){
-              return existing || reg.pushManager.subscribe({
-                userVisibleOnly:true,
-                applicationServerKey:urlB64ToUint8Array(cfg.vapid_public_key)
-              });
-            });
+  if(Notification.permission==="denied")
+    return Promise.resolve({ok:false, reason:"blocked"});
+
+  var ask;
+  try{
+    ask=Notification.requestPermission();     // must be the first thing
+  }catch(e){
+    return Promise.resolve({ok:false, reason:"permission request failed"});
+  }
+  // Older Safari passes the result to a callback instead of a promise.
+  if(!ask || typeof ask.then!=="function"){
+    ask=new Promise(function(res){ Notification.requestPermission(res); });
+  }
+
+  return ask.then(function(perm){
+    if(perm==="denied") throw new Error("blocked");
+    if(perm!=="granted") throw new Error("dismissed");
+    return navigator.serviceWorker.register("sw.js");
+  })
+  .then(function(reg){ return navigator.serviceWorker.ready.then(function(){ return reg; }); })
+  .then(function(reg){
+    return fetch(API_BASE+"/api/config").then(function(r){ return r.json(); })
+      .then(function(cfg){
+        if(!cfg.vapid_public_key) throw new Error("server has no push keys set");
+        return reg.pushManager.getSubscription().then(function(existing){
+          return existing || reg.pushManager.subscribe({
+            userVisibleOnly:true,
+            applicationServerKey:urlB64ToUint8Array(cfg.vapid_public_key)
           });
+        });
       });
-    })
-    .then(function(sub){
-      var j=sub.toJSON();
-      return fetch(API_BASE+"/api/subscribe",{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
-      }).then(function(){
-        pushState.subscribed=true;
-        pushState.endpoint=j.endpoint;
-        return {ok:true, endpoint:j.endpoint};
-      });
-    })
-    .catch(function(e){
-      return {ok:false, reason:(e.message||String(e))};
+  })
+  .then(function(sub){
+    var j=sub.toJSON();
+    return fetch(API_BASE+"/api/subscribe",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({endpoint:j.endpoint, keys:j.keys})
+    }).then(function(){
+      pushState.subscribed=true;
+      pushState.endpoint=j.endpoint;
+      return {ok:true, endpoint:j.endpoint};
     });
+  })
+  .catch(function(e){
+    return {ok:false, reason:(e.message||String(e))};
+  });
 }
 
 /* Mirrors a local track to the server so the poller can notify them. */
@@ -1457,6 +1478,12 @@ function showPushNote(btn, state){
   }else if(state==="no backend configured"){
     p.textContent="Saved to this device. Alerts when you're away need the backend "+
       "connected.";
+  }else if(state==="blocked"){
+    p.textContent="Saved to this device. You've blocked notifications for this site — "+
+      "tap the padlock in the address bar to allow them.";
+  }else if(state==="dismissed"){
+    p.textContent="Saved to this device. Tap Tracking again if you want alerts when "+
+      "a new chapter is out.";
   }else{
     p.textContent="Saved to this device. Notifications unavailable — "+state+".";
   }
