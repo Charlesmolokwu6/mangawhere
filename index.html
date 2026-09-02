@@ -20,6 +20,13 @@ border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z
 font-size:13px;font-weight:600;padding:7px 13px;border-radius:9px;display:flex;
 align-items:center;gap:7px}
 .listbtn:hover{border-color:var(--mint)}
+.acctbtn{padding:7px 11px;font-size:15px}
+.acct{text-align:center}
+.acct h4{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+margin:0 0 10px;font-weight:600}
+.code{font-family:ui-monospace,Consolas,monospace;font-size:26px;font-weight:700;
+letter-spacing:.14em;color:var(--mint)}
+.acct .t{font-size:12px;color:var(--dim);margin:10px 0 0}
 .badge{background:var(--mint);color:#0d2b26;border-radius:20px;padding:1px 7px;
 font-size:11px;font-weight:700;display:none}
 .badge.on{display:inline-block}
@@ -209,6 +216,17 @@ padding-bottom:2px;margin-bottom:14px}
 .chips.genres::-webkit-scrollbar{display:none}
 .chip.g{flex:0 0 auto;font-size:12px;padding:5px 12px;font-weight:500}
 .chip.g[aria-pressed="true"]{font-weight:700}
+.updates{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;
+padding-bottom:4px;margin-bottom:16px}
+.updates::-webkit-scrollbar{display:none}
+.upd{flex:0 0 auto;width:104px;background:none;border:none;padding:0;
+text-align:left;color:inherit;cursor:pointer}
+.upd img,.upd .ph{width:104px;height:150px;object-fit:cover;border-radius:9px;
+background:var(--surf2);border:1px solid var(--mint)}
+.un{display:block;font-size:11px;font-weight:600;margin-top:6px;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.uc{display:block;font-size:10px;color:var(--mint);font-weight:700;
+font-family:ui-monospace,Consolas,monospace}
 .chip{background:var(--surf);border:1px solid var(--line);color:var(--dim);border-radius:100px;
 padding:6px 13px;font-size:12px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--mint);color:#0d2b26;border-color:var(--mint)}
@@ -221,6 +239,10 @@ font-weight:500;margin:0}
 .synop p{margin:0;white-space:pre-line}
 .synop.clamp p{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;
 overflow:hidden}
+.read.buy{border-left-color:#ffa94d}
+.read.buy .n{color:#ffa94d}
+.adslot{margin:16px 0 0;min-height:0;text-align:center}
+.adslot:empty{display:none}
 .more{background:none;border:none;color:var(--mint);font-size:13px;font-weight:600;
 padding:6px 0 0;cursor:pointer}
 .adultflag{color:#ff8fa8}
@@ -234,13 +256,14 @@ padding:6px 0 0;cursor:pointer}
 <div class="top">
   <button class="logo" id="home">manga<b>where</b></button>
   <button class="listbtn" id="listbtn">My list <span class="badge" id="badge"></span></button>
+  <button class="listbtn acctbtn" id="acctbtn" title="Your devices">⚙</button>
 </div>
 
 <main>
   <div id="app"></div>
 </main>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 19</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 20</span></div>
 
 <script>
 /* ================= proxy =================
@@ -260,6 +283,16 @@ var PROXY = "https://bland-swallow-2310.charlesmolokwu6.deno.net";
    ad networks and the app stores have their own rules about this, so
    it's worth being able to switch without a rewrite. */
 var HIDE_ADULT = false;
+
+/* Amazon Associates tag. Sign up at affiliate-program.amazon.com, paste
+   your tag here, and the buy links start earning. Left empty the links
+   simply don't appear rather than sending untagged traffic. */
+var AMAZON_TAG = "";
+
+/* Ad slot. Paste your network's script tag here once approved. It renders
+   below the read-here links — after the reader has been given what they
+   came for, never above it. */
+var AD_SLOT_HTML = "";
 (function(){
   var q=new URLSearchParams(location.search).get("proxy");
   if(q) PROXY=q.replace(/\/$/,"");
@@ -1098,6 +1131,7 @@ function loadTrending(country,genre){
     Array(8).fill('<div class="tile"><div class="skel"></div></div>').join("")+
     '</div></div></div>'; }).join("");
   wireChips();
+  wireUpdates();
   trending(curFilter,curGenre).then(function(rows){
     setDiag("source: "+sourceUsed);
     var el=document.getElementById("trend");
@@ -1587,6 +1621,7 @@ function detailHtml(m,videoCh){
     '</div>'+
     '<h3>'+(off.length?"Read it here":"Where to read")+'</h3>'+
     (off.length?off.map(linkRow).join(""):noEnglishBlock(m))+
+    buyRow(m)+adSlot()+
     (other.length?'<h3>More info</h3>'+other.slice(0,3).map(linkRow).join(""):"");
 }
 
@@ -1864,6 +1899,24 @@ function noEnglishBlock(m){
   }).join("");
 }
 
+/* Print volumes are the one thing a reader can buy that we can be paid
+   for today — Amazon has a self-serve programme, unlike any of the manga
+   platforms. It also points the same direction the reader is already
+   going, so it costs no click-through. */
+function buyRow(m){
+  if(!AMAZON_TAG) return "";
+  var q=encodeURIComponent(m.title+" manga");
+  var url="https://www.amazon.com/s?k="+q+"&tag="+encodeURIComponent(AMAZON_TAG);
+  return '<a class="read buy" target="_blank" rel="noopener sponsored" href="'+esc(url)+'">'+
+    '<span><span class="n">Buy the volumes</span><br>'+
+    '<span class="t">Print editions on Amazon</span></span>'+
+    '<span class="go">Shop →</span></a>';
+}
+
+function adSlot(){
+  return AD_SLOT_HTML ? '<div class="adslot">'+AD_SLOT_HTML+'</div>' : "";
+}
+
 function linkRow(l){
   var info=platformInfo(l.site);
   var cost=info?info.cost:"";
@@ -1939,6 +1992,124 @@ function updateBadge(){
   var n=unreadCount();
   b.textContent=n;
   b.className=n?"badge on":"badge";
+}
+
+/* Someone with a list shouldn't land on the same page as a first-time
+   visitor. If anything they follow has moved, that goes above trending —
+   it's the reason they came back. */
+function updatesStrip(){
+  var l=getList();
+  if(!l.length) return "";
+  var fresh=l.filter(function(x){ return x.latest && x.seen && x.latest>x.seen; });
+  if(!fresh.length) return "";
+  return '<h3>New for you</h3>'+
+    '<div class="updates">'+fresh.slice(0,8).map(function(x){
+      return '<button class="upd" data-id="'+esc(String(x.id))+'">'+
+        (x.cover?'<img alt="" src="'+esc(x.cover)+'">':'<div class="ph"></div>')+
+        '<span class="un">'+esc(x.title)+'</span>'+
+        '<span class="uc">'+(x.latest-x.seen)+' new · ch '+x.latest+'</span>'+
+      '</button>';
+    }).join("")+'</div>';
+}
+
+function wireUpdates(){
+  var els=document.querySelectorAll(".upd");
+  for(var i=0;i<els.length;i++){
+    (function(el){
+      el.onclick=function(){
+        var item=getList().filter(function(x){ return String(x.id)===el.dataset.id; })[0];
+        if(item) showDetail(item, null);
+      };
+    })(els[i]);
+  }
+}
+
+/* ---- account ----
+   The "sign in" that isn't. Everyone already has an account the moment
+   they allow notifications; this only exists for people with a second
+   device, so it stays out of the way until asked for. */
+function accountView(){
+  stopRail();
+  var view=document.getElementById("app");
+  view.innerHTML='<button class="back" id="ab">← Back</button>'+
+    '<h1>Your devices</h1>'+
+    '<p class="sub">Use a code to read the same list on your phone and your '+
+    'computer. No password, no email.</p>'+
+    '<div class="card acct">'+
+      '<h4>This device\'s code</h4>'+
+      '<div class="code" id="mycode">…</div>'+
+      '<p class="t" id="devcount"></p>'+
+    '</div>'+
+    '<h3>Add this device to another list</h3>'+
+    '<div class="paste">'+
+      '<input id="codein" placeholder="XXXX-XXXX" maxlength="9" autocapitalize="characters">'+
+      '<button id="linkbtn">Link</button>'+
+    '</div>'+
+    '<p class="hint" id="linkmsg">Enter the code shown on your other device.</p>';
+
+  document.getElementById("ab").onclick=function(){ homeView(); };
+
+  var code=document.getElementById("mycode");
+  if(!API_BASE || !pushState.endpoint){
+    code.textContent="—";
+    document.getElementById("devcount").textContent=
+      "Turn on notifications for a title first — that's what creates your account.";
+  }else{
+    fetch(API_BASE+"/api/account",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({endpoint:pushState.endpoint})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        code.textContent=d.code||"—";
+        document.getElementById("devcount").textContent=
+          d.devices===1 ? "Only this device so far."
+                        : d.devices+" devices share this list.";
+      })
+      .catch(function(){ code.textContent="—"; });
+  }
+
+  document.getElementById("linkbtn").onclick=function(){
+    var v=document.getElementById("codein").value.trim().toUpperCase();
+    var msg=document.getElementById("linkmsg");
+    if(!v){ msg.textContent="Enter the code from your other device."; return; }
+    if(!pushState.endpoint){
+      msg.textContent="Turn on notifications first, then link.";
+      return;
+    }
+    msg.textContent="Linking…";
+    fetch(API_BASE+"/api/link",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({endpoint:pushState.endpoint, code:v})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.error){ msg.textContent=d.error; return; }
+        msg.textContent=d.already ? "Already linked."
+          : "Linked. Your list is shared across "+d.devices+" devices.";
+        pullServerList();
+      })
+      .catch(function(e){ msg.textContent="Couldn't link — "+e.message; });
+  };
+  window.scrollTo(0,0);
+}
+
+/* After linking, the server knows about titles this browser doesn't. */
+function pullServerList(){
+  if(!API_BASE || !pushState.endpoint) return Promise.resolve();
+  return fetch(API_BASE+"/api/list?endpoint="+encodeURIComponent(pushState.endpoint))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var local=getList();
+      var have={};
+      local.forEach(function(x){ have[String(x.id)]=true; });
+      (d.titles||[]).forEach(function(t){
+        if(have[String(t.key)]) return;
+        local.push({id:t.key, title:t.name, cover:t.cover||"", kind:t.kind||"",
+          status:"", country:"", links:[], seen:t.seen, latest:t.latest,
+          added:Date.now()});
+      });
+      saveList(local);
+    })
+    .catch(function(){});
 }
 
 function listView(){
@@ -2050,6 +2221,7 @@ function latestFor(x){
 }
 
 document.getElementById("listbtn").onclick=function(){ listView(); };
+document.getElementById("acctbtn").onclick=function(){ accountView(); };
 document.getElementById("home").onclick=function(){homeView();};
 homeView();
 updateBadge();
