@@ -16,7 +16,11 @@
 <style>
 :root{--bg:#14101a;--surf:#1e1826;--surf2:#271f31;--line:#372c44;--text:#f0ebf5;
 --dim:#a094ad;--mint:#3fe0c8;--mintd:#0e3a34;--warn:#ffb454;--bad:#ff6b6b}
-*{box-sizing:border-box}html,body{margin:0;padding:0}
+*{box-sizing:border-box}
+/* A class that sets `display` beats the browser's built-in [hidden] rule,
+   so `el.hidden = true` silently does nothing on any flex or grid element.
+   This makes the attribute mean what everyone assumes it means. */
+[hidden]{display:none!important}html,body{margin:0;padding:0}
 body{background:var(--bg);color:var(--text);min-height:100vh;
 font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.5}
 img{display:block;max-width:100%}button{font-family:inherit;cursor:pointer}
@@ -95,7 +99,6 @@ bottom:calc(72px + env(safe-area-inset-bottom,0));z-index:45;
 background:var(--surf2);border:1px solid var(--mint);border-radius:12px;
 padding:11px 12px;display:flex;align-items:center;gap:10px;
 font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.5)}
-.installbar[hidden]{display:none}
 .installbar span{flex:1}
 .installbar button{background:var(--mint);color:#0d2b26;border:none;
 border-radius:8px;padding:7px 13px;font-size:12px;font-weight:700}
@@ -296,6 +299,7 @@ padding-bottom:2px;margin-bottom:14px}
 .genretog{background:var(--surf);border:1px solid var(--line);color:var(--dim);
 border-radius:9px;padding:6px 12px;font-size:12px;font-weight:600;margin-bottom:10px}
 .genretog:hover{border-color:var(--mint);color:var(--mint)}
+.genretog.set{border-color:var(--mint);color:var(--mint)}
 .updates{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;
 padding-bottom:4px;margin-bottom:16px}
 .updates::-webkit-scrollbar{display:none}
@@ -377,7 +381,7 @@ padding:6px 0 0;cursor:pointer}
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 25</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 27</span></div>
 
 <script>
 /* ================= proxy =================
@@ -1235,10 +1239,10 @@ function chips(active){
   return '<div class="chips">'+opts.map(function(o){
     return '<button class="chip" data-c="'+o[0]+'" aria-pressed="'+(active===o[0])+'">'+
       o[1]+'</button>';}).join("")+'</div>'+
-    '<button class="genretog" id="genretog">'+
-      (curGenre ? esc(curGenre) : "All genres")+' ▾</button>'+
+    '<button class="genretog'+(curGenre?" set":"")+'" id="genretog">'+
+      (curGenre ? esc(curGenre) : "Genres")+' ▾</button>'+
     '<div class="chips genres" id="genrerow" hidden>'+
-    '<button class="chip g" data-g="" aria-pressed="'+(curGenre==="")+'">All genres</button>'+
+    '<button class="chip g" data-g="" aria-pressed="'+(curGenre==="")+'">All</button>'+
     GENRES.map(function(g){
       return '<button class="chip g" data-g="'+esc(g)+'" aria-pressed="'+
         (curGenre===g)+'">'+esc(g)+'</button>'; }).join("")+'</div>';
@@ -1437,6 +1441,7 @@ function hideSuggest(){
 }
 
 function wireChips(){
+  wireGenreToggle();   // one component, one wiring call
   var cs=document.querySelectorAll(".chip");
   for(var i=0;i<cs.length;i++){
     (function(el){
@@ -2578,7 +2583,9 @@ function setTab(tab){
 function wireGenreToggle(){
   var t=document.getElementById("genretog"), row=document.getElementById("genrerow");
   if(!t||!row) return;
-  if(curGenre) row.hidden=false;
+  // Once a genre is chosen, leave the row open — they'll want to change or
+  // clear it, and hiding it makes the selection feel stuck.
+  row.hidden = !curGenre;
   t.onclick=function(){ row.hidden=!row.hidden; };
 }
 
