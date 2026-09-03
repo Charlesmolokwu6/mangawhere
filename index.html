@@ -2,8 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Manga Where</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#12101c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Manga Where">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+
 <style>
 :root{--bg:#14101a;--surf:#1e1826;--surf2:#271f31;--line:#372c44;--text:#f0ebf5;
 --dim:#a094ad;--mint:#3fe0c8;--mintd:#0e3a34;--warn:#ffb454;--bad:#ff6b6b}
@@ -27,9 +36,73 @@ margin:0 0 10px;font-weight:600}
 .code{font-family:ui-monospace,Consolas,monospace;font-size:26px;font-weight:700;
 letter-spacing:.14em;color:var(--mint)}
 .acct .t{font-size:12px;color:var(--dim);margin:10px 0 0}
+.form{display:flex;flex-direction:column;gap:13px;max-width:400px}
+.form label{display:flex;flex-direction:column;gap:6px;font-size:12px;
+color:var(--dim);font-weight:600}
+.form input{background:var(--surf);border:1px solid var(--line);border-radius:10px;
+padding:13px;color:var(--text);font-size:16px;font-family:inherit}
+.form input:focus{outline:none;border-color:var(--mint)}
+.primary{background:var(--mint);color:#0d2b26;border:none;border-radius:10px;
+padding:14px;font-weight:700;font-size:15px;margin-top:4px}
+.primary:disabled{opacity:.6}
+.err{color:var(--bad);font-size:13px;margin:0;min-height:18px}
+.linkish{background:none;border:none;color:var(--mint);font-weight:600;
+font-size:inherit;padding:0;text-decoration:underline;cursor:pointer}
+.swap{margin-top:16px}
+.who{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.avatar{width:44px;height:44px;border-radius:50%;background:var(--mintd);
+color:var(--mint);display:flex;align-items:center;justify-content:center;
+font-weight:700;font-size:18px;flex-shrink:0}
+.whoin h4{margin:0;font-size:15px;font-weight:600;color:var(--text);
+text-transform:none;letter-spacing:0}
+.whoin p{margin:2px 0 0;font-size:12px;color:var(--dim)}
+.danger{background:none;border:1px solid var(--line);color:var(--dim);
+border-radius:9px;padding:10px 14px;font-size:13px;font-weight:600;width:100%;
+margin-top:14px}
+.danger:hover{border-color:var(--bad);color:var(--bad)}
 .badge{background:var(--mint);color:#0d2b26;border-radius:20px;padding:1px 7px;
 font-size:11px;font-weight:700;display:none}
 .badge.on{display:inline-block}
+/* ---- app shell ---- */
+/* env(safe-area-inset-*) keeps content clear of the notch and the iOS home
+   indicator. Without it the bottom tabs sit under the gesture bar and get
+   half-tapped. */
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;
+background:rgba(18,16,28,.96);backdrop-filter:blur(12px);
+border-top:1px solid var(--line);
+padding-bottom:env(safe-area-inset-bottom,0)}
+.tab{flex:1;background:none;border:none;color:var(--dim);cursor:pointer;
+display:flex;flex-direction:column;align-items:center;gap:3px;
+padding:9px 0 7px;font-size:10px;font-weight:600;position:relative;
+-webkit-tap-highlight-color:transparent}
+.tab .ti{font-size:19px;line-height:1}
+.tab .tl{letter-spacing:.02em}
+.tab.on{color:var(--mint)}
+.tab:active{opacity:.6}
+.tbadge{position:absolute;top:4px;right:50%;margin-right:-22px;
+background:var(--mint);color:#0d2b26;font-size:9px;font-weight:700;
+border-radius:20px;padding:1px 5px;display:none}
+.tbadge.on{display:block}
+
+/* Room for the bar, so the last row of content isn't hidden behind it. */
+main{padding-bottom:calc(78px + env(safe-area-inset-bottom,0))}
+
+.installbar{position:fixed;left:12px;right:12px;
+bottom:calc(72px + env(safe-area-inset-bottom,0));z-index:45;
+background:var(--surf2);border:1px solid var(--mint);border-radius:12px;
+padding:11px 12px;display:flex;align-items:center;gap:10px;
+font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.5)}
+.installbar span{flex:1}
+.installbar button{background:var(--mint);color:#0d2b26;border:none;
+border-radius:8px;padding:7px 13px;font-size:12px;font-weight:700}
+.installbar .x{background:none;color:var(--dim);font-size:19px;padding:0 4px}
+
+/* Installed, the browser chrome is gone, so the header takes over the
+   status bar area. */
+@media (display-mode: standalone){
+  .top{padding-top:calc(10px + env(safe-area-inset-top,0))}
+}
+
 .diag{font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace;text-align:right}
 main{max-width:820px;margin:0 auto;padding:20px 16px 60px}
 h1{font-size:clamp(20px,5.5vw,27px);font-weight:700;letter-spacing:-.03em;margin:0 0 6px;line-height:1.15}
@@ -216,6 +289,9 @@ padding-bottom:2px;margin-bottom:14px}
 .chips.genres::-webkit-scrollbar{display:none}
 .chip.g{flex:0 0 auto;font-size:12px;padding:5px 12px;font-weight:500}
 .chip.g[aria-pressed="true"]{font-weight:700}
+.genretog{background:var(--surf);border:1px solid var(--line);color:var(--dim);
+border-radius:9px;padding:6px 12px;font-size:12px;font-weight:600;margin-bottom:10px}
+.genretog:hover{border-color:var(--mint);color:var(--mint)}
 .updates{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;
 padding-bottom:4px;margin-bottom:16px}
 .updates::-webkit-scrollbar{display:none}
@@ -255,7 +331,6 @@ padding:6px 0 0;cursor:pointer}
 
 <div class="top">
   <button class="logo" id="home">manga<b>where</b></button>
-  <button class="listbtn" id="listbtn">My list <span class="badge" id="badge"></span></button>
   <button class="listbtn acctbtn" id="acctbtn" title="Your devices">⚙</button>
 </div>
 
@@ -263,7 +338,28 @@ padding:6px 0 0;cursor:pointer}
   <div id="app"></div>
 </main>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 20</span></div>
+<!-- Bottom navigation. On a phone this is the single strongest signal
+     that something is an app rather than a page, and it puts every
+     destination inside thumb reach. -->
+<nav class="tabs" id="tabs">
+  <button class="tab on" data-tab="home">
+    <span class="ti">▦</span><span class="tl">Home</span></button>
+  <button class="tab" data-tab="search">
+    <span class="ti">⌕</span><span class="tl">Search</span></button>
+  <button class="tab" data-tab="list">
+    <span class="ti">☰</span><span class="tl">My list</span>
+    <span class="tbadge" id="tabbadge"></span></button>
+  <button class="tab" data-tab="account">
+    <span class="ti">⚙</span><span class="tl">Devices</span></button>
+</nav>
+
+<div class="installbar" id="installbar" hidden>
+  <span>Add Manga Where to your home screen</span>
+  <button id="installgo">Install</button>
+  <button class="x" id="installno" aria-label="Dismiss">×</button>
+</div>
+
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 23</span></div>
 
 <script>
 /* ================= proxy =================
@@ -1114,7 +1210,9 @@ function chips(active){
   return '<div class="chips">'+opts.map(function(o){
     return '<button class="chip" data-c="'+o[0]+'" aria-pressed="'+(active===o[0])+'">'+
       o[1]+'</button>';}).join("")+'</div>'+
-    '<div class="chips genres">'+
+    '<button class="genretog" id="genretog">'+
+      (curGenre ? esc(curGenre) : "All genres")+' ▾</button>'+
+    '<div class="chips genres" id="genrerow" hidden>'+
     '<button class="chip g" data-g="" aria-pressed="'+(curGenre==="")+'">All genres</button>'+
     GENRES.map(function(g){
       return '<button class="chip g" data-g="'+esc(g)+'" aria-pressed="'+
@@ -1131,6 +1229,7 @@ function loadTrending(country,genre){
     Array(8).fill('<div class="tile"><div class="skel"></div></div>').join("")+
     '</div></div></div>'; }).join("");
   wireChips();
+  wireGenreToggle();
   wireUpdates();
   trending(curFilter,curGenre).then(function(rows){
     setDiag("source: "+sourceUsed);
@@ -1544,10 +1643,14 @@ function render(r){
 function showDetail(m,ch){
   stopRail();
   var tr=document.getElementById("trend"); if(tr) tr.style.display="none";
-  document.getElementById("out").innerHTML=
-    '<button class="back" id="bk">← Back</button>'+detailHtml(m,ch);
+  // #out only exists on the home page. Opened from My list there is no
+  // #out, so fall back to the app container rather than throwing.
+  var host=document.getElementById("out")||document.getElementById("app");
+  var from=curTab;
+  host.innerHTML='<button class="back" id="bk">← Back</button>'+detailHtml(m,ch);
   fillChapters(m,ch);
-  document.getElementById("bk").onclick=function(){ homeView(); };
+  // Back should return where they came from, the way an app does.
+  document.getElementById("bk").onclick=function(){ setTab(from); };
   window.scrollTo(0,0);
 }
 
@@ -1617,7 +1720,7 @@ function detailHtml(m,videoCh){
     '<div><div class="k">'+thirdK+'</div><div class="v sm">'+esc(String(thirdV))+'</div></div>'+
     '</div>'+behind+freshness+
     '<button class="trackbtn'+(inList(m.id)?" on":"")+'" id="trackbtn">'+
-      (inList(m.id)?"✓ Tracking":"Track this")+'</button>'+
+      (inList(m.id)?"✓ Tracking":(signedIn()?"Track this":"Track this"))+'</button>'+
     '</div>'+
     '<h3>'+(off.length?"Read it here":"Where to read")+'</h3>'+
     (off.length?off.map(linkRow).join(""):noEnglishBlock(m))+
@@ -1661,6 +1764,12 @@ function wireTrack(m, videoCh){
   var b=document.getElementById("trackbtn");
   if(!b) return;
   b.onclick=function(){
+    // Browsing and searching stay open to everyone; saving is the point
+    // where an account starts to mean something.
+    if(!signedIn()){
+      authView("signup", m);
+      return;
+    }
     if(inList(m.id)){
       removeFromList(m.id); syncUnwatch(m.id);
       b.className="trackbtn"; b.textContent="Track this";
@@ -1987,11 +2096,11 @@ function runProbes(){
 
 /* ================= my list ================= */
 function updateBadge(){
-  var b=document.getElementById("badge");
-  if(!b) return;
   var n=unreadCount();
-  b.textContent=n;
-  b.className=n?"badge on":"badge";
+  var b=document.getElementById("badge");
+  if(b){ b.textContent=n; b.className=n?"badge on":"badge"; }
+  var t=document.getElementById("tabbadge");
+  if(t){ t.textContent=n; t.className=n?"tbadge on":"tbadge"; }
 }
 
 /* Someone with a list shouldn't land on the same page as a first-time
@@ -2024,6 +2133,128 @@ function wireUpdates(){
   }
 }
 
+/* ---- auth ----
+   The token is the session. Kept in the same storage as the list so both
+   survive a reload, and sent as a bearer header on anything account-shaped. */
+var auth = { token:null, email:null, name:null };
+
+function loadAuth(){
+  try{
+    var raw=store.get("mw.auth");
+    if(raw) auth=JSON.parse(raw);
+  }catch(e){ auth={token:null,email:null,name:null}; }
+  return auth;
+}
+function saveAuth(a){
+  auth=a||{token:null,email:null,name:null};
+  if(auth.token) store.set("mw.auth", JSON.stringify(auth));
+  else store.set("mw.auth","");
+}
+function signedIn(){ return !!(auth && auth.token); }
+
+/* Every account-scoped call goes through here so the token is never
+   forgotten and a dead session logs out cleanly instead of failing oddly. */
+function api(path, opts){
+  opts=opts||{};
+  opts.headers=opts.headers||{};
+  opts.headers["Content-Type"]="application/json";
+  if(auth.token) opts.headers["Authorization"]="Bearer "+auth.token;
+  return fetch(API_BASE+path, opts).then(function(r){
+    if(r.status===401 && auth.token){ saveAuth(null); }
+    return r.json();
+  });
+}
+
+function authView(mode, thenTrack){
+  stopRail();
+  var login = mode==="login";
+  var view=document.getElementById("app");
+  view.innerHTML=
+    '<button class="back" id="abk">← Back</button>'+
+    '<h1>'+(login?"Welcome back":"Create your account")+'</h1>'+
+    '<p class="sub">'+(login
+      ? "Sign in to get to your list."
+      : "So your list is yours — on any device, and still there if you lose this one.")+
+    '</p>'+
+    (thenTrack?'<div class="note"><p><strong>Nearly there</strong>'+
+      'Sign up and we\'ll start tracking '+esc(thenTrack.title)+' straight away.</p></div>':"")+
+    '<div class="form">'+
+      '<label>Email<input id="au-email" type="email" autocomplete="email" '+
+        'inputmode="email" placeholder="you@example.com"></label>'+
+      '<label>Password<input id="au-pass" type="password" '+
+        'autocomplete="'+(login?"current-password":"new-password")+'" '+
+        'placeholder="'+(login?"Your password":"At least 8 characters")+'"></label>'+
+      '<button class="primary" id="au-go">'+(login?"Sign in":"Create account")+'</button>'+
+      '<p class="err" id="au-err"></p>'+
+    '</div>'+
+    '<p class="hint swap">'+(login
+      ? 'New here? <button class="linkish" id="au-swap">Create an account</button>'
+      : 'Already have one? <button class="linkish" id="au-swap">Sign in</button>')+'</p>';
+
+  document.getElementById("abk").onclick=function(){ setTab("home"); };
+  document.getElementById("au-swap").onclick=function(){
+    authView(login?"signup":"login", thenTrack);
+  };
+
+  var go=document.getElementById("au-go");
+  var err=document.getElementById("au-err");
+
+  function submit(){
+    var email=document.getElementById("au-email").value.trim();
+    var pass=document.getElementById("au-pass").value;
+    if(!email || !pass){ err.textContent="Fill in both fields."; return; }
+    if(!login && pass.length<8){
+      err.textContent="Password must be at least 8 characters."; return;
+    }
+    go.disabled=true; go.textContent=login?"Signing in…":"Creating…";
+    err.textContent="";
+
+    api(login?"/api/login":"/api/register",{
+      method:"POST",
+      body:JSON.stringify({email:email, password:pass,
+        endpoint:pushState.endpoint||undefined})
+    }).then(function(d){
+      if(d.error){
+        err.textContent=d.error;
+        go.disabled=false; go.textContent=login?"Sign in":"Create account";
+        return;
+      }
+      saveAuth({token:d.token, email:d.email, name:d.name, code:d.code});
+      return pullServerList().then(function(){
+        // We told them we'd start tracking it, so do that — don't make
+        // them tap the same button twice.
+        if(thenTrack){
+          if(!inList(thenTrack.id)){
+            addToList(thenTrack, thenTrack.chapters||null);
+            syncWatch(thenTrack, thenTrack.chapters||null);
+          }
+          updateBadge();
+          showDetail(thenTrack, null);
+        } else {
+          setTab("list");
+        }
+      });
+    }).catch(function(e){
+      err.textContent="Couldn't reach the server — "+e.message;
+      go.disabled=false; go.textContent=login?"Sign in":"Create account";
+    });
+  }
+
+  go.onclick=submit;
+  ["au-email","au-pass"].forEach(function(id){
+    document.getElementById(id).onkeydown=function(e){
+      if(e.key==="Enter") submit();
+    };
+  });
+  window.scrollTo(0,0);
+}
+
+function signOut(){
+  api("/api/logout",{method:"POST"}).catch(function(){});
+  saveAuth(null);
+  setTab("home");
+}
+
 /* ---- account ----
    The "sign in" that isn't. Everyone already has an account the moment
    they allow notifications; this only exists for people with a second
@@ -2031,64 +2262,54 @@ function wireUpdates(){
 function accountView(){
   stopRail();
   var view=document.getElementById("app");
-  view.innerHTML='<button class="back" id="ab">← Back</button>'+
-    '<h1>Your devices</h1>'+
-    '<p class="sub">Use a code to read the same list on your phone and your '+
-    'computer. No password, no email.</p>'+
-    '<div class="card acct">'+
-      '<h4>This device\'s code</h4>'+
-      '<div class="code" id="mycode">…</div>'+
-      '<p class="t" id="devcount"></p>'+
-    '</div>'+
-    '<h3>Add this device to another list</h3>'+
-    '<div class="paste">'+
-      '<input id="codein" placeholder="XXXX-XXXX" maxlength="9" autocapitalize="characters">'+
-      '<button id="linkbtn">Link</button>'+
-    '</div>'+
-    '<p class="hint" id="linkmsg">Enter the code shown on your other device.</p>';
 
-  document.getElementById("ab").onclick=function(){ homeView(); };
-
-  var code=document.getElementById("mycode");
-  if(!API_BASE || !pushState.endpoint){
-    code.textContent="—";
-    document.getElementById("devcount").textContent=
-      "Turn on notifications for a title first — that's what creates your account.";
-  }else{
-    fetch(API_BASE+"/api/account",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({endpoint:pushState.endpoint})})
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        code.textContent=d.code||"—";
-        document.getElementById("devcount").textContent=
-          d.devices===1 ? "Only this device so far."
-                        : d.devices+" devices share this list.";
-      })
-      .catch(function(){ code.textContent="—"; });
+  if(!signedIn()){
+    view.innerHTML='<button class="back" id="ab">← Back</button>'+
+      '<h1>Your account</h1>'+
+      '<p class="sub">Sign in to keep your list, get chapter alerts, and read '+
+      'the same list on every device.</p>'+
+      '<div class="form">'+
+        '<button class="primary" id="go-signup">Create an account</button>'+
+        '<button class="danger" id="go-login">I already have one</button>'+
+      '</div>';
+    document.getElementById("ab").onclick=function(){ setTab("home"); };
+    document.getElementById("go-signup").onclick=function(){ authView("signup"); };
+    document.getElementById("go-login").onclick=function(){ authView("login"); };
+    window.scrollTo(0,0);
+    return;
   }
 
-  document.getElementById("linkbtn").onclick=function(){
-    var v=document.getElementById("codein").value.trim().toUpperCase();
-    var msg=document.getElementById("linkmsg");
-    if(!v){ msg.textContent="Enter the code from your other device."; return; }
-    if(!pushState.endpoint){
-      msg.textContent="Turn on notifications first, then link.";
-      return;
-    }
-    msg.textContent="Linking…";
-    fetch(API_BASE+"/api/link",{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({endpoint:pushState.endpoint, code:v})})
-      .then(function(r){ return r.json(); })
-      .then(function(d){
-        if(d.error){ msg.textContent=d.error; return; }
-        msg.textContent=d.already ? "Already linked."
-          : "Linked. Your list is shared across "+d.devices+" devices.";
-        pullServerList();
-      })
-      .catch(function(e){ msg.textContent="Couldn't link — "+e.message; });
-  };
+  var initial=(auth.name||auth.email||"?").charAt(0).toUpperCase();
+  view.innerHTML='<button class="back" id="ab">← Back</button>'+
+    '<h1>Your account</h1>'+
+    '<div class="card">'+
+      '<div class="who">'+
+        '<div class="avatar">'+esc(initial)+'</div>'+
+        '<div class="whoin"><h4>'+esc(auth.name||"")+'</h4>'+
+          '<p>'+esc(auth.email||"")+'</p></div>'+
+      '</div>'+
+      '<div class="boxes" style="margin-top:14px">'+
+        '<div><span class="k">Tracking</span><span class="v" id="ac-tracked">—</span></div>'+
+        '<div><span class="k">Devices</span><span class="v" id="ac-devices">—</span></div>'+
+      '</div>'+
+    '</div>'+
+    '<h3>Add another device</h3>'+
+    '<p class="hint">Sign in with the same email on your other phone or laptop '+
+      'and your list follows you. Or use this code:</p>'+
+    '<div class="card acct"><div class="code" id="mycode">'+
+      esc(auth.code||"—")+'</div></div>'+
+    '<button class="danger" id="signout">Sign out</button>';
+
+  document.getElementById("ab").onclick=function(){ setTab("home"); };
+  document.getElementById("signout").onclick=signOut;
+
+  api("/api/me").then(function(d){
+    if(!d.signed_in){ saveAuth(null); accountView(); return; }
+    document.getElementById("ac-tracked").textContent=d.tracked;
+    document.getElementById("ac-devices").textContent=d.devices;
+    var c=document.getElementById("mycode");
+    if(d.code) c.textContent=d.code;
+  }).catch(function(){});
   window.scrollTo(0,0);
 }
 
@@ -2118,10 +2339,26 @@ function listView(){
   var view=document.getElementById("app");
   if(!l.length){
     view.innerHTML='<button class="back" id="lb">← Back</button>'+
-      '<h1>Your list is empty</h1>'+
-      '<p class="sub">Find a manga and tap "Track this". We\'ll check for new '+
-      'chapters whenever you open this page.</p>';
-    document.getElementById("lb").onclick=function(){ homeView(); };
+      (signedIn()
+        ? '<h1>Your list is empty</h1>'+
+          '<p class="sub">Find a manga and tap "Track this". We\'ll tell you '+
+          'the moment a new chapter is out.</p>'+
+          '<button class="primary" id="lfind" style="max-width:400px">'+
+          'Find something to read</button>'
+        : '<h1>Keep your manga in one place</h1>'+
+          '<p class="sub">Create an account to track series, get a notification '+
+          'when a chapter drops, and see the same list on every device.</p>'+
+          '<div class="form">'+
+            '<button class="primary" id="lsignup">Create an account</button>'+
+            '<button class="danger" id="llogin">I already have one</button>'+
+          '</div>');
+    document.getElementById("lb").onclick=function(){ setTab("home"); };
+    var f=document.getElementById("lfind");
+    if(f) f.onclick=function(){ setTab("search"); };
+    var su=document.getElementById("lsignup");
+    if(su) su.onclick=function(){ authView("signup"); };
+    var li=document.getElementById("llogin");
+    if(li) li.onclick=function(){ authView("login"); };
     return;
   }
 
@@ -2136,7 +2373,7 @@ function listView(){
       l.map(function(x,i){ return listRow(x,i); }).join("")+
     '</div>';
 
-  document.getElementById("lb").onclick=function(){ homeView(); };
+  document.getElementById("lb").onclick=function(){ setTab("home"); };
   wireListRows();
   refreshList(l);
   window.scrollTo(0,0);
@@ -2220,9 +2457,92 @@ function latestFor(x){
   }).catch(function(){ return null; });
 }
 
-document.getElementById("listbtn").onclick=function(){ listView(); };
-document.getElementById("acctbtn").onclick=function(){ accountView(); };
+document.getElementById("acctbtn").onclick=function(){ setTab("account"); };
+
+/* ---- tab navigation ----
+   One place that decides what's on screen, so the highlighted tab and the
+   view can never disagree. Deep views like a series page keep the tab they
+   were opened from lit, the way a native app does. */
+var curTab="home";
+
+function setTab(tab){
+  curTab=tab;
+  var els=document.querySelectorAll(".tab");
+  for(var i=0;i<els.length;i++)
+    els[i].className = els[i].dataset.tab===tab ? "tab on" : "tab";
+
+  if(tab==="home")    homeView();
+  if(tab==="list")    listView();
+  if(tab==="account") accountView();
+  if(tab==="search"){
+    homeView();
+    // Jump straight to the thing they tapped for.
+    setTimeout(function(){
+      var i=document.getElementById("q");
+      if(i){ i.focus(); i.scrollIntoView({block:"center",behavior:"smooth"}); }
+    },90);
+  }
+  updateBadge();
+}
+
+/* Fifteen genre buttons above the covers pushed the actual content off
+   the screen. They live behind a toggle now, so the page opens on comics. */
+function wireGenreToggle(){
+  var t=document.getElementById("genretog"), row=document.getElementById("genrerow");
+  if(!t||!row) return;
+  if(curGenre) row.hidden=false;
+  t.onclick=function(){ row.hidden=!row.hidden; };
+}
+
+(function wireTabs(){
+  var els=document.querySelectorAll(".tab");
+  for(var i=0;i<els.length;i++)
+    els[i].onclick=(function(t){ return function(){ setTab(t); }; })(els[i].dataset.tab);
+})();
+
+/* ---- install prompt ----
+   Chrome fires beforeinstallprompt when the app qualifies; we hold onto it
+   and show our own bar instead, because the browser's default is easy to
+   miss. iOS never fires it — Apple requires Share > Add to Home Screen by
+   hand — so those users get told that instead. */
+var deferredInstall=null;
+
+window.addEventListener("beforeinstallprompt", function(e){
+  e.preventDefault();
+  deferredInstall=e;
+  if(!store.get("mw.noinstall")) showInstallBar(false);
+});
+
+function showInstallBar(iosMode){
+  var bar=document.getElementById("installbar");
+  if(!bar || isStandalone()) return;
+  if(iosMode){
+    bar.querySelector("span").textContent="Tap Share, then Add to Home Screen";
+    document.getElementById("installgo").hidden=true;
+  }
+  bar.hidden=false;
+}
+
+document.getElementById("installgo").onclick=function(){
+  if(!deferredInstall) return;
+  deferredInstall.prompt();
+  deferredInstall.userChoice.finally(function(){
+    deferredInstall=null;
+    document.getElementById("installbar").hidden=true;
+  });
+};
+document.getElementById("installno").onclick=function(){
+  document.getElementById("installbar").hidden=true;
+  store.set("mw.noinstall","1");   // asked once, that's enough
+};
+
+// iOS gets the manual instruction, and it matters more there: Apple only
+// allows push notifications once the app is on the home screen.
+if(isIOS() && !isStandalone() && !store.get("mw.noinstall")){
+  setTimeout(function(){ showInstallBar(true); }, 3000);
+}
 document.getElementById("home").onclick=function(){homeView();};
+loadAuth();
 homeView();
 updateBadge();
 </script>
