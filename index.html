@@ -53,6 +53,19 @@ padding:14px;font-weight:700;font-size:15px;margin-top:4px}
 .linkish{background:none;border:none;color:var(--mint);font-weight:600;
 font-size:inherit;padding:0;text-decoration:underline;cursor:pointer}
 .swap{margin-top:16px}
+.pitch{max-width:420px;margin:22px auto 0;text-align:center}
+.pitch h1{font-size:23px;margin:0 0 8px}
+.pitch .sub{margin:0 0 20px}
+.picon{width:58px;height:58px;border-radius:50%;background:var(--mintd);
+color:var(--mint);font-size:24px;display:flex;align-items:center;
+justify-content:center;margin:0 auto 18px}
+.pben{list-style:none;padding:0;margin:0 0 24px;text-align:left;
+display:flex;flex-direction:column;gap:11px}
+.pben li{position:relative;padding-left:26px;font-size:14px;color:var(--text)}
+.pben li:before{content:"✓";position:absolute;left:0;top:0;color:var(--mint);
+font-weight:700}
+.pitch .primary{width:100%}
+.pitch .hint{margin-top:14px}
 /* Off-screen rather than display:none — some bots skip hidden fields but
    still fill ones that are merely out of view. */
 .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
@@ -381,7 +394,7 @@ padding:6px 0 0;cursor:pointer}
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 27</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 28</span></div>
 
 <script>
 /* ================= proxy =================
@@ -2428,30 +2441,48 @@ function pullServerList(){
 
 function listView(){
   stopRail();
-  var l=getList();
   var view=document.getElementById("app");
+
+  /* Signed out is checked before anything else. Tracking needs an account,
+     so a leftover local list from before that rule can't be what we show —
+     it would contradict the gate and leave people looking at a list they
+     have no account for. */
+  if(!signedIn()){
+    view.innerHTML='<button class="back" id="lb">← Back</button>'+
+      '<div class="pitch">'+
+        '<div class="picon">☰</div>'+
+        '<h1>Start your list</h1>'+
+        '<p class="sub">Create an account and Manga Where keeps track of every '+
+        'series you follow.</p>'+
+        '<ul class="pben">'+
+          '<li>A notification the moment a new chapter is out</li>'+
+          '<li>Your list on your phone and your computer</li>'+
+          '<li>See at a glance what you haven\'t read</li>'+
+        '</ul>'+
+        '<button class="primary" id="lsignup">Create a free account</button>'+
+        '<p class="hint">Already have one? '+
+          '<button class="linkish" id="llogin">Sign in</button></p>'+
+      '</div>';
+    document.getElementById("lb").onclick=function(){ setTab("home"); };
+    document.getElementById("lsignup").onclick=function(){ authView("signup"); };
+    document.getElementById("llogin").onclick=function(){ authView("login"); };
+    window.scrollTo(0,0);
+    return;
+  }
+
+  var l=getList();
   if(!l.length){
     view.innerHTML='<button class="back" id="lb">← Back</button>'+
-      (signedIn()
-        ? '<h1>Your list is empty</h1>'+
-          '<p class="sub">Find a manga and tap "Track this". We\'ll tell you '+
-          'the moment a new chapter is out.</p>'+
-          '<button class="primary" id="lfind" style="max-width:400px">'+
-          'Find something to read</button>'
-        : '<h1>Keep your manga in one place</h1>'+
-          '<p class="sub">Create an account to track series, get a notification '+
-          'when a chapter drops, and see the same list on every device.</p>'+
-          '<div class="form">'+
-            '<button class="primary" id="lsignup">Create an account</button>'+
-            '<button class="danger" id="llogin">I already have one</button>'+
-          '</div>');
+      '<div class="pitch">'+
+        '<div class="picon">☰</div>'+
+        '<h1>Your list is empty</h1>'+
+        '<p class="sub">Find a manga and tap "Track this". We\'ll tell you '+
+        'the moment a new chapter is out.</p>'+
+        '<button class="primary" id="lfind">Find something to read</button>'+
+      '</div>';
     document.getElementById("lb").onclick=function(){ setTab("home"); };
-    var f=document.getElementById("lfind");
-    if(f) f.onclick=function(){ setTab("search"); };
-    var su=document.getElementById("lsignup");
-    if(su) su.onclick=function(){ authView("signup"); };
-    var li=document.getElementById("llogin");
-    if(li) li.onclick=function(){ authView("login"); };
+    document.getElementById("lfind").onclick=function(){ setTab("search"); };
+    window.scrollTo(0,0);
     return;
   }
 
