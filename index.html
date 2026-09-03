@@ -49,6 +49,9 @@ padding:14px;font-weight:700;font-size:15px;margin-top:4px}
 .linkish{background:none;border:none;color:var(--mint);font-weight:600;
 font-size:inherit;padding:0;text-decoration:underline;cursor:pointer}
 .swap{margin-top:16px}
+/* Off-screen rather than display:none — some bots skip hidden fields but
+   still fill ones that are merely out of view. */
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
 .who{display:flex;align-items:center;gap:12px;margin-bottom:6px}
 .avatar{width:44px;height:44px;border-radius:50%;background:var(--mintd);
 color:var(--mint);display:flex;align-items:center;justify-content:center;
@@ -92,6 +95,7 @@ bottom:calc(72px + env(safe-area-inset-bottom,0));z-index:45;
 background:var(--surf2);border:1px solid var(--mint);border-radius:12px;
 padding:11px 12px;display:flex;align-items:center;gap:10px;
 font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.5)}
+.installbar[hidden]{display:none}
 .installbar span{flex:1}
 .installbar button{background:var(--mint);color:#0d2b26;border:none;
 border-radius:8px;padding:7px 13px;font-size:12px;font-weight:700}
@@ -303,6 +307,20 @@ background:var(--surf2);border:1px solid var(--mint)}
 white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .uc{display:block;font-size:10px;color:var(--mint);font-weight:700;
 font-family:ui-monospace,Consolas,monospace}
+.rechead{display:flex;align-items:baseline;justify-content:space-between}
+.rechead h3{margin-bottom:9px}
+.linkish.sm{font-size:11px;text-decoration:none;color:var(--dim)}
+.linkish.sm:hover{color:var(--mint)}
+.recents{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;
+padding-bottom:4px;margin-bottom:16px}
+.recents::-webkit-scrollbar{display:none}
+.rec{flex:0 0 auto;display:flex;align-items:center;gap:8px;background:var(--surf);
+border:1px solid var(--line);border-radius:999px;padding:5px 13px 5px 5px;
+color:var(--text);font-size:12px;font-weight:600;cursor:pointer;max-width:190px}
+.rec:hover{border-color:var(--mint)}
+.rec img,.rec .rph{width:26px;height:26px;border-radius:50%;object-fit:cover;
+background:var(--surf2);flex-shrink:0}
+.rt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chip{background:var(--surf);border:1px solid var(--line);color:var(--dim);border-radius:100px;
 padding:6px 13px;font-size:12px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--mint);color:#0d2b26;border-color:var(--mint)}
@@ -350,7 +368,7 @@ padding:6px 0 0;cursor:pointer}
     <span class="ti">☰</span><span class="tl">My list</span>
     <span class="tbadge" id="tabbadge"></span></button>
   <button class="tab" data-tab="account">
-    <span class="ti">⚙</span><span class="tl">Devices</span></button>
+    <span class="ti">◍</span><span class="tl">Account</span></button>
 </nav>
 
 <div class="installbar" id="installbar" hidden>
@@ -359,7 +377,7 @@ padding:6px 0 0;cursor:pointer}
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 23</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 25</span></div>
 
 <script>
 /* ================= proxy =================
@@ -1187,11 +1205,18 @@ function homeView(){
    '<input id="q" placeholder="Paste a link or type a name" '+
    'autocomplete="off" autocorrect="off" spellcheck="false"><button id="go">Find</button></div>'+
    '<div class="suggest" id="suggest" hidden></div></div>'+
-   '<p class="hint">Free to use. No account needed.</p>'+
+   '<p class="hint">'+(signedIn()
+     ? "Signed in as "+esc(auth.email||"")
+     : "Free to browse. Create an account to track series.")+'</p>'+
    '<div id="out"></div>'+
+   // Personal rows sit above trending: what's new for you, then what you
+   // were just looking at, then everyone else's trending.
+   '<div id="personal">'+updatesStrip()+recentHtml()+'</div>'+
    '<div id="trend"></div>';
   document.getElementById("go").onclick=run;
   wireSuggest(document.getElementById("q"));
+  wireUpdates();
+  wireRecent();
   loadTrending(curFilter);
 }
 
@@ -1230,7 +1255,6 @@ function loadTrending(country,genre){
     '</div></div></div>'; }).join("");
   wireChips();
   wireGenreToggle();
-  wireUpdates();
   trending(curFilter,curGenre).then(function(rows){
     setDiag("source: "+sourceUsed);
     var el=document.getElementById("trend");
@@ -1641,6 +1665,7 @@ function render(r){
 }
 
 function showDetail(m,ch){
+  addRecent(m);
   stopRail();
   var tr=document.getElementById("trend"); if(tr) tr.style.display="none";
   // #out only exists on the home page. Opened from My list there is no
@@ -2133,6 +2158,52 @@ function wireUpdates(){
   }
 }
 
+/* ---- recent searches ----
+   Kept on the device only. People look up the same few series repeatedly
+   while they wait for chapters, so this saves retyping — and it gives the
+   Search tab something to show instead of an empty box. */
+var MAX_RECENT = 8;
+
+function getRecent(){
+  try{ return JSON.parse(store.get("mw.recent")||"[]"); }catch(e){ return []; }
+}
+function addRecent(m){
+  if(!m || !m.title) return;
+  var r=getRecent().filter(function(x){ return String(x.id)!==String(m.id); });
+  r.unshift({id:m.id, title:m.title, cover:m.cover||"", kind:m.kind||""});
+  store.set("mw.recent", JSON.stringify(r.slice(0,MAX_RECENT)));
+}
+function clearRecent(){ store.set("mw.recent","[]"); }
+
+function recentHtml(){
+  var r=getRecent();
+  if(!r.length) return "";
+  return '<div class="rechead"><h3>Recent</h3>'+
+    '<button class="linkish sm" id="clearrec">Clear</button></div>'+
+    '<div class="recents">'+r.map(function(x){
+      return '<button class="rec" data-id="'+esc(String(x.id))+'">'+
+        (x.cover?'<img alt="" src="'+esc(x.cover)+'">':'<span class="rph"></span>')+
+        '<span class="rt">'+esc(x.title)+'</span></button>';
+    }).join("")+'</div>';
+}
+
+function wireRecent(){
+  var c=document.getElementById("clearrec");
+  if(c) c.onclick=function(){ clearRecent(); setTab("search"); };
+  var els=document.querySelectorAll(".rec");
+  for(var i=0;i<els.length;i++){
+    (function(el){
+      el.onclick=function(){
+        var hit=getRecent().filter(function(x){ return String(x.id)===el.dataset.id; })[0];
+        if(!hit) return;
+        var box=document.getElementById("q");
+        if(box){ box.value=hit.title; }
+        run();
+      };
+    })(els[i]);
+  }
+}
+
 /* ---- auth ----
    The token is the session. Kept in the same storage as the list so both
    survive a reload, and sent as a bearer header on anything account-shaped. */
@@ -2184,6 +2255,13 @@ function authView(mode, thenTrack){
       '<label>Password<input id="au-pass" type="password" '+
         'autocomplete="'+(login?"current-password":"new-password")+'" '+
         'placeholder="'+(login?"Your password":"At least 8 characters")+'"></label>'+
+      (login?"":'<label>Confirm password<input id="au-pass2" type="password" '+
+        'autocomplete="new-password" placeholder="Type it again"></label>')+
+      // Honeypot. Hidden from people, filled in by scripts that fill
+      // every field they find. Not display:none — some bots skip those.
+      '<div class="hp" aria-hidden="true">'+
+        '<label>Website<input id="au-hp" type="text" tabindex="-1" '+
+        'autocomplete="off"></label></div>'+
       '<button class="primary" id="au-go">'+(login?"Sign in":"Create account")+'</button>'+
       '<p class="err" id="au-err"></p>'+
     '</div>'+
@@ -2198,13 +2276,20 @@ function authView(mode, thenTrack){
 
   var go=document.getElementById("au-go");
   var err=document.getElementById("au-err");
+  var openedAt=Date.now();   // how long the form took, to spot scripts
 
   function submit(){
     var email=document.getElementById("au-email").value.trim();
     var pass=document.getElementById("au-pass").value;
+    var p2el=document.getElementById("au-pass2");
+    var hp=document.getElementById("au-hp");
+
     if(!email || !pass){ err.textContent="Fill in both fields."; return; }
     if(!login && pass.length<8){
       err.textContent="Password must be at least 8 characters."; return;
+    }
+    if(!login && p2el && pass!==p2el.value){
+      err.textContent="Passwords don't match."; return;
     }
     go.disabled=true; go.textContent=login?"Signing in…":"Creating…";
     err.textContent="";
@@ -2212,7 +2297,9 @@ function authView(mode, thenTrack){
     api(login?"/api/login":"/api/register",{
       method:"POST",
       body:JSON.stringify({email:email, password:pass,
-        endpoint:pushState.endpoint||undefined})
+        endpoint:pushState.endpoint||undefined,
+        website:(hp?hp.value:""),
+        elapsed:(Date.now()-openedAt)/1000})
     }).then(function(d){
       if(d.error){
         err.textContent=d.error;
@@ -2241,7 +2328,8 @@ function authView(mode, thenTrack){
   }
 
   go.onclick=submit;
-  ["au-email","au-pass"].forEach(function(id){
+  ["au-email","au-pass","au-pass2"].forEach(function(id){
+    if(!document.getElementById(id)) return;
     document.getElementById(id).onkeydown=function(e){
       if(e.key==="Enter") submit();
     };
@@ -2524,12 +2612,22 @@ function showInstallBar(iosMode){
 }
 
 document.getElementById("installgo").onclick=function(){
-  if(!deferredInstall) return;
+  var bar=document.getElementById("installbar");
+  if(!deferredInstall){
+    // No stored prompt: tell them where the menu item is instead of
+    // doing nothing, which is what a dead button feels like.
+    bar.querySelector("span").textContent = isIOS()
+      ? "Tap Share, then Add to Home Screen"
+      : "Open your browser menu (⋮) and choose Install app";
+    document.getElementById("installgo").hidden=true;
+    return;
+  }
   deferredInstall.prompt();
-  deferredInstall.userChoice.finally(function(){
-    deferredInstall=null;
-    document.getElementById("installbar").hidden=true;
-  });
+  deferredInstall.userChoice.then(function(res){
+    if(res && res.outcome==="accepted") bar.hidden=true;
+    else bar.hidden=true;   // declined — don't nag
+  }).catch(function(){ bar.hidden=true; })
+    .finally(function(){ deferredInstall=null; });
 };
 document.getElementById("installno").onclick=function(){
   document.getElementById("installbar").hidden=true;
