@@ -408,7 +408,7 @@ padding:6px 0 0;cursor:pointer}
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 31</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 32</span></div>
 
 <script>
 /* ================= proxy =================
@@ -542,6 +542,8 @@ function enablePush(){
     }).then(function(){
       pushState.subscribed=true;
       pushState.endpoint=j.endpoint;
+      pushState.p256dh=j.keys?j.keys.p256dh:"";
+      pushState.auth=j.keys?j.keys.auth:"";
       return {ok:true, endpoint:j.endpoint};
     });
   })
@@ -552,11 +554,13 @@ function enablePush(){
 
 /* Mirrors a local track to the server so the poller can notify them. */
 function syncWatch(m, chapter){
-  if(!API_BASE || !pushState.endpoint) return Promise.resolve();
-  return fetch(API_BASE+"/api/watch",{
-    method:"POST", headers:{"Content-Type":"application/json"},
+  if(!API_BASE || !signedIn()) return Promise.resolve();
+  return api("/api/watch",{
+    method:"POST",
     body:JSON.stringify({
-      endpoint:pushState.endpoint,
+      // endpoint is optional — it only says where to deliver notifications.
+      // Tracking works without it.
+      endpoint:pushState.endpoint||undefined,
       seen_chapter:chapter||null,
       title:{key:String(m.id), name:m.title, cover:m.cover||"", kind:m.kind||"",
              country:m.country||"", links:m.links||[]}
@@ -564,10 +568,9 @@ function syncWatch(m, chapter){
   }).catch(function(){});
 }
 function syncUnwatch(id){
-  if(!API_BASE || !pushState.endpoint) return Promise.resolve();
-  return fetch(API_BASE+"/api/unwatch",{
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({endpoint:pushState.endpoint, key:String(id)})
+  if(!API_BASE || !signedIn()) return Promise.resolve();
+  return api("/api/unwatch",{
+    method:"POST", body:JSON.stringify({key:String(id)})
   }).catch(function(){});
 }
 
@@ -615,6 +618,10 @@ function markRead(id){
   var l=getList();
   l.forEach(function(x){ if(x.id===id) x.seen=x.latest; });
   saveList(l);
+  if(API_BASE && signedIn()){
+    api("/api/mark-read",{method:"POST",body:JSON.stringify({key:String(id)})})
+      .catch(function(){});
+  }
 }
 function unreadCount(){
   return getList().filter(function(x){
@@ -2477,7 +2484,15 @@ function authView(mode, thenTrack){
         go.disabled=false; go.textContent=login?"Sign in":"Create account";
         return;
       }
-      saveAuth({token:d.token, email:d.email, name:d.name, code:d.code});
+      saveAuth({token:d.token, email:d.email, name:d.name});
+      // If push was already allowed here, hand the endpoint over now that
+      // there's an account to attach it to.
+      if(pushState.endpoint){
+        api("/api/subscribe",{method:"POST",body:JSON.stringify({
+          endpoint:pushState.endpoint,
+          keys:{p256dh:pushState.p256dh||"",auth:pushState.auth||""}
+        })}).catch(function(){});
+      }
       return pullServerList().then(function(){
         // We told them we'd start tracking it, so do that — don't make
         // them tap the same button twice.
@@ -2574,9 +2589,8 @@ function accountView(){
 
 /* After linking, the server knows about titles this browser doesn't. */
 function pullServerList(){
-  if(!API_BASE || !pushState.endpoint) return Promise.resolve();
-  return fetch(API_BASE+"/api/list?endpoint="+encodeURIComponent(pushState.endpoint))
-    .then(function(r){ return r.json(); })
+  if(!API_BASE || !signedIn()) return Promise.resolve();
+  return api("/api/list")
     .then(function(d){
       var local=getList();
       var have={};
