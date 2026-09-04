@@ -69,6 +69,16 @@ font-weight:700}
 /* Off-screen rather than display:none — some bots skip hidden fields but
    still fill ones that are merely out of view. */
 .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.cap{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+.capimg{flex:1;min-height:74px;display:flex;align-items:center;
+justify-content:center;background:#1b1830;border:1px solid var(--line);
+border-radius:10px;overflow:hidden}
+.capimg svg{display:block;max-width:100%;height:auto}
+.caploading{font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+.caprefresh{background:var(--surf);border:1px solid var(--line);color:var(--dim);
+border-radius:9px;width:40px;height:40px;font-size:17px;cursor:pointer;flex-shrink:0}
+.caprefresh:hover{border-color:var(--mint);color:var(--mint)}
+#au-cap{text-transform:uppercase;letter-spacing:.22em;font-family:ui-monospace,Consolas,monospace}
 .who{display:flex;align-items:center;gap:12px;margin-bottom:6px}
 .avatar{width:44px;height:44px;border-radius:50%;background:var(--mintd);
 color:var(--mint);display:flex;align-items:center;justify-content:center;
@@ -234,7 +244,11 @@ font-family:ui-monospace,Consolas,monospace}
 .fresh.authoritative{color:var(--mint)}
 .seasontag{font-size:11px;background:var(--surf);color:var(--mint);padding:2px 6px;
 border-radius:5px;margin-right:6px;vertical-align:middle;font-family:ui-monospace,Consolas,monospace}
-.trackbtn{width:100%;margin-top:16px;background:var(--mint);color:#0d2b26;border:none;
+.sharebtn{width:100%;margin-top:12px;background:var(--surf2);color:var(--text);
+border:1px solid var(--line);border-radius:11px;padding:12px;font-weight:600;
+font-size:14px;cursor:pointer}
+.sharebtn:hover{border-color:var(--mint);color:var(--mint)}
+.trackbtn{width:100%;margin-top:10px;background:var(--mint);color:#0d2b26;border:none;
 border-radius:11px;padding:13px;font-weight:700;font-size:15px}
 .trackbtn.on{background:var(--surf2);color:var(--mint);border:1px solid var(--mint)}
 .listrows{display:flex;flex-direction:column;gap:9px}
@@ -394,7 +408,7 @@ padding:6px 0 0;cursor:pointer}
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 28</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 31</span></div>
 
 <script>
 /* ================= proxy =================
@@ -1682,18 +1696,27 @@ function render(r){
       fillChapters(m,r.parsed.chapter); window.scrollTo(0,0);};})(scored[+els[i].dataset.i].m);
 }
 
-function showDetail(m,ch){
+function showDetail(m,ch,solo){
   addRecent(m);
   stopRail();
   var tr=document.getElementById("trend"); if(tr) tr.style.display="none";
   // #out only exists on the home page. Opened from My list there is no
   // #out, so fall back to the app container rather than throwing.
-  var host=document.getElementById("out")||document.getElementById("app");
+  // `solo` means take over the whole screen — used for shared links, where
+  // landing under the hero and the search box would bury the thing the
+  // link was for.
+  var host=(!solo && document.getElementById("out")) || document.getElementById("app");
   var from=curTab;
   host.innerHTML='<button class="back" id="bk">← Back</button>'+detailHtml(m,ch);
   fillChapters(m,ch);
   // Back should return where they came from, the way an app does.
-  document.getElementById("bk").onclick=function(){ setTab(from); };
+  document.getElementById("bk").onclick=function(){
+    // Drop ?m= so Back doesn't bounce straight back into this page.
+    if(location.search.indexOf("m=")>-1 && history.replaceState){
+      history.replaceState({}, "", location.pathname);
+    }
+    setTab(from);
+  };
   window.scrollTo(0,0);
 }
 
@@ -1762,6 +1785,7 @@ function detailHtml(m,videoCh){
     '<div><div class="k">'+(done?"Final chapter":"Latest out")+'</div>'+chapCell+'</div>'+
     '<div><div class="k">'+thirdK+'</div><div class="v sm">'+esc(String(thirdV))+'</div></div>'+
     '</div>'+behind+freshness+
+    shareRow(m)+
     '<button class="trackbtn'+(inList(m.id)?" on":"")+'" id="trackbtn">'+
       (inList(m.id)?"✓ Tracking":(signedIn()?"Track this":"Track this"))+'</button>'+
     '</div>'+
@@ -1881,6 +1905,7 @@ function showPushNote(btn, state){
 
 function fillChapters(m, videoCh){
   wireTrack(m, videoCh);
+  wireShare(m);
   wireSynopsis();
   var slot=document.getElementById("chapslot");
   if(!slot) return;                       // count already known
@@ -2176,6 +2201,94 @@ function wireUpdates(){
   }
 }
 
+/* ---- shareable links ----
+   A link straight to one series. The point of this product is people
+   passing titles to each other under recap videos, so a link that opens
+   on the series rather than the home page is worth having.
+
+   ?m=al-12345 rather than a path, because GitHub Pages serves static
+   files and any invented path would 404. */
+function shareUrl(m){
+  return location.origin+location.pathname+"?m="+encodeURIComponent(m.id);
+}
+
+function shareRow(m){
+  return '<button class="sharebtn" id="sharebtn">Share this</button>';
+}
+
+function wireShare(m){
+  var b=document.getElementById("sharebtn");
+  if(!b) return;
+  b.onclick=function(){
+    var url=shareUrl(m);
+    // The native sheet where it exists — that's the WhatsApp and TikTok
+    // path most people will use — and the clipboard everywhere else.
+    if(navigator.share){
+      navigator.share({title:m.title, text:"Where to read "+m.title, url:url})
+        .catch(function(){});
+      return;
+    }
+    var done=function(){ b.textContent="Link copied"; 
+      setTimeout(function(){ b.textContent="Share this"; },1800); };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(done).catch(function(){ fallbackCopy(url,done); });
+    } else fallbackCopy(url,done);
+  };
+}
+
+function fallbackCopy(text, done){
+  var t=document.createElement("textarea");
+  t.value=text; t.style.position="fixed"; t.style.left="-9999px";
+  document.body.appendChild(t); t.select();
+  try{ document.execCommand("copy"); done(); }catch(e){}
+  document.body.removeChild(t);
+}
+
+/* Opens the series named in the URL, so a shared link lands on the page
+   itself instead of the home screen. */
+function openFromUrl(){
+  var id=new URLSearchParams(location.search).get("m");
+  if(!id) return false;
+  var host=document.getElementById("app");
+  if(host) host.innerHTML='<p class="hint">Loading…</p>';
+  fetchById(id).then(function(m){
+    if(m){ showDetail(m, null, true); return; }
+    if(host) host.innerHTML='<div class="note"><p><strong>Couldn\'t find that one</strong>'+
+      'The link may be out of date. Try searching for it above.</p></div>';
+  }).catch(function(){
+    if(host) host.innerHTML='<div class="note"><p><strong>Couldn\'t load that link</strong>'+
+      'Try searching for it above.</p></div>';
+  });
+  return true;
+}
+
+/* Ids carry their source: al- from AniList, mal- from MyAnimeList.
+
+   The AniList lookup is wrapped in a Page query even though it returns one
+   title, because alCall unwraps Page.media — asking for Media directly
+   would return a shape it can't read. Jikan's single-title endpoint
+   returns an object rather than an array, so that one needs its own
+   fetch instead of jikanCall. */
+function fetchById(id){
+  if(/^al-/.test(id)){
+    var n=parseInt(id.replace(/^al-/,""),10);
+    if(!n) return Promise.resolve(null);
+    return alCall("query{Page(perPage:1){media(id:"+n+",type:MANGA){"+AL_FIELDS+"}}}")
+      .then(function(rows){ return (rows&&rows[0])||null; });
+  }
+  if(/^mal-/.test(id)){
+    var k=parseInt(id.replace(/^mal-/,""),10);
+    if(!k) return Promise.resolve(null);
+    return fetch("https://api.jikan.moe/v4/manga/"+k)
+      .then(function(r){
+        if(!r.ok) throw new Error("Jikan "+r.status);
+        return r.json();
+      })
+      .then(function(j){ return j&&j.data ? jikanShape(j.data) : null; });
+  }
+  return Promise.resolve(null);
+}
+
 /* ---- recent searches ----
    Kept on the device only. People look up the same few series repeatedly
    while they wait for chapters, so this saves retyping — and it gives the
@@ -2280,6 +2393,14 @@ function authView(mode, thenTrack){
       '<div class="hp" aria-hidden="true">'+
         '<label>Website<input id="au-hp" type="text" tabindex="-1" '+
         'autocomplete="off"></label></div>'+
+      (login?"":'<label>Type the characters'+
+        '<div class="cap"><div class="capimg" id="capimg">'+
+          '<span class="caploading">loading…</span></div>'+
+          '<button type="button" class="caprefresh" id="caprefresh" '+
+          'title="Show a different one" aria-label="Show a different one">↻</button>'+
+        '</div>'+
+        '<input id="au-cap" type="text" autocomplete="off" autocapitalize="characters" '+
+        'spellcheck="false" maxlength="5" placeholder="5 characters"></label>')+
       '<button class="primary" id="au-go">'+(login?"Sign in":"Create account")+'</button>'+
       '<p class="err" id="au-err"></p>'+
     '</div>'+
@@ -2295,6 +2416,29 @@ function authView(mode, thenTrack){
   var go=document.getElementById("au-go");
   var err=document.getElementById("au-err");
   var openedAt=Date.now();   // how long the form took, to spot scripts
+  var capId=null;
+
+  /* The answer stays on the server; we only ever hold the id. */
+  function loadCaptcha(){
+    if(login) return;
+    var box=document.getElementById("capimg");
+    if(!box) return;
+    box.innerHTML='<span class="caploading">loading…</span>';
+    fetch(API_BASE+"/api/captcha")
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        capId=d.id;
+        box.innerHTML=d.svg;
+        var f=document.getElementById("au-cap");
+        if(f) f.value="";
+      })
+      .catch(function(){
+        box.innerHTML='<span class="caploading">couldn\'t load — tap ↻</span>';
+      });
+  }
+  loadCaptcha();
+  var cr=document.getElementById("caprefresh");
+  if(cr) cr.onclick=loadCaptcha;
 
   function submit(){
     var email=document.getElementById("au-email").value.trim();
@@ -2309,6 +2453,10 @@ function authView(mode, thenTrack){
     if(!login && p2el && pass!==p2el.value){
       err.textContent="Passwords don't match."; return;
     }
+    var capEl=document.getElementById("au-cap");
+    if(!login && capEl && !capEl.value.trim()){
+      err.textContent="Type the characters shown in the picture."; return;
+    }
     go.disabled=true; go.textContent=login?"Signing in…":"Creating…";
     err.textContent="";
 
@@ -2317,10 +2465,15 @@ function authView(mode, thenTrack){
       body:JSON.stringify({email:email, password:pass,
         endpoint:pushState.endpoint||undefined,
         website:(hp?hp.value:""),
-        elapsed:(Date.now()-openedAt)/1000})
+        elapsed:(Date.now()-openedAt)/1000,
+        captcha_id:capId||undefined,
+        captcha:(capEl?capEl.value.trim():undefined)})
     }).then(function(d){
       if(d.error){
         err.textContent=d.error;
+        // A used challenge is gone, so always issue a fresh picture rather
+        // than leaving them retyping one that can no longer pass.
+        if(d.captcha_failed || !login) loadCaptcha();
         go.disabled=false; go.textContent=login?"Sign in":"Create account";
         return;
       }
@@ -2399,11 +2552,8 @@ function accountView(){
         '<div><span class="k">Devices</span><span class="v" id="ac-devices">—</span></div>'+
       '</div>'+
     '</div>'+
-    '<h3>Add another device</h3>'+
-    '<p class="hint">Sign in with the same email on your other phone or laptop '+
-      'and your list follows you. Or use this code:</p>'+
-    '<div class="card acct"><div class="code" id="mycode">'+
-      esc(auth.code||"—")+'</div></div>'+
+    '<p class="hint">Sign in with the same email on any other phone or laptop '+
+      'and your list is there.</p>'+
     '<button class="danger" id="signout">Sign out</button>';
 
   document.getElementById("ab").onclick=function(){ setTab("home"); };
@@ -2413,9 +2563,12 @@ function accountView(){
     if(!d.signed_in){ saveAuth(null); accountView(); return; }
     document.getElementById("ac-tracked").textContent=d.tracked;
     document.getElementById("ac-devices").textContent=d.devices;
-    var c=document.getElementById("mycode");
-    if(d.code) c.textContent=d.code;
-  }).catch(function(){});
+  }).catch(function(e){
+    // Don't leave dashes sitting there with no explanation.
+    document.getElementById("ac-tracked").textContent=getList().length;
+    document.getElementById("ac-devices").textContent="1";
+    console.log("[mangawhere] /api/me unreachable:", e.message);
+  });
   window.scrollTo(0,0);
 }
 
@@ -2680,6 +2833,7 @@ if(isIOS() && !isStandalone() && !store.get("mw.noinstall")){
 document.getElementById("home").onclick=function(){homeView();};
 loadAuth();
 homeView();
+openFromUrl();
 updateBadge();
 </script>
 </body>
