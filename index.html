@@ -40,6 +40,19 @@ margin:0 0 10px;font-weight:600}
 .code{font-family:ui-monospace,Consolas,monospace;font-size:26px;font-weight:700;
 letter-spacing:.14em;color:var(--mint)}
 .acct .t{font-size:12px;color:var(--dim);margin:10px 0 0}
+.acstat{margin-top:16px;padding-top:15px;border-top:1px solid var(--line);
+display:flex;align-items:baseline;gap:9px}
+.acstat .v{font-size:27px;font-weight:700;color:var(--mint);
+font-family:ui-monospace,Consolas,monospace}
+.acstat .k{font-size:13px;color:var(--dim)}
+.notifrow{display:flex;align-items:center;gap:12px;margin-top:12px}
+.nleft{flex:1;min-width:0}
+.notifrow h4{margin:0;font-size:14px;font-weight:600;color:var(--text);
+text-transform:none;letter-spacing:0}
+.notifrow .t{margin:3px 0 0;font-size:12px;color:var(--dim)}
+.nbtn{background:var(--mint);color:#0d2b26;border:none;border-radius:9px;
+padding:9px 15px;font-size:13px;font-weight:700;flex-shrink:0}
+.nbtn:disabled{opacity:.6}
 .form{display:flex;flex-direction:column;gap:13px;max-width:400px}
 .form label{display:flex;flex-direction:column;gap:6px;font-size:12px;
 color:var(--dim);font-weight:600}
@@ -408,7 +421,7 @@ padding:6px 0 0;cursor:pointer}
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 32</span></div>
+<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 34</span></div>
 
 <script>
 /* ================= proxy =================
@@ -2101,13 +2114,38 @@ function adSlot(){
   return AD_SLOT_HTML ? '<div class="adslot">'+AD_SLOT_HTML+'</div>' : "";
 }
 
+/* Tags outbound links so the publisher's own analytics show where the
+   reader came from. utm_source is the standard every analytics tool reads,
+   so this needs no agreement from them to start working — and when you do
+   eventually email Comikey or Manta, the number is already in their
+   dashboard rather than something you're asking them to take on trust.
+
+   Existing query strings are preserved: WEBTOON links carry title_no, and
+   dropping it would break the link entirely. */
+var REF_TAG = "mangawhere";
+
+function tagged(url){
+  if(!REF_TAG) return url;
+  try{
+    var u=new URL(url);
+    // Don't overwrite a campaign the publisher already set.
+    if(!u.searchParams.get("utm_source")){
+      u.searchParams.set("utm_source", REF_TAG);
+      u.searchParams.set("utm_medium", "referral");
+    }
+    return u.toString();
+  }catch(e){
+    return url;   // malformed URL — send it untouched rather than breaking it
+  }
+}
+
 function linkRow(l){
   var info=platformInfo(l.site);
   var cost=info?info.cost:"";
   var label=info?info.note:(l.official?"Official publisher":"Reference");
   var lang=(l.language&&l.language.toLowerCase().indexOf("english")===-1)?" · "+esc(l.language):"";
   return '<a class="read'+(l.official?"":" no")+(cost?" c-"+cost:"")+
-   '" target="_blank" rel="noopener" href="'+esc(l.url)+'">'+
+   '" target="_blank" rel="noopener" href="'+esc(tagged(l.url))+'">'+
    '<span><span class="n">'+esc(l.site||"Link")+'</span><br>'+
    '<span class="t">'+esc(label)+lang+'</span></span>'+
    (cost?'<span class="tagcost '+cost+'">'+(cost==="free"?"FREE":cost==="mixed"?"FREE-ISH":
@@ -2523,6 +2561,52 @@ function authView(mode, thenTrack){
   window.scrollTo(0,0);
 }
 
+/* Speaks about this device only, and offers the fix when it can. */
+function showNotifState(){
+  var st=document.getElementById("nstate"), sub=document.getElementById("nsub"),
+      btn=document.getElementById("nbtn");
+  if(!st) return;
+
+  var sup=pushSupport();
+  var perm=(typeof Notification!=="undefined") ? Notification.permission : "unsupported";
+
+  if(perm==="granted" && pushState.endpoint){
+    st.textContent="Notifications are on";
+    sub.textContent="You'll hear about new chapters on this device.";
+    btn.hidden=true;
+    return;
+  }
+  if(perm==="denied"){
+    st.textContent="Notifications are blocked";
+    sub.textContent="Tap the padlock in the address bar to allow them.";
+    btn.hidden=true;
+    return;
+  }
+  if(sup.reason==="ios:add-to-home-screen"){
+    st.textContent="Notifications need the home screen";
+    sub.textContent="Tap Share, then Add to Home Screen, and open it from there.";
+    btn.hidden=true;
+    return;
+  }
+  if(!sup.ok && sup.reason!=="no backend configured"){
+    st.textContent="Notifications unavailable";
+    sub.textContent=sup.reason;
+    btn.hidden=true;
+    return;
+  }
+  st.textContent="Notifications are off";
+  sub.textContent="Turn them on to hear when a chapter drops.";
+  btn.hidden=false;
+  btn.onclick=function(){
+    btn.disabled=true; btn.textContent="…";
+    enablePush().then(function(r){
+      btn.disabled=false; btn.textContent="Turn on";
+      showNotifState();
+      if(!r.ok) sub.textContent="Couldn't turn them on — "+r.reason;
+    });
+  };
+}
+
 function signOut(){
   api("/api/logout",{method:"POST"}).catch(function(){});
   saveAuth(null);
@@ -2562,10 +2646,17 @@ function accountView(){
         '<div class="whoin"><h4>'+esc(auth.name||"")+'</h4>'+
           '<p>'+esc(auth.email||"")+'</p></div>'+
       '</div>'+
-      '<div class="boxes" style="margin-top:14px">'+
-        '<div><span class="k">Tracking</span><span class="v" id="ac-tracked">—</span></div>'+
-        '<div><span class="k">Devices</span><span class="v" id="ac-devices">—</span></div>'+
+      '<div class="acstat">'+
+        '<span class="v" id="ac-tracked">—</span>'+
+        '<span class="k" id="ac-trackedl">series tracked</span>'+
       '</div>'+
+    '</div>'+
+    // A device count is a number nobody can act on. Whether alerts reach
+    // THIS phone is the thing worth knowing, and it comes with a fix.
+    '<div class="card notifrow" id="notifrow">'+
+      '<div class="nleft"><h4 id="nstate">Notifications</h4>'+
+        '<p class="t" id="nsub">checking…</p></div>'+
+      '<button class="nbtn" id="nbtn" hidden>Turn on</button>'+
     '</div>'+
     '<p class="hint">Sign in with the same email on any other phone or laptop '+
       'and your list is there.</p>'+
@@ -2574,14 +2665,16 @@ function accountView(){
   document.getElementById("ab").onclick=function(){ setTab("home"); };
   document.getElementById("signout").onclick=signOut;
 
+  showNotifState();
+
   api("/api/me").then(function(d){
     if(!d.signed_in){ saveAuth(null); accountView(); return; }
-    document.getElementById("ac-tracked").textContent=d.tracked;
-    document.getElementById("ac-devices").textContent=d.devices;
+    var n=d.tracked;
+    document.getElementById("ac-tracked").textContent=n;
+    document.getElementById("ac-trackedl").textContent=
+      n===1 ? "series tracked" : "series tracked";
   }).catch(function(e){
-    // Don't leave dashes sitting there with no explanation.
     document.getElementById("ac-tracked").textContent=getList().length;
-    document.getElementById("ac-devices").textContent="1";
     console.log("[mangawhere] /api/me unreachable:", e.message);
   });
   window.scrollTo(0,0);
