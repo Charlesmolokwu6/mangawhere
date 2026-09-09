@@ -411,8 +411,9 @@ font-size:15px;line-height:1;padding:8px 12px;border-radius:9px;flex-shrink:0}
 .readerScroll{flex:1;overflow-y:auto;overflow-x:hidden;
 -webkit-overflow-scrolling:touch;position:relative}
 .readerScroll .pg{display:block;width:100%;min-height:30vh;background:var(--surf);
-opacity:0;transition:opacity .25s}
+opacity:0;transition:opacity .25s;margin:0}
 .readerScroll .pg.on{opacity:1}
+.readerScroll .pg img{display:block;max-width:800px;width:100%;height:auto;margin:0 auto}
 .readerEnd{padding:44px 16px 64px;text-align:center;color:var(--dim);font-size:13px}
 .readerEnd .readerBtn{margin-top:14px;display:inline-block}
 .readerProgress{position:absolute;left:0;right:0;bottom:0;height:3px;
@@ -461,7 +462,7 @@ font-family:ui-monospace,Consolas,monospace;pointer-events:none}
 </div>
 
 <!-- Full-screen reader overlay. Markup only — MangaReader (below, in the
-     script) fills #readerScroll and wires the buttons. Empty/closed by
+     script) fills #reader-view and wires the buttons. Empty/closed by
      default: nothing here implies a content source. -->
 <div class="reader" id="reader-modal" role="dialog" aria-modal="true" aria-label="Chapter reader" hidden>
   <div class="readerTop">
@@ -473,7 +474,7 @@ font-family:ui-monospace,Consolas,monospace;pointer-events:none}
     <button class="readerBtn" id="readerPrev" aria-label="Previous Chapter" title="Previous Chapter">‹</button>
     <button class="readerBtn" id="readerNext" aria-label="Next Chapter" title="Next Chapter">›</button>
   </div>
-  <div class="readerScroll" id="readerScroll"></div>
+  <div class="readerScroll" id="reader-view"></div>
   <div class="readerProgress"><i id="readerProgressBar"></i></div>
   <div class="readerCount" id="readerCount"></div>
 </div>
@@ -3023,7 +3024,7 @@ updateBadge();
    visibly working without depending on a real chapter source. */
 var MangaReader=(function(){
   var el=document.getElementById("reader-modal");
-  var scroller=document.getElementById("readerScroll");
+  var scroller=document.getElementById("reader-view");
   var titleN=document.getElementById("readerTitleN");
   var titleC=document.getElementById("readerTitleC");
   var prevBtn=document.getElementById("readerPrev");
@@ -3166,6 +3167,25 @@ var MangaReader=(function(){
 
   return {open:open, close:close};
 })();
+
+/* Global entry points matching the simpler openReader(title, images)
+   call shape. Both delegate to MangaReader above — same #reader-modal
+   overlay, same #reader-view container, same lazy-loading/scroll-
+   position-memory/keyboard behavior already wired there. onPrev/onNext
+   are optional trailing args: pass them to make the Left/Right keys
+   actually switch chapters; omit them and those keys simply do
+   nothing (Escape still closes). */
+function openReader(chapterTitle, imageUrlsArray, onPrev, onNext){
+  MangaReader.open({
+    title: chapterTitle,
+    pages: imageUrlsArray,
+    onPrev: onPrev || null,
+    onNext: onNext || null
+  });
+}
+function closeReader(){
+  MangaReader.close();
+}
 
 /* ---- demo: proves the reader works without depending on a real
    chapter source. Generates its own placeholder pages (inline SVG data
