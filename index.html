@@ -422,6 +422,25 @@ background:var(--line)}
 .readerCount{position:absolute;right:12px;bottom:10px;font-size:11px;
 color:var(--dim);background:rgba(20,16,26,.82);padding:3px 9px;border-radius:20px;
 font-family:ui-monospace,Consolas,monospace;pointer-events:none}
+
+/* ================= library panel =================
+   Search/browse UI over library/index.json -- the small set of series
+   actually scraped and hosted as static files under library/, not the
+   full external catalog. "Read Now" opens MangaReader with that
+   chapter's real page files. */
+.libpanel{position:fixed;inset:0;z-index:99;background:var(--bg);display:flex;
+flex-direction:column}
+.libpanel[hidden]{display:none}
+.libTop{display:flex;align-items:center;gap:8px;padding:10px 12px;
+border-bottom:1px solid var(--line);flex-shrink:0}
+.libTop input{flex:1;background:var(--surf);border:1px solid var(--line);color:var(--text);
+border-radius:9px;padding:9px 12px;font-size:14px;min-width:0}
+.libResults{flex:1;overflow-y:auto;padding:14px 16px 40px}
+.libSeries{margin-bottom:22px}
+.libSeries h3{margin:0 0 8px;font-size:15px;font-weight:700}
+.libChapterRow{display:flex;align-items:center;justify-content:space-between;gap:10px;
+padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+.libEmpty{color:var(--dim);font-size:13px;text-align:center;padding:60px 16px}
 </style>
 </head>
 <body>
@@ -477,6 +496,17 @@ font-family:ui-monospace,Consolas,monospace;pointer-events:none}
   <div class="readerScroll" id="reader-view"></div>
   <div class="readerProgress"><i id="readerProgressBar"></i></div>
   <div class="readerCount" id="readerCount"></div>
+</div>
+
+<!-- Library search/browse panel. Lists library/index.json -- the series
+     actually scraped and hosted under library/, not the full external
+     catalog -- and opens MangaReader on "Read Now". -->
+<div class="libpanel" id="libpanel" role="dialog" aria-modal="true" aria-label="Library" hidden>
+  <div class="libTop">
+    <button class="readerBtn back" id="libClose" aria-label="Back">← Back</button>
+    <input type="text" id="libSearch" placeholder="Search the library…" autocomplete="off">
+  </div>
+  <div class="libResults" id="libResults"></div>
 </div>
 
 <div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 34</span></div>
@@ -3187,36 +3217,105 @@ function closeReader(){
   MangaReader.close();
 }
 
-/* ---- demo: proves the reader works without depending on a real
-   chapter source. Generates its own placeholder pages (inline SVG data
-   URIs — nothing fetched from anywhere) and exposes a small button so
-   it's actually reachable, not just callable from the console. Safe to
-   delete once MangaReader is wired to a real manifest elsewhere. ---- */
-(function(){
-  function demoPages(setLabel, n){
-    var colors=["#3fe0c8","#ffb454","#ff6b6b","#a094ad","#8b7cf6"];
-    var out=[];
-    for(var i=1;i<=n;i++){
-      var svg="<svg xmlns='http://www.w3.org/2000/svg' width='800' height='1200'>"+
-        "<rect width='800' height='1200' fill='"+colors[i%colors.length]+"'/>"+
-        "<text x='400' y='600' font-size='140' fill='#14101a' text-anchor='middle' "+
-        "font-family='sans-serif' font-weight='700'>"+setLabel+"-"+i+"</text></svg>";
-      out.push("data:image/svg+xml;utf8,"+encodeURIComponent(svg));
-    }
-    return out;
+/* ---- library panel ----
+   Search/browse UI over library/index.json: the series that have
+   actually been scraped and are hosted as static files under
+   library/{series}/{chapter}/NNN.jpg, produced by the scraper/
+   pipeline (catalog_crawler -> index_crawler -> sequential_page_extractor
+   / dom_asset_extractor -> series_downloader -> this JSON index). This
+   is deliberately NOT the full external site catalog -- only what's
+   actually downloaded and present in this repo is readable here.
+
+   library/index.json shape:
+     {"series": [{"title", "path", "chapters": [{"chapter","path","pageCount"}]}]}
+   Each chapter's real page filenames live in that series' own
+   library/{path}manifest.json, fetched lazily on "Read Now" rather than
+   duplicated into the top-level index (keeps it small as the library
+   grows). */
+var LIBRARY_INDEX_URL="library/index.json";
+var libraryIndexPromise=null;
+
+function loadLibraryIndex(){
+  if(!libraryIndexPromise){
+    libraryIndexPromise=fetch(LIBRARY_INDEX_URL)
+      .then(function(r){ if(!r.ok) throw new Error("no library index"); return r.json(); })
+      .catch(function(){ return {series:[]}; });
   }
-  function openDemo(chapterNum){
-    MangaReader.open({
-      key:"demo|ch"+chapterNum,
-      title:"Reader demo",
-      chapter:"Chapter "+chapterNum,
-      pages:demoPages("Ch"+chapterNum, 6),
-      onPrev: chapterNum>1 ? function(){ openDemo(chapterNum-1); } : null,
-      onNext: chapterNum<3 ? function(){ openDemo(chapterNum+1); } : null
+  return libraryIndexPromise;
+}
+
+function openLibraryChapter(series, chapterIndex){
+  var chapterMeta=series.chapters[chapterIndex];
+  if(!chapterMeta) return;
+  fetch("library/"+series.path+"manifest.json")
+    .then(function(r){ return r.json(); })
+    .then(function(manifest){
+      var chapter=manifest.chapters[chapterIndex];
+      var base="library/"+series.path+chapter.path;
+      var pages=chapter.pages.map(function(name){ return base+name; });
+      MangaReader.open({
+        key:series.path+"|"+chapter.path,
+        title:series.title,
+        chapter:chapter.chapter,
+        pages:pages,
+        onPrev: chapterIndex>0 ? function(){ openLibraryChapter(series, chapterIndex-1); } : null,
+        onNext: chapterIndex<series.chapters.length-1 ? function(){ openLibraryChapter(series, chapterIndex+1); } : null
+      });
     });
+}
+
+function renderLibraryResults(query, index){
+  var results=document.getElementById("libResults");
+  var q=(query||"").trim().toLowerCase();
+  var matches=index.series.filter(function(s){
+    return !q || s.title.toLowerCase().indexOf(q)!==-1;
+  });
+  if(!matches.length){
+    results.innerHTML='<div class="libEmpty">'+
+      (index.series.length ? "No matches." : "Library is empty — nothing scraped yet.")+
+      "</div>";
+    return;
   }
-  var btn=document.getElementById("readerDemoBtn");
-  if(btn) btn.onclick=function(){ openDemo(1); };
+  results.innerHTML=matches.map(function(s){
+    var rows=s.chapters.map(function(c, i){
+      return '<div class="libChapterRow"><span>'+esc(c.chapter)+" ("+c.pageCount+" pages)</span>"+
+        '<button class="readerBtn libReadBtn" data-series="'+esc(s.path)+'" data-idx="'+i+'">Read Now</button></div>';
+    }).join("");
+    return '<div class="libSeries"><h3>'+esc(s.title)+"</h3>"+rows+"</div>";
+  }).join("");
+
+  Array.prototype.forEach.call(results.querySelectorAll(".libReadBtn"), function(btn){
+    btn.onclick=function(){
+      var seriesPath=btn.getAttribute("data-series");
+      var idx=Number(btn.getAttribute("data-idx"));
+      var series=matches.filter(function(s){ return s.path===seriesPath; })[0];
+      if(series) openLibraryChapter(series, idx);
+    };
+  });
+}
+
+(function(){
+  var panel=document.getElementById("libpanel");
+  var search=document.getElementById("libSearch");
+  var openBtn=document.getElementById("readerDemoBtn");
+  var closeBtn=document.getElementById("libClose");
+
+  if(openBtn){
+    openBtn.textContent="📖 Library";
+    openBtn.title="Search the library";
+    openBtn.onclick=function(){
+      panel.hidden=false;
+      loadLibraryIndex().then(function(index){ renderLibraryResults(search.value, index); });
+      search.focus();
+    };
+  }
+  closeBtn.onclick=function(){ panel.hidden=true; };
+  search.oninput=function(){
+    loadLibraryIndex().then(function(index){ renderLibraryResults(search.value, index); });
+  };
+  document.addEventListener("keydown", function(e){
+    if(!panel.hidden && e.key==="Escape") panel.hidden=true;
+  });
 })();
 </script>
 </body>
