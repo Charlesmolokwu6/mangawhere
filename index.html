@@ -394,7 +394,7 @@ padding:6px 0 0;cursor:pointer}
    MangaReader.open({pages:[...]}) and has no idea where those URLs
    came from. Wiring it to an actual chapter source is a separate
    concern; see the demo call near the end of the script. */
-.reader{position:fixed;inset:0;z-index:100;background:#0a0810;display:flex;
+.reader{position:fixed;inset:0;z-index:100;background:#0d0d0d;display:flex;
 flex-direction:column}
 .reader[hidden]{display:none}
 .readerTop{display:flex;align-items:center;gap:8px;padding:10px 12px;
@@ -407,7 +407,7 @@ overflow:hidden;text-overflow:ellipsis}
 .readerBtn{background:var(--surf);border:1px solid var(--line);color:var(--text);
 font-size:15px;line-height:1;padding:8px 12px;border-radius:9px;flex-shrink:0}
 .readerBtn:disabled{opacity:.35}
-.readerBtn.x{color:var(--dim);font-size:17px}
+.readerBtn.back{color:var(--dim);font-size:13px;font-weight:600}
 .readerScroll{flex:1;overflow-y:auto;overflow-x:hidden;
 -webkit-overflow-scrolling:touch;position:relative}
 .readerScroll .pg{display:block;width:100%;min-height:30vh;background:var(--surf);
@@ -463,15 +463,15 @@ font-family:ui-monospace,Consolas,monospace;pointer-events:none}
 <!-- Full-screen reader overlay. Markup only — MangaReader (below, in the
      script) fills #readerScroll and wires the buttons. Empty/closed by
      default: nothing here implies a content source. -->
-<div class="reader" id="reader" role="dialog" aria-modal="true" aria-label="Chapter reader" hidden>
+<div class="reader" id="reader-modal" role="dialog" aria-modal="true" aria-label="Chapter reader" hidden>
   <div class="readerTop">
-    <button class="readerBtn x" id="readerClose" aria-label="Close reader">×</button>
+    <button class="readerBtn back" id="readerClose" aria-label="Back">← Back</button>
     <div class="readerTitle">
       <div class="n" id="readerTitleN"></div>
       <div class="c" id="readerTitleC"></div>
     </div>
-    <button class="readerBtn" id="readerPrev" aria-label="Previous chapter">‹</button>
-    <button class="readerBtn" id="readerNext" aria-label="Next chapter">›</button>
+    <button class="readerBtn" id="readerPrev" aria-label="Previous Chapter" title="Previous Chapter">‹</button>
+    <button class="readerBtn" id="readerNext" aria-label="Next Chapter" title="Next Chapter">›</button>
   </div>
   <div class="readerScroll" id="readerScroll"></div>
   <div class="readerProgress"><i id="readerProgressBar"></i></div>
@@ -3022,7 +3022,7 @@ updateBadge();
    placeholder pages (inline SVGs, nothing fetched) so the component is
    visibly working without depending on a real chapter source. */
 var MangaReader=(function(){
-  var el=document.getElementById("reader");
+  var el=document.getElementById("reader-modal");
   var scroller=document.getElementById("readerScroll");
   var titleN=document.getElementById("readerTitleN");
   var titleC=document.getElementById("readerTitleC");
