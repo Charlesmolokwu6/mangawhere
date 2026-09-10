@@ -3247,14 +3247,18 @@ function loadLibraryIndex(){
 function openLibraryChapter(series, chapterIndex){
   var chapterMeta=series.chapters[chapterIndex];
   if(!chapterMeta) return;
+  // manifest.json holds the *source's own* page URLs — nothing is
+  // downloaded or re-hosted here. Each is routed through the existing
+  // proxy (via(), same one the app already uses for MangaUpdates/TikTok)
+  // since some sources 403 a direct browser request without the right
+  // Referer, which only a server-side fetch can supply.
   fetch("library/"+series.path+"manifest.json")
     .then(function(r){ return r.json(); })
     .then(function(manifest){
       var chapter=manifest.chapters[chapterIndex];
-      var base="library/"+series.path+chapter.path;
-      var pages=chapter.pages.map(function(name){ return base+name; });
+      var pages=chapter.pages.map(function(url){ return via(url); });
       MangaReader.open({
-        key:series.path+"|"+chapter.path,
+        key:series.path+"|"+chapter.chapter,
         title:series.title,
         chapter:chapter.chapter,
         pages:pages,
