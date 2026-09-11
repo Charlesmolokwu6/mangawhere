@@ -387,12 +387,71 @@ padding:6px 0 0;cursor:pointer}
 .back{background:none;border:none;color:var(--dim);font-size:13px;padding:0;margin-bottom:14px}
 .foot{border-top:1px solid var(--line);padding:14px;text-align:center;font-size:12px;color:var(--dim)}
 .ver{display:block;margin-top:4px;font-family:ui-monospace,Consolas,monospace;font-size:10px;opacity:.5}
+
+/* ================= reader overlay =================
+   A full-screen, continuous-scroll image viewer. Deliberately
+   content-agnostic — it renders whatever page list it's handed via
+   MangaReader.open({pages:[...]}) and has no idea where those URLs
+   came from. Wiring it to an actual chapter source is a separate
+   concern; see the demo call near the end of the script. */
+.reader{position:fixed;inset:0;z-index:100;background:#0d0d0d;display:flex;
+flex-direction:column}
+.reader[hidden]{display:none}
+.readerTop{display:flex;align-items:center;gap:8px;padding:10px 12px;
+border-bottom:1px solid var(--line);background:var(--bg);flex-shrink:0}
+.readerTitle{flex:1;min-width:0}
+.readerTitle .n{font-size:13px;font-weight:700;white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis}
+.readerTitle .c{font-size:11px;color:var(--dim);white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis}
+.readerBtn{background:var(--surf);border:1px solid var(--line);color:var(--text);
+font-size:15px;line-height:1;padding:8px 12px;border-radius:9px;flex-shrink:0}
+.readerBtn:disabled{opacity:.35}
+.readerBtn.back{color:var(--dim);font-size:13px;font-weight:600}
+.readerScroll{flex:1;overflow-y:auto;overflow-x:hidden;
+-webkit-overflow-scrolling:touch;position:relative}
+.readerScroll .pg{display:block;width:100%;min-height:30vh;background:var(--surf);
+opacity:0;transition:opacity .25s;margin:0}
+.readerScroll .pg.on{opacity:1}
+.readerScroll .pg img{display:block;max-width:800px;width:100%;height:auto;margin:0 auto}
+.readerEnd{padding:44px 16px 64px;text-align:center;color:var(--dim);font-size:13px}
+.readerEnd .readerBtn{margin-top:14px;display:inline-block}
+.readerProgress{position:absolute;left:0;right:0;bottom:0;height:3px;
+background:var(--line)}
+.readerProgress i{display:block;height:100%;background:var(--mint);width:0%}
+.readerCount{position:absolute;right:12px;bottom:10px;font-size:11px;
+color:var(--dim);background:rgba(20,16,26,.82);padding:3px 9px;border-radius:20px;
+font-family:ui-monospace,Consolas,monospace;pointer-events:none}
+
+/* ================= library panel =================
+   Search/browse UI over the backend's /api/library -- a small,
+   Claude-curated set of series the app can actually open, not the
+   full external catalog. "Read Now" opens MangaReader, streaming that
+   chapter's pages from their source through the existing proxy. */
+.libpanel{position:fixed;inset:0;z-index:99;background:var(--bg);display:flex;
+flex-direction:column}
+.libpanel[hidden]{display:none}
+.libTop{display:flex;align-items:center;gap:8px;padding:10px 12px;
+border-bottom:1px solid var(--line);flex-shrink:0}
+.libTop input{flex:1;background:var(--surf);border:1px solid var(--line);color:var(--text);
+border-radius:9px;padding:9px 12px;font-size:14px;min-width:0}
+.libResults{flex:1;overflow-y:auto;padding:14px 16px 40px}
+.libSeries{margin-bottom:22px}
+.libSeries h3{margin:0 0 8px;font-size:15px;font-weight:700}
+.libChapterRow{display:flex;align-items:center;justify-content:space-between;gap:10px;
+padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
+.libEmpty{color:var(--dim);font-size:13px;text-align:center;padding:60px 16px}
 </style>
 </head>
 <body>
 
 <div class="top">
   <button class="logo" id="home">manga<b>where</b></button>
+  <!-- Demo trigger for the reader overlay — placed here (always
+       visible, never covered by the fixed bottom tab bar) rather than
+       in the footer. Safe to remove once MangaReader is wired to a
+       real chapter source with its own entry point. -->
+  <button class="listbtn" id="readerDemoBtn" title="Preview the chapter reader">▶ Reader demo</button>
   <button class="listbtn acctbtn" id="acctbtn" title="Your devices">⚙</button>
 </div>
 
@@ -419,6 +478,35 @@ padding:6px 0 0;cursor:pointer}
   <span>Add Manga Where to your home screen</span>
   <button id="installgo">Install</button>
   <button class="x" id="installno" aria-label="Dismiss">×</button>
+</div>
+
+<!-- Full-screen reader overlay. Markup only — MangaReader (below, in the
+     script) fills #reader-view and wires the buttons. Empty/closed by
+     default: nothing here implies a content source. -->
+<div class="reader" id="reader-modal" role="dialog" aria-modal="true" aria-label="Chapter reader" hidden>
+  <div class="readerTop">
+    <button class="readerBtn back" id="readerClose" aria-label="Back">← Back</button>
+    <div class="readerTitle">
+      <div class="n" id="readerTitleN"></div>
+      <div class="c" id="readerTitleC"></div>
+    </div>
+    <button class="readerBtn" id="readerPrev" aria-label="Previous Chapter" title="Previous Chapter">‹</button>
+    <button class="readerBtn" id="readerNext" aria-label="Next Chapter" title="Next Chapter">›</button>
+  </div>
+  <div class="readerScroll" id="reader-view"></div>
+  <div class="readerProgress"><i id="readerProgressBar"></i></div>
+  <div class="readerCount" id="readerCount"></div>
+</div>
+
+<!-- Library search/browse panel. Lists the backend's /api/library -- a
+     small curated set of series the app can actually open, not the full
+     external catalog -- and opens MangaReader on "Read Now". -->
+<div class="libpanel" id="libpanel" role="dialog" aria-modal="true" aria-label="Library" hidden>
+  <div class="libTop">
+    <button class="readerBtn back" id="libClose" aria-label="Back">← Back</button>
+    <input type="text" id="libSearch" placeholder="Search the library…" autocomplete="off">
+  </div>
+  <div class="libResults" id="libResults"></div>
 </div>
 
 <div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 34</span></div>
@@ -2942,6 +3030,291 @@ loadAuth();
 homeView();
 openFromUrl();
 updateBadge();
+
+/* ================= reader =================
+   Full-screen, continuous vertical-scroll chapter viewer.
+
+   Deliberately content-agnostic: MangaReader.open() takes a plain list
+   of page image URLs and has no fetch logic of its own — no notion of
+   "sites", no default content, nothing wired to any source. To show a
+   real chapter, call it with URLs you actually have the right to
+   display, e.g.:
+
+     MangaReader.open({
+       key: "series-slug|chapter-3",     // used to remember scroll position
+       title: "Series Name",
+       chapter: "Chapter 3",
+       pages: ["https://.../001.jpg", "https://.../002.jpg", ...],
+       onPrev: function(){ ... },        // omit/null to disable the button
+       onNext: function(){ ... }
+     });
+
+   The demo call at the very end of this block generates its own
+   placeholder pages (inline SVGs, nothing fetched) so the component is
+   visibly working without depending on a real chapter source. */
+var MangaReader=(function(){
+  var el=document.getElementById("reader-modal");
+  var scroller=document.getElementById("reader-view");
+  var titleN=document.getElementById("readerTitleN");
+  var titleC=document.getElementById("readerTitleC");
+  var prevBtn=document.getElementById("readerPrev");
+  var nextBtn=document.getElementById("readerNext");
+  var closeBtn=document.getElementById("readerClose");
+  var progressBar=document.getElementById("readerProgressBar");
+  var countEl=document.getElementById("readerCount");
+  var current=null;      // the manifest currently open, or null
+  var pageEls=[];        // one wrapper element per page, in order
+  var io=null;           // IntersectionObserver tracking scroll position
+  var lastFocus=null;    // element to restore focus to on close
+
+  function posKeyOf(m){ return "mw.readerpos."+(m.key||m.title+"|"+m.chapter); }
+
+  function clearScroll(){
+    if(io){ io.disconnect(); io=null; }
+    pageEls=[];
+    scroller.innerHTML="";
+  }
+
+  function updateCount(i){
+    if(!current) return;
+    countEl.textContent=(i+1)+" / "+current.pages.length;
+    progressBar.style.width=(((i+1)/current.pages.length)*100)+"%";
+  }
+
+  function render(manifest){
+    clearScroll();
+    current=manifest;
+    titleN.textContent=manifest.title||"";
+    titleC.textContent=manifest.chapter||"";
+    prevBtn.disabled=!manifest.onPrev;
+    nextBtn.disabled=!manifest.onNext;
+    countEl.textContent="";
+    progressBar.style.width="0%";
+
+    var frag=document.createDocumentFragment();
+    manifest.pages.forEach(function(src, i){
+      var wrap=document.createElement("div");
+      wrap.className="pg";
+      wrap.dataset.i=String(i);
+      var img=document.createElement("img");
+      img.loading="lazy";
+      img.decoding="async";
+      img.alt="Page "+(i+1);
+      img.onload=function(){ wrap.classList.add("on"); };
+      img.onerror=function(){ wrap.classList.add("on"); wrap.style.background="var(--bad)"; };
+      img.src=src;
+      wrap.appendChild(img);
+      frag.appendChild(wrap);
+      pageEls.push(wrap);
+    });
+
+    var end=document.createElement("div");
+    end.className="readerEnd";
+    end.textContent="End of chapter.";
+    if(manifest.onNext){
+      var nb=document.createElement("button");
+      nb.className="readerBtn";
+      nb.textContent="Next chapter ›";
+      nb.onclick=function(){ manifest.onNext(); };
+      end.appendChild(document.createElement("br"));
+      end.appendChild(nb);
+    }
+    frag.appendChild(end);
+    scroller.appendChild(frag);
+
+    // Track whichever page is most visible, for the counter + progress
+    // bar, and so a re-open resumes near where they left off.
+    //
+    // A callback only ever receives the entries whose intersection state
+    // just changed, not every element currently on screen — so picking
+    // "best" from one callback's entries alone is wrong: a barely-visible
+    // page crossing a threshold can overwrite the count while an earlier,
+    // fully-visible page is still on screen. `ratios` persists every
+    // element's last-known ratio across calls; "best" is recomputed from
+    // that full set each time, not from just the latest batch.
+    var ratios={};
+    io=new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        ratios[en.target.dataset.i]=en.isIntersecting ? en.intersectionRatio : 0;
+      });
+      var bestI=null, bestR=-1;
+      for(var k in ratios){
+        if(ratios[k]>bestR){ bestR=ratios[k]; bestI=Number(k); }
+      }
+      if(bestI!==null){
+        updateCount(bestI);
+        try{ store.set(posKeyOf(manifest), String(bestI)); }catch(e){}
+      }
+    }, {root:scroller, threshold:[0,0.25,0.5,0.75,1]});
+    pageEls.forEach(function(w){ io.observe(w); });
+
+    var savedIndex=null;
+    try{
+      var v=store.get(posKeyOf(manifest));
+      if(v!=null) savedIndex=Number(v);
+    }catch(e){}
+    if(savedIndex && pageEls[savedIndex]){
+      pageEls[savedIndex].scrollIntoView({block:"start"});
+    } else {
+      scroller.scrollTop=0;
+      updateCount(0);
+    }
+  }
+
+  function open(manifest){
+    if(!manifest || !manifest.pages || !manifest.pages.length) return;
+    // open() also drives chapter-to-chapter navigation while already
+    // open (onPrev/onNext call it again). Only capture lastFocus on a
+    // real closed->open transition — otherwise it ends up pointing at
+    // whatever in-modal button was just clicked, which clearScroll()
+    // then removes from the DOM on the very next render, and focusing a
+    // detached element is a silent no-op.
+    if(el.hidden) lastFocus=document.activeElement;
+    render(manifest);
+    el.hidden=false;
+    document.body.style.overflow="hidden";
+    closeBtn.focus();
+  }
+
+  function close(){
+    if(el.hidden) return;
+    el.hidden=true;
+    document.body.style.overflow="";
+    clearScroll();
+    current=null;
+    if(lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+
+  closeBtn.onclick=close;
+  prevBtn.onclick=function(){ if(current && current.onPrev) current.onPrev(); };
+  nextBtn.onclick=function(){ if(current && current.onNext) current.onNext(); };
+  document.addEventListener("keydown", function(e){
+    if(el.hidden) return;
+    if(e.key==="Escape") close();
+    else if(e.key==="ArrowLeft" && current && current.onPrev) current.onPrev();
+    else if(e.key==="ArrowRight" && current && current.onNext) current.onNext();
+  });
+
+  return {open:open, close:close};
+})();
+
+/* Global entry points matching the simpler openReader(title, images)
+   call shape. Both delegate to MangaReader above — same #reader-modal
+   overlay, same #reader-view container, same lazy-loading/scroll-
+   position-memory/keyboard behavior already wired there. onPrev/onNext
+   are optional trailing args: pass them to make the Left/Right keys
+   actually switch chapters; omit them and those keys simply do
+   nothing (Escape still closes). */
+function openReader(chapterTitle, imageUrlsArray, onPrev, onNext){
+  MangaReader.open({
+    title: chapterTitle,
+    pages: imageUrlsArray,
+    onPrev: onPrev || null,
+    onNext: onNext || null
+  });
+}
+function closeReader(){
+  MangaReader.close();
+}
+
+/* ---- library panel ----
+   Search/browse UI over the backend's reader library (a small,
+   Claude-curated set of series the app can actually open, as opposed to
+   the rest of the site which only tracks release numbers and links out).
+   The git repo holds none of this -- no scraped URLs, no images -- it
+   lives in the backend's KV store; this panel just calls its API.
+
+   GET /api/library returns {"series": [{"title","key",
+   "chapters": [{"chapter","pageCount"}]}]} -- names and counts only, so
+   the list stays small. Each chapter's real page-image URLs (the SOURCE
+   SITE's own, never downloaded or re-hosted) live behind
+   GET /api/library/:key, fetched lazily on "Read Now" and routed through
+   the existing proxy (via(), same one already used for MangaUpdates/
+   TikTok) since some sources 403 a direct browser request without the
+   right Referer -- something only a server-side fetch can supply. */
+var libraryIndexPromise=null;
+
+function loadLibraryIndex(){
+  if(!libraryIndexPromise){
+    libraryIndexPromise=(API_BASE ? fetch(API_BASE+"/api/library") : Promise.reject())
+      .then(function(r){ if(!r.ok) throw new Error("no library index"); return r.json(); })
+      .catch(function(){ return {series:[]}; });
+  }
+  return libraryIndexPromise;
+}
+
+function openLibraryChapter(series, chapterIndex){
+  var chapterMeta=series.chapters[chapterIndex];
+  if(!chapterMeta) return;
+  fetch(API_BASE+"/api/library/"+encodeURIComponent(series.key))
+    .then(function(r){ return r.json(); })
+    .then(function(full){
+      var chapter=full.chapters[chapterIndex];
+      var pages=chapter.pages.map(function(url){ return via(url); });
+      MangaReader.open({
+        key:series.key+"|"+chapter.chapter,
+        title:series.title,
+        chapter:chapter.chapter,
+        pages:pages,
+        onPrev: chapterIndex>0 ? function(){ openLibraryChapter(series, chapterIndex-1); } : null,
+        onNext: chapterIndex<series.chapters.length-1 ? function(){ openLibraryChapter(series, chapterIndex+1); } : null
+      });
+    });
+}
+
+function renderLibraryResults(query, index){
+  var results=document.getElementById("libResults");
+  var q=(query||"").trim().toLowerCase();
+  var matches=index.series.filter(function(s){
+    return !q || s.title.toLowerCase().indexOf(q)!==-1;
+  });
+  if(!matches.length){
+    results.innerHTML='<div class="libEmpty">'+
+      (index.series.length ? "No matches." : "Library is empty — nothing scraped yet.")+
+      "</div>";
+    return;
+  }
+  results.innerHTML=matches.map(function(s){
+    var rows=s.chapters.map(function(c, i){
+      return '<div class="libChapterRow"><span>'+esc(c.chapter)+" ("+c.pageCount+" pages)</span>"+
+        '<button class="readerBtn libReadBtn" data-series="'+esc(s.key)+'" data-idx="'+i+'">Read Now</button></div>';
+    }).join("");
+    return '<div class="libSeries"><h3>'+esc(s.title)+"</h3>"+rows+"</div>";
+  }).join("");
+
+  Array.prototype.forEach.call(results.querySelectorAll(".libReadBtn"), function(btn){
+    btn.onclick=function(){
+      var seriesKey=btn.getAttribute("data-series");
+      var idx=Number(btn.getAttribute("data-idx"));
+      var series=matches.filter(function(s){ return s.key===seriesKey; })[0];
+      if(series) openLibraryChapter(series, idx);
+    };
+  });
+}
+
+(function(){
+  var panel=document.getElementById("libpanel");
+  var search=document.getElementById("libSearch");
+  var openBtn=document.getElementById("readerDemoBtn");
+  var closeBtn=document.getElementById("libClose");
+
+  if(openBtn){
+    openBtn.textContent="📖 Library";
+    openBtn.title="Search the library";
+    openBtn.onclick=function(){
+      panel.hidden=false;
+      loadLibraryIndex().then(function(index){ renderLibraryResults(search.value, index); });
+      search.focus();
+    };
+  }
+  closeBtn.onclick=function(){ panel.hidden=true; };
+  search.oninput=function(){
+    loadLibraryIndex().then(function(index){ renderLibraryResults(search.value, index); });
+  };
+  document.addEventListener("keydown", function(e){
+    if(!panel.hidden && e.key==="Escape") panel.hidden=true;
+  });
+})();
 </script>
 </body>
 </html>
