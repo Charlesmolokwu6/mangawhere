@@ -424,10 +424,10 @@ color:var(--dim);background:rgba(20,16,26,.82);padding:3px 9px;border-radius:20p
 font-family:ui-monospace,Consolas,monospace;pointer-events:none}
 
 /* ================= library panel =================
-   Search/browse UI over library/index.json -- the small set of series
-   actually scraped and hosted as static files under library/, not the
-   full external catalog. "Read Now" opens MangaReader with that
-   chapter's real page files. */
+   Search/browse UI over the backend's /api/library -- a small,
+   Claude-curated set of series the app can actually open, not the
+   full external catalog. "Read Now" opens MangaReader, streaming that
+   chapter's pages from their source through the existing proxy. */
 .libpanel{position:fixed;inset:0;z-index:99;background:var(--bg);display:flex;
 flex-direction:column}
 .libpanel[hidden]{display:none}
@@ -498,9 +498,9 @@ padding:10px 0;border-bottom:1px solid var(--line);font-size:13px}
   <div class="readerCount" id="readerCount"></div>
 </div>
 
-<!-- Library search/browse panel. Lists library/index.json -- the series
-     actually scraped and hosted under library/, not the full external
-     catalog -- and opens MangaReader on "Read Now". -->
+<!-- Library search/browse panel. Lists the backend's /api/library -- a
+     small curated set of series the app can actually open, not the full
+     external catalog -- and opens MangaReader on "Read Now". -->
 <div class="libpanel" id="libpanel" role="dialog" aria-modal="true" aria-label="Library" hidden>
   <div class="libTop">
     <button class="readerBtn back" id="libClose" aria-label="Back">← Back</button>
@@ -3218,26 +3218,25 @@ function closeReader(){
 }
 
 /* ---- library panel ----
-   Search/browse UI over library/index.json: the series that have
-   actually been scraped and are hosted as static files under
-   library/{series}/{chapter}/NNN.jpg, produced by the scraper/
-   pipeline (catalog_crawler -> index_crawler -> sequential_page_extractor
-   / dom_asset_extractor -> series_downloader -> this JSON index). This
-   is deliberately NOT the full external site catalog -- only what's
-   actually downloaded and present in this repo is readable here.
+   Search/browse UI over the backend's reader library (a small,
+   Claude-curated set of series the app can actually open, as opposed to
+   the rest of the site which only tracks release numbers and links out).
+   The git repo holds none of this -- no scraped URLs, no images -- it
+   lives in the backend's KV store; this panel just calls its API.
 
-   library/index.json shape:
-     {"series": [{"title", "path", "chapters": [{"chapter","path","pageCount"}]}]}
-   Each chapter's real page filenames live in that series' own
-   library/{path}manifest.json, fetched lazily on "Read Now" rather than
-   duplicated into the top-level index (keeps it small as the library
-   grows). */
-var LIBRARY_INDEX_URL="library/index.json";
+   GET /api/library returns {"series": [{"title","key",
+   "chapters": [{"chapter","pageCount"}]}]} -- names and counts only, so
+   the list stays small. Each chapter's real page-image URLs (the SOURCE
+   SITE's own, never downloaded or re-hosted) live behind
+   GET /api/library/:key, fetched lazily on "Read Now" and routed through
+   the existing proxy (via(), same one already used for MangaUpdates/
+   TikTok) since some sources 403 a direct browser request without the
+   right Referer -- something only a server-side fetch can supply. */
 var libraryIndexPromise=null;
 
 function loadLibraryIndex(){
   if(!libraryIndexPromise){
-    libraryIndexPromise=fetch(LIBRARY_INDEX_URL)
+    libraryIndexPromise=(API_BASE ? fetch(API_BASE+"/api/library") : Promise.reject())
       .then(function(r){ if(!r.ok) throw new Error("no library index"); return r.json(); })
       .catch(function(){ return {series:[]}; });
   }
@@ -3247,18 +3246,13 @@ function loadLibraryIndex(){
 function openLibraryChapter(series, chapterIndex){
   var chapterMeta=series.chapters[chapterIndex];
   if(!chapterMeta) return;
-  // manifest.json holds the *source's own* page URLs — nothing is
-  // downloaded or re-hosted here. Each is routed through the existing
-  // proxy (via(), same one the app already uses for MangaUpdates/TikTok)
-  // since some sources 403 a direct browser request without the right
-  // Referer, which only a server-side fetch can supply.
-  fetch("library/"+series.path+"manifest.json")
+  fetch(API_BASE+"/api/library/"+encodeURIComponent(series.key))
     .then(function(r){ return r.json(); })
-    .then(function(manifest){
-      var chapter=manifest.chapters[chapterIndex];
+    .then(function(full){
+      var chapter=full.chapters[chapterIndex];
       var pages=chapter.pages.map(function(url){ return via(url); });
       MangaReader.open({
-        key:series.path+"|"+chapter.chapter,
+        key:series.key+"|"+chapter.chapter,
         title:series.title,
         chapter:chapter.chapter,
         pages:pages,
@@ -3283,16 +3277,16 @@ function renderLibraryResults(query, index){
   results.innerHTML=matches.map(function(s){
     var rows=s.chapters.map(function(c, i){
       return '<div class="libChapterRow"><span>'+esc(c.chapter)+" ("+c.pageCount+" pages)</span>"+
-        '<button class="readerBtn libReadBtn" data-series="'+esc(s.path)+'" data-idx="'+i+'">Read Now</button></div>';
+        '<button class="readerBtn libReadBtn" data-series="'+esc(s.key)+'" data-idx="'+i+'">Read Now</button></div>';
     }).join("");
     return '<div class="libSeries"><h3>'+esc(s.title)+"</h3>"+rows+"</div>";
   }).join("");
 
   Array.prototype.forEach.call(results.querySelectorAll(".libReadBtn"), function(btn){
     btn.onclick=function(){
-      var seriesPath=btn.getAttribute("data-series");
+      var seriesKey=btn.getAttribute("data-series");
       var idx=Number(btn.getAttribute("data-idx"));
-      var series=matches.filter(function(s){ return s.path===seriesPath; })[0];
+      var series=matches.filter(function(s){ return s.key===seriesKey; })[0];
       if(series) openLibraryChapter(series, idx);
     };
   });
