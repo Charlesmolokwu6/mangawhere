@@ -952,8 +952,26 @@ function jikanShape(m){
    synopsis:cleanSynopsis(m.synopsis),
    cover:img.large_image_url||img.image_url||"",links:links};
 }
+/* Wraps fetch with a hard timeout. Without this, one slow or unresponsive
+   upstream (Jikan, AniList, or the oEmbed proxy) leaves a promise that
+   never settles -- and since the Find button is disabled until its job
+   settles, one hung request leaves it disabled forever with no recovery
+   but a page reload. To a visitor that looks exactly like "the button
+   does nothing", including on their next click with a different link. */
+function fetchTimeout(url,opts,ms){
+  ms=ms||10000;
+  var ctrl=(typeof AbortController!=="undefined")?new AbortController():null;
+  var o=opts?Object.assign({},opts):{};
+  if(ctrl) o.signal=ctrl.signal;
+  var timer=ctrl&&setTimeout(function(){ ctrl.abort(); },ms);
+  return fetch(url,o).then(function(r){ clearTimeout(timer); return r; },function(e){
+    clearTimeout(timer);
+    if(e&&e.name==="AbortError") throw new Error("timeout|That's taking too long to respond. Try again.");
+    throw e;
+  });
+}
 function jikanCall(path){
-  return fetch("https://api.jikan.moe/v4"+path).then(function(r){
+  return fetchTimeout("https://api.jikan.moe/v4"+path).then(function(r){
     if(!r.ok) throw new Error("Jikan "+r.status);
     return r.json();
   }).then(function(j){return (j.data||[]).map(jikanShape);});
@@ -1000,7 +1018,7 @@ function alShape(m){
    cover:(m.coverImage||{}).large||"",links:links};
 }
 function alCall(query,vars){
-  return fetch("https://graphql.anilist.co",{method:"POST",
+  return fetchTimeout("https://graphql.anilist.co",{method:"POST",
     headers:{"Content-Type":"application/json","Accept":"application/json"},
     body:JSON.stringify({query:query,variables:vars||{}})
   }).then(function(r){
@@ -1313,7 +1331,7 @@ function oembed(url){
   if(!tt&&!yt) return Promise.reject(new Error("unsupported"));
   var ep = tt ? "https://www.tiktok.com/oembed?url="+encodeURIComponent(url)
               : "https://www.youtube.com/oembed?format=json&url="+encodeURIComponent(url);
-  return fetch(via(ep)).then(function(r){
+  return fetchTimeout(via(ep)).then(function(r){
     // A real HTTP response means CORS allowed the request — the platform
     // answered, it just didn't like the URL.
     if(r.status===404) throw new Error("notfound|That video is private, deleted, or the link is wrong.");
@@ -1775,18 +1793,27 @@ function render(r){
       '<strong>No manga name in that caption</strong>Type it instead — guessing wrong is '+
       'worse than asking.</p></div>'; return;}
   var rows=r.rows||[];
-  if(!rows.length){
-    out.innerHTML='<div class="note"><p><strong>Nothing found for that</strong>'+
-      'Try a shorter search — two or three words is usually enough, and the '+
-      'suggestions appear as you type.</p></div>'; return;}
-  var scored=rows.map(function(m){return {m:m,s:score(m,r.parsed.title,r.caption||r.parsed.title)};})
-                 .sort(function(a,b){return b.s-a.s;});
-  var top=scored[0], next=scored[1]?scored[1].s:0;
-  var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
   var head=r.caption
     ? '<div class="cap">'+(r.platform?esc(r.platform)+(r.author?" · @"+esc(r.author):"")+' &rarr; ':"")
       +esc(r.caption)+'</div>'
     : "";
+  if(!rows.length){
+    // Came from a link: the caption parsed into *something* (r.parsed.title),
+    // it's just that nothing on Jikan/AniList matched it -- likely the
+    // extracted title is wrong, not that the manga doesn't exist. Showing
+    // the caption and what was searched for lets someone actually act on
+    // that, instead of "try a shorter search" (which makes no sense when
+    // you pasted a link, not typed a query).
+    out.innerHTML=head+'<div class="note"><p><strong>Nothing found for "'+
+      esc(r.parsed.title)+'"</strong>'+(r.caption
+        ? "That's what got pulled from the caption above — if it's wrong, type the real manga name instead."
+        : "Try a shorter search — two or three words is usually enough, and the "+
+          "suggestions appear as you type.")+
+      '</p></div>'; return;}
+  var scored=rows.map(function(m){return {m:m,s:score(m,r.parsed.title,r.caption||r.parsed.title)};})
+                 .sort(function(a,b){return b.s-a.s;});
+  var top=scored[0], next=scored[1]?scored[1].s:0;
+  var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
   if(sure){ out.innerHTML=head+detailHtml(top.m,r.parsed.chapter);
             fillChapters(top.m,r.parsed.chapter); return; }
   out.innerHTML=head+'<div class="note"><p><strong>Which one is it?</strong>Not certain — '+
