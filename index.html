@@ -327,6 +327,19 @@ border-radius:0 12px 12px 0;padding:14px 16px;margin-bottom:14px}
 .cap{font-size:11px;color:var(--dim);background:var(--surf2);border-radius:8px;padding:9px 11px;
 margin-bottom:14px;font-family:ui-monospace,Consolas,monospace}
 .spin{text-align:center;padding:30px;color:var(--dim);font-size:13px}
+/* Watch-it-here player, offered when the caption alone didn't give up a
+   title -- some manga edits only say or show the name in the video
+   itself, which no amount of caption parsing can read. TikTok's is
+   natively tall (9:16); YouTube's is the usual 16:9. Both load the
+   platform's own official embed endpoint directly, so playback and
+   audio are entirely theirs -- nothing proxied, nothing downloaded. */
+.watchwrap{margin-bottom:14px}
+.watchwrap p{margin:0 0 8px;font-size:12px;color:var(--dim)}
+.watchwrap .frame{position:relative;width:100%;border-radius:12px;overflow:hidden;
+background:var(--surf2)}
+.watchwrap .frame.tt{max-width:340px;aspect-ratio:9/16}
+.watchwrap .frame.yt{aspect-ratio:16/9}
+.watchwrap .frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .skel{width:100%;aspect-ratio:2/3;border-radius:9px;background:var(--surf2);animation:p 1.3s infinite}
 @keyframes p{0%,100%{opacity:.45}50%{opacity:.8}}
 .chips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px}
@@ -1394,6 +1407,27 @@ function webtoonLatest(links){
 }
 
 /* ================= oEmbed ================= */
+/* Official embed URL for a video, so someone can watch/listen right in
+   the app when the caption alone doesn't name the manga -- some edits
+   only say or show the title in the video itself. Both endpoints are
+   the platforms' own, meant for exactly this (nothing scraped, nothing
+   downloaded): TikTok's is https://www.tiktok.com/embed/v2/<id>, and its
+   oEmbed response already hands back that id directly as
+   embed_product_id (falls back to pulling it out of the embed HTML's
+   data-video-id if that field is ever missing). YouTube has no such
+   field, but the id is already sitting in the URL that was pasted in. */
+function ytId(url){
+  var m=url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([\w-]{6,})/i);
+  return m?m[1]:null;
+}
+function embedUrlFor(tt,url,d){
+  if(tt){
+    var id=d.embed_product_id || ((d.html||"").match(/data-video-id="(\d+)"/)||[])[1];
+    return id ? "https://www.tiktok.com/embed/v2/"+id : null;
+  }
+  var yid=ytId(url);
+  return yid ? "https://www.youtube-nocookie.com/embed/"+yid : null;
+}
 function oembed(url){
   var tt=/tiktok\.com/i.test(url), yt=/youtube\.com|youtu\.be/i.test(url);
   if(!tt&&!yt) return Promise.reject(new Error("unsupported"));
@@ -1406,7 +1440,8 @@ function oembed(url){
     if(!r.ok) throw new Error("http|"+(tt?"TikTok":"YouTube")+" returned "+r.status+".");
     return r.json();
   }).then(function(d){
-    return {caption:d.title||"", author:d.author_name||"", platform:tt?"TikTok":"YouTube"};
+    return {caption:d.title||"", author:d.author_name||"", platform:tt?"TikTok":"YouTube",
+            embedUrl:embedUrlFor(tt,url,d), embedTall:tt};
   }).catch(function(e){
     if(e.message && e.message.indexOf("|")>-1) throw e;
     // fetch() rejects (rather than resolving) only for CORS or network
@@ -1790,19 +1825,47 @@ function run(){
   var job = isLink
     ? oembed(raw).then(function(meta){
         var p=parseCaption(meta.caption);
-        if(!p.title) return {kind:"noTitle",caption:meta.caption};
+        if(!p.title) return {kind:"noTitle",caption:meta.caption,
+          embedUrl:meta.embedUrl,embedTall:meta.embedTall};
         return search(p.title).then(function(rows){
           return {kind:"results",rows:rows,parsed:p,caption:meta.caption,
-                  author:meta.author,platform:meta.platform};});
+                  author:meta.author,platform:meta.platform,
+                  embedUrl:meta.embedUrl,embedTall:meta.embedTall};});
       }).catch(function(e){
         if(e.message==="unsupported") return {kind:"unsupported"};
-        return {kind:"oembedFail",err:e.message};
+        // oEmbed itself failed (CORS, 401, whatever) — no caption came
+        // back, but a straight TikTok/YouTube link still carries its own
+        // video id, so the embed player can still work even though the
+        // title-matching never got off the ground.
+        var tt=/tiktok\.com/i.test(raw);
+        var ttId=(raw.match(/\/video\/(\d+)/)||[])[1];
+        return {kind:"oembedFail",err:e.message,
+          embedUrl: tt ? (ttId?"https://www.tiktok.com/embed/v2/"+ttId:null)
+                       : (ytId(raw)?"https://www.youtube-nocookie.com/embed/"+ytId(raw):null),
+          embedTall: tt};
       })
     : search(raw).then(function(rows){
         return {kind:"results",rows:rows,parsed:{title:raw,chapter:null,confidence:"medium"}};});
   job.then(render).catch(function(e){
     out.innerHTML='<div class="note bad"><p><strong>Error</strong>'+esc(e.message)+'</p></div>';
   }).then(function(){btn.disabled=false; setDiag("source: "+(sourceUsed||"-"));});
+}
+
+/* The official player, offered wherever the caption alone came up short.
+   Nothing here is proxied or downloaded -- it's the platform's own embed
+   endpoint, loaded directly, so playback (audio included) happens entirely
+   in their iframe. This exists because a caption can only tell us what
+   the poster *typed*; plenty of edits say or show the title in the video
+   itself instead, which no amount of text-parsing can ever read -- so
+   this is the one honest way to get that name into the search box:
+   watch or listen right here, then type what you catch. */
+function watchHtml(r){
+  if(!r.embedUrl) return "";
+  return '<div class="watchwrap"><p>Some edits only say or show the title in the video '+
+    'itself — watch or listen here, then type what you catch above.</p>'+
+    '<div class="frame '+(r.embedTall?"tt":"yt")+'">'+
+    '<iframe src="'+esc(r.embedUrl)+'" allow="autoplay; encrypted-media; picture-in-picture" '+
+    'allowfullscreen loading="lazy" title="video"></iframe></div></div>';
 }
 
 function render(r){
@@ -1821,6 +1884,7 @@ function render(r){
         ? ' This is exactly the job the Python backend does — it fetches the caption '+
           'server-side where CORS doesn\'t apply.'
         : "")+'</p></div>'+
+      watchHtml(r)+
       '<div class="note"><p><strong>Test the matching anyway</strong>'+
       'Copy the video\'s caption text and paste it here — everything after the caption '+
       'fetch is identical, so this still proves the parser and matcher work.</p></div>'+
@@ -1857,7 +1921,7 @@ function render(r){
     return;
   }
   if(r.kind==="noTitle"){
-    out.innerHTML='<div class="cap">'+esc(r.caption)+'</div><div class="note"><p>'+
+    out.innerHTML='<div class="cap">'+esc(r.caption)+'</div>'+watchHtml(r)+'<div class="note"><p>'+
       '<strong>No manga name in that caption</strong>Type it instead — guessing wrong is '+
       'worse than asking.</p></div>'; return;}
   var rows=r.rows||[];
@@ -1872,7 +1936,7 @@ function render(r){
     // the caption and what was searched for lets someone actually act on
     // that, instead of "try a shorter search" (which makes no sense when
     // you pasted a link, not typed a query).
-    out.innerHTML=head+'<div class="note"><p><strong>Nothing found for "'+
+    out.innerHTML=head+watchHtml(r)+'<div class="note"><p><strong>Nothing found for "'+
       esc(r.parsed.title)+'"</strong>'+(r.caption
         ? "That's what got pulled from the caption above — if it's wrong, type the real manga name instead."
         : "Try a shorter search — two or three words is usually enough, and the "+
