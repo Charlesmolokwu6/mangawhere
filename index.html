@@ -1041,6 +1041,66 @@ var alTrending=function(country,genre){
   return alCall("query{Page(perPage:40){media(type:MANGA,sort:TRENDING_DESC,status:RELEASING"+
     filter+"){"+AL_FIELDS+"}}}");};
 
+/* --- MangaDex ---
+   Jikan and AniList are both anime-encyclopedia sites first — their manga
+   coverage leans toward titles that also have an anime, or at least a
+   big enough fanbase to get catalogued. Plenty of manhwa only ever exist
+   as a webtoon plus scanlations and never clear that bar on either site.
+   MangaDex is a scanlation host, not an anime database, so its coverage
+   runs the other way — much broader on exactly the smaller/newer titles
+   the other two miss. It's queried only as a last resort, when both of
+   them come back with nothing, not merged into every search: it carries
+   no popularity/follow-count signal in the search response and a lot of
+   its catalog is scanlation-only, so it shouldn't outrank an AniList or
+   MAL match that already exists. Same CORS wall as the oEmbed calls
+   (MangaDex sends no Access-Control-Allow-Origin), so it goes through
+   the same proxy. */
+function mdTitle(a){
+  var t=a.title||{};
+  if(t.en) return t.en;
+  var alt=(a.altTitles||[]).filter(function(x){ return x.en; })[0];
+  if(alt) return alt.en;
+  var any=Object.values(t)[0];
+  return any||"";
+}
+function mdShape(m){
+  var a=m.attributes||{};
+  var cover=(m.relationships||[]).filter(function(r){
+    return r.type==="cover_art"&&r.attributes&&r.attributes.fileName; })[0];
+  var lang=(a.originalLanguage||"").toLowerCase();
+  var country = lang==="ko" ? "KR" : lang.indexOf("zh")===0 ? "CN" : "JP";
+  var genres=(a.tags||[]).filter(function(t){ return t.attributes.group==="genre"; })
+    .map(function(t){ return t.attributes.name.en||""; }).filter(Boolean);
+  var rating=a.contentRating||"";
+  var desc=a.description||{};
+  return {id:"md-"+m.id,
+   title:mdTitle(a),
+   alts:(a.altTitles||[]).map(function(x){ return Object.values(x)[0]; }).filter(Boolean),
+   chapters:a.lastChapter?(parseFloat(a.lastChapter)||null):null,
+   volumes:a.lastVolume?(parseInt(a.lastVolume,10)||null):null,
+   status:a.status||"",country:country,kind:kindFromCountry(country),
+   started:a.year?{year:a.year}:null,ended:null,
+   updatedAt:a.updatedAt?Math.floor(new Date(a.updatedAt).getTime()/1000):null,
+   popularity:0,   // MangaDex's search response carries no follow count
+   adult:rating==="erotica"||rating==="pornographic",
+   genres:genres,
+   synopsis:cleanSynopsis(desc.en||Object.values(desc)[0]||""),
+   cover:cover?"https://uploads.mangadex.org/covers/"+m.id+"/"+cover.attributes.fileName+".256.jpg":"",
+   links:[{site:"MangaDex",url:"https://mangadex.org/title/"+m.id,language:"",official:false}]};
+}
+function mdSearch(q,n){
+  var p=new URLSearchParams();
+  p.set("title",q);
+  p.set("limit",String(n||8));
+  ["safe","suggestive","erotica","pornographic"].forEach(function(r){
+    p.append("contentRating[]",r); });
+  p.append("includes[]","cover_art");
+  return fetchTimeout(via("https://api.mangadex.org/manga?"+p.toString())).then(function(r){
+    if(!r.ok) throw new Error("MangaDex "+r.status);
+    return r.json();
+  }).then(function(j){ return (j.data||[]).map(mdShape); });
+}
+
 /* --- unified --- */
 function dropAdult(rows){
   if(!HIDE_ADULT) return rows||[];
@@ -1053,6 +1113,14 @@ function search(q,n){
     .catch(function(){
       return alSearch(q,n).then(function(r){
         sourceUsed="AniList (Jikan down)"; return dropAdult(r); });
+    })
+    .then(function(rows){
+      if(rows && rows.length) return rows;
+      var priorSource=sourceUsed;
+      return mdSearch(q,n).then(function(r){
+        sourceUsed="MangaDex ("+priorSource+" had nothing)";
+        return dropAdult(r);
+      }).catch(function(){ return rows; });   // still nothing -- keep the empty result
     });
 }
 function trending(country,genre){
