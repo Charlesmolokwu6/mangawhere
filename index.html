@@ -480,7 +480,7 @@ function via(url){
 
    Push needs HTTPS. Opening this file from your computer will never
    work; that's a browser rule, not a bug.                              */
-var API_BASE = "https://bland-swallow-2310.charlesmolokwu6.deno.net";
+var API_BASE = "";
 (function(){
   var q=new URLSearchParams(location.search).get("api");
   if(q) API_BASE=q.replace(/\/$/,"");
@@ -1457,7 +1457,7 @@ function loadTrending(country,genre){
           var dup=i>=list.length;
           return '<button class="tile" data-row="'+id+'" data-i="'+(i%list.length)+'"'+
             (dup?' aria-hidden="true" tabindex="-1"':'')+'>'+
-            (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
+            (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'" referrerpolicy="no-referrer">':'<div class="ph"></div>')+
             '<h4>'+esc(m.title)+'</h4><p class="meta">'+esc(m.kind||"")+
             (m.chapters?" · "+m.chapters+" ch":"")+
             (statusInfo(m.status).key==="complete"?' · done':"")+'</p></button>';
@@ -1568,7 +1568,7 @@ function showSuggest(rows){
   if(!rows.length){ hideSuggest(); return; }
   box.innerHTML=rows.map(function(m,i){
     return '<button class="sug" data-i="'+i+'">'+
-      (m.cover?'<img alt="" src="'+esc(m.cover)+'">':'<span class="sph"></span>')+
+      (m.cover?'<img alt="" src="'+esc(m.cover)+'" referrerpolicy="no-referrer">':'<span class="sph"></span>')+
       '<span class="sinfo"><span class="st">'+esc(m.title)+'</span>'+
       '<span class="sm">'+esc(m.kind||"")+
       (m.chapters?" · "+m.chapters+" ch":"")+' · '+esc(statusInfo(m.status).label)+
@@ -1948,7 +1948,7 @@ function detailHtml(m,videoCh){
   var freshness = "";
 
   return '<div class="card"><div class="hit">'+
-    (m.cover?'<img alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
+    (m.cover?'<img alt="" src="'+esc(m.cover)+'" referrerpolicy="no-referrer">':'<div class="ph"></div>')+
     '<div><h2>'+esc(m.title)+'</h2><p class="meta" id="metaline">'+
     (m.kind?esc(m.kind)+" &middot; ":"")+
     '<span id="metachap">'+(m.chapters?m.chapters+" chapters":"chapter count unknown")+
@@ -2386,7 +2386,7 @@ function updatesStrip(){
   return '<h3>New for you</h3>'+
     '<div class="updates">'+fresh.slice(0,8).map(function(x){
       return '<button class="upd" data-id="'+esc(String(x.id))+'">'+
-        (x.cover?'<img alt="" src="'+esc(x.cover)+'">':'<div class="ph"></div>')+
+        (x.cover?'<img alt="" src="'+esc(x.cover)+'" referrerpolicy="no-referrer">':'<div class="ph"></div>')+
         '<span class="un">'+esc(x.title)+'</span>'+
         '<span class="uc">'+(x.latest-x.seen)+' new · ch '+x.latest+'</span>'+
       '</button>';
@@ -2517,7 +2517,7 @@ function recentHtml(){
     '<button class="linkish sm" id="clearrec">Clear</button></div>'+
     '<div class="recents">'+r.map(function(x){
       return '<button class="rec" data-id="'+esc(String(x.id))+'">'+
-        (x.cover?'<img alt="" src="'+esc(x.cover)+'">':'<span class="rph"></span>')+
+        (x.cover?'<img alt="" src="'+esc(x.cover)+'" referrerpolicy="no-referrer">':'<span class="rph"></span>')+
         '<span class="rt">'+esc(x.title)+'</span></button>';
     }).join("")+'</div>';
 }
