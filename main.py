@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from scrapers import scrape_chapter
+from scrapers import scrape_chapter, scrape_series
 from server import auth, captcha, db, poller, push, watch
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -47,6 +47,14 @@ def _require_user(authorization: Optional[str]):
     return user
 
 
+def _require_absolute_url(url: str) -> None:
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing url query parameter")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="url must be an absolute http(s) URL")
+
+
 @app.get("/")
 def serve_index():
     return FileResponse(BASE_DIR / "index.html")
@@ -54,12 +62,7 @@ def serve_index():
 
 @app.get("/api/scrape")
 async def api_scrape(url: str = Query(..., description="Chapter URL to scrape")):
-    if not url:
-        raise HTTPException(status_code=400, detail="Missing url query parameter")
-
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="url must be an absolute http(s) URL")
+    _require_absolute_url(url)
 
     try:
         payload = await scrape_chapter(url)
@@ -67,7 +70,7 @@ async def api_scrape(url: str = Query(..., description="Chapter URL to scrape"))
         raise HTTPException(
             status_code=502, detail="Couldn't reach that page — the site may be blocking us."
         )
-    host = parsed.netloc.lower().replace("www.", "")
+    host = urlparse(url).netloc.lower().replace("www.", "")
 
     if "toongod" in host:
         payload["domain"] = "toongod"
@@ -76,6 +79,22 @@ async def api_scrape(url: str = Query(..., description="Chapter URL to scrape"))
 
     payload["chapter_url"] = url
     payload["images"] = [img for img in payload.get("images", []) if img]
+
+    response = JSONResponse(content=payload)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.get("/api/series")
+async def api_series(url: str = Query(..., description="Series page URL to list chapters for")):
+    _require_absolute_url(url)
+
+    try:
+        payload = await scrape_series(url)
+    except Exception:
+        raise HTTPException(
+            status_code=502, detail="Couldn't reach that page — the site may be blocking us."
+        )
 
     response = JSONResponse(content=payload)
     response.headers["Referrer-Policy"] = "no-referrer"
