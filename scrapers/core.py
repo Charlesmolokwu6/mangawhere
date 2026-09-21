@@ -1,9 +1,13 @@
+import asyncio
 import re
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import quote, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+
+from .matching import similar
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -24,6 +28,14 @@ IGNORE_KEYWORDS = [
     "ads",
 ]
 
+# Keywords need non-alphanumeric boundaries — otherwise short/generic ones
+# like "ad" match as a substring of completely unrelated words. A chapter
+# page for "Shadow Slave" has "ad" sitting right inside "shadow", and a
+# bare `"ad" in url` check was silently dropping every one of its images.
+_IGNORE_PATTERN = re.compile(
+    r"(?:^|[^a-z0-9])(?:" + "|".join(re.escape(k) for k in IGNORE_KEYWORDS) + r")(?:[^a-z0-9]|$)"
+)
+
 
 def clean_image_urls(raw_urls: Iterable[str]) -> List[str]:
     """Filter image URLs to keep only chapter pages and remove common ad/banner noise."""
@@ -42,7 +54,7 @@ def clean_image_urls(raw_urls: Iterable[str]) -> List[str]:
         lower = url.lower()
         if not re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:[?#]|$)", lower):
             continue
-        if any(keyword in lower for keyword in IGNORE_KEYWORDS):
+        if _IGNORE_PATTERN.search(lower):
             continue
         if url in seen:
             continue
@@ -73,7 +85,15 @@ async def fetch_html_httpx(url: str) -> str:
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
         response = await client.get(url)
         lowered = response.text.lower()
-        if response.status_code in (403, 429) or "just a moment" in lowered or "cloudflare" in lowered:
+        # Cloudflare's actual interstitial challenge page — not just any
+        # page that happens to load Cloudflare's (very common) analytics
+        # beacon script, which the bare substring "cloudflare" also matches.
+        is_challenge_page = (
+            "just a moment" in lowered
+            or "cf-browser-verification" in lowered
+            or "cf_chl_opt" in lowered
+        )
+        if response.status_code in (403, 429) or is_challenge_page:
             raise PermissionError("Cloudflare protection active")
         response.raise_for_status()
         return response.text
@@ -109,20 +129,186 @@ async def scrape_toongod(url: str) -> List[str]:
 
 
 async def scrape_asurascans(url: str) -> List[str]:
-    """Scrape Asura Scans chapter pages, using browser fallback when Cloudflare blocks access."""
+    """Scrape Asura Scans chapter pages. The plain HTTP fetch works in
+    practice (chapter pages are server-rendered, not behind Cloudflare's
+    JS challenge), so it's tried first; a real browser is the fallback."""
     try:
-        html = await fetch_html_playwright(url)
+        html = await fetch_html_httpx(url)
     except Exception:
         try:
-            html = await fetch_html_httpx(url)
+            html = await fetch_html_playwright(url)
         except Exception:
             html = ""
 
     selectors = [
-        "#readerarea img",
+        "img[data-page-index]",  # current site markup, verified directly
+        "#readerarea img",  # older/alternate theme, kept as a fallback
         "#chapter-images img",
     ]
     return extract_image_urls_from_html(html or "", selectors)
+
+
+CHAPTER_NUMBER_IN_HREF = re.compile(r"chapter[-/](\d+(?:\.\d+)?)", re.I)
+CHAPTER_NUMBER_IN_TEXT = re.compile(r"(\d+(?:\.\d+)?)\s*$")
+
+
+def extract_chapter_list(html: str, selector: str, base_url: str) -> List[Dict[str, Any]]:
+    """Collect a series page's chapter links, deduplicated and sorted by
+    chapter number. Numbers are read from the URL first (reliable on both
+    sites' predictable /chapter-N/ and /chapter/N paths) and only fall
+    back to the link text for markup that doesn't follow that pattern."""
+    soup = BeautifulSoup(html, "html.parser")
+    chapters: Dict[float, Dict[str, Any]] = {}
+
+    for a in soup.select(selector):
+        href = a.get("href")
+        if not href:
+            continue
+        text = a.get_text(" ", strip=True)
+        match = CHAPTER_NUMBER_IN_HREF.search(href) or CHAPTER_NUMBER_IN_TEXT.search(text)
+        if not match:
+            continue
+        number = float(match.group(1))
+        if number in chapters:
+            continue
+        chapters[number] = {
+            "number": number,
+            "url": urljoin(base_url, href),
+            "title": text or f"Chapter {number:g}",
+        }
+
+    return sorted(chapters.values(), key=lambda c: c["number"])
+
+
+async def scrape_toongod_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a ToonGod series page (Madara theme chapter list)."""
+    try:
+        html = await fetch_html_httpx(url)
+    except PermissionError:
+        html = await fetch_html_playwright(url)
+    return extract_chapter_list(html, ".wp-manga-chapter a", url)
+
+
+async def scrape_asurascans_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from an Asura Scans series page."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    return extract_chapter_list(html or "", 'a[href*="/chapter/"]', url)
+
+
+async def scrape_series(url: str) -> Dict[str, Any]:
+    """Auto-detect the site and return the series' chapter list."""
+    lowered = (url or "").lower()
+
+    if "toongod" in lowered:
+        domain = "toongod"
+        chapters = await scrape_toongod_chapter_list(url)
+    elif "asurascans" in lowered or "asura" in lowered:
+        domain = "asurascans"
+        chapters = await scrape_asurascans_chapter_list(url)
+    else:
+        domain = "unknown"
+        chapters = []
+
+    return {"domain": domain, "series_url": url, "chapters": chapters}
+
+
+MATCH_THRESHOLD = 0.5  # same bar the client's own MangaUpdates matching uses
+
+
+def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt: bool) -> Optional[str]:
+    """Score every candidate link's visible name against `title` and
+    return the best match's absolute URL, if it clears MATCH_THRESHOLD."""
+    soup = BeautifulSoup(html, "html.parser")
+    best_url, best_score = None, 0.0
+    seen = set()
+
+    for a in soup.select(selector):
+        href = a.get("href")
+        if not href or href in seen:
+            continue
+        seen.add(href)
+
+        name = ""
+        if use_alt:
+            img = a.select_one("img[alt]")
+            name = (img.get("alt") if img else "") or ""
+        name = name or a.get_text(" ", strip=True)
+        if not name:
+            continue
+
+        score = similar(title, name)
+        if score > best_score:
+            best_score, best_url = score, href
+
+    if best_url and best_score >= MATCH_THRESHOLD:
+        return urljoin(base_url, best_url)
+    return None
+
+
+async def search_toongod(title: str) -> Optional[str]:
+    """Find the best-matching series URL on ToonGod for a title, via the
+    Madara theme's standard search results page."""
+    search_url = f"https://toongod.org/?s={quote(title)}&post_type=wp-manga"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(search_url)
+        except Exception:
+            return None
+    return _best_match(html, ".post-title a", search_url, title, use_alt=False)
+
+
+async def search_asurascans(title: str) -> Optional[str]:
+    """Find the best-matching series URL on Asura Scans for a title. The
+    site's search box filters client-side (a plain fetch of a "?search="
+    URL returns the same unfiltered page), so this matches against the
+    full comics listing instead — each card's cover <img alt> carries the
+    clean title even where the link's own text has extra rating/badge text
+    mixed in."""
+    listing_url = "https://asurascans.com/comics"
+    try:
+        html = await fetch_html_httpx(listing_url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(listing_url)
+        except Exception:
+            return None
+    return _best_match(html, 'a[href^="/comics/"]', listing_url, title, use_alt=True)
+
+
+async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
+    """Search both sites for a title and read from whichever is more
+    up to date — i.e. has the higher chapter number right now."""
+    toongod_url, asurascans_url = await asyncio.gather(
+        search_toongod(title), search_asurascans(title)
+    )
+
+    candidates: List[Dict[str, Any]] = []
+    if toongod_url:
+        chapters = await scrape_toongod_chapter_list(toongod_url)
+        if chapters:
+            candidates.append(
+                {"domain": "toongod", "series_url": toongod_url, "chapters": chapters}
+            )
+    if asurascans_url:
+        chapters = await scrape_asurascans_chapter_list(asurascans_url)
+        if chapters:
+            candidates.append(
+                {"domain": "asurascans", "series_url": asurascans_url, "chapters": chapters}
+            )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: c["chapters"][-1]["number"], reverse=True)
+    return candidates[0]
 
 
 async def scrape_chapter(url: str) -> Dict[str, Any]:
@@ -137,12 +323,7 @@ async def scrape_chapter(url: str) -> Dict[str, Any]:
         images = await scrape_asurascans(url)
     else:
         domain = "unknown"
-        if "toongod" in lowered:
-            images = await scrape_toongod(url)
-        elif "asura" in lowered:
-            images = await scrape_asurascans(url)
-        else:
-            images = []
+        images = []
 
     return {
         "domain": domain,

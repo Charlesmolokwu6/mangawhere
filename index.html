@@ -480,7 +480,10 @@ function via(url){
 
    Push needs HTTPS. Opening this file from your computer will never
    work; that's a browser rule, not a bug.                              */
-var API_BASE = "";
+// Served over http(s) — e.g. by this project's own main.py — the backend
+// is this same origin, so default to it. Opened as a bare file (file://)
+// there's nothing to default to, and it stays empty as before.
+var API_BASE = /^https?:$/.test(location.protocol) ? location.origin : "";
 (function(){
   var q=new URLSearchParams(location.search).get("api");
   if(q) API_BASE=q.replace(/\/$/,"");
@@ -1970,6 +1973,7 @@ function detailHtml(m,videoCh){
     '</div>'+
     '<h3>'+(off.length?"Read it here":"Where to read")+'</h3>'+
     (off.length?off.map(linkRow).join(""):noEnglishBlock(m))+
+    readerBox()+
     buyRow(m)+adSlot()+
     (other.length?'<h3>More info</h3>'+other.slice(0,3).map(linkRow).join(""):"");
 }
@@ -2086,6 +2090,7 @@ function fillChapters(m, videoCh){
   wireTrack(m, videoCh);
   wireShare(m);
   wireSynopsis();
+  wireReader(m);
   var slot=document.getElementById("chapslot");
   if(!slot) return;                       // count already known
 
@@ -2296,6 +2301,158 @@ function tagged(url){
   }catch(e){
     return url;   // malformed URL — send it untouched rather than breaking it
   }
+}
+
+/* ================= reader (scraper-backed) =================
+   No pasting: this searches ToonGod and AsuraScans by the manga's own
+   title (server-side, via /api/find) and reads from whichever of the two
+   currently has the newer chapter. Whichever one wins hands back its full
+   chapter list in the same response, so Prev/Next and "All chapters" are
+   free from there — no extra round trip. */
+var readerState={chapters:null, index:-1, back:null, domain:null};
+
+function readerBox(){
+  return '<div class="card">'+
+    '<h3>Read here</h3>'+
+    '<p class="sub" id="readerhint">Checks ToonGod and Asura Scans and reads '+
+    'from whichever has the newer chapter.</p>'+
+    '<button class="primary" id="readergo">Find &amp; read latest chapter</button>'+
+    '<p class="err" id="readererr"></p>'+
+  '</div>';
+}
+
+function wireReader(m){
+  var go=document.getElementById("readergo");
+  if(!go) return;
+  var back=function(){ showDetail(m, null); };
+  var label="Find & read latest chapter";
+  go.onclick=function(){
+    var err=document.getElementById("readererr");
+    err.textContent="";
+    go.disabled=true; go.textContent="Searching…";
+
+    fetch(API_BASE+"/api/find?title="+encodeURIComponent(m.title))
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        go.disabled=false; go.textContent=label;
+        if(!res.ok){
+          err.textContent=(res.d && res.d.detail) || "Couldn't find this title.";
+          return;
+        }
+        var chapters=res.d.chapters||[];
+        if(!chapters.length){
+          err.textContent="Found it, but couldn't read its chapter list.";
+          return;
+        }
+        readerState={chapters:chapters, index:chapters.length-1, back:back, domain:res.d.domain};
+        readerView(chapters[chapters.length-1].url);
+      })
+      .catch(function(e){
+        go.disabled=false; go.textContent=label;
+        err.textContent="Couldn't reach the server — "+e.message;
+      });
+  };
+}
+
+/* The chapter list readerState already holds -> a tappable list. No
+   fetch: /api/find already handed back every chapter on the winning site. */
+function openChapterBrowserFromState(){
+  var chapters=readerState.chapters, back=readerState.back;
+  if(!chapters) return;
+  stopRail();
+  var view=document.getElementById("app");
+  view.innerHTML='<button class="back" id="rbk">← Back</button>'+
+    '<h1>Chapters</h1>'+
+    '<p class="sub">'+chapters.length+' chapter'+(chapters.length===1?"":"s")+
+    ' on '+esc(readerState.domain||"")+' — newest first</p>'+
+    '<div id="rchapters"></div>';
+  document.getElementById("rbk").onclick=back;
+  window.scrollTo(0,0);
+
+  var newestFirst=chapters.slice().reverse();
+  document.getElementById("rchapters").innerHTML=newestFirst.map(function(c){
+    return '<button data-url="'+esc(c.url)+'" class="chrow" style="display:flex;'+
+      'justify-content:space-between;align-items:center;width:100%;text-align:left;'+
+      'padding:14px 4px;border:0;border-bottom:1px solid rgba(127,127,127,.2);'+
+      'background:none;color:inherit;font:inherit;font-size:15px;cursor:pointer">'+
+      '<span>Chapter '+esc(String(c.number))+'</span>'+
+      '<span style="opacity:.55">Read →</span></button>';
+  }).join("");
+  Array.prototype.forEach.call(document.querySelectorAll(".chrow"), function(btn){
+    btn.onclick=function(){
+      var url=btn.getAttribute("data-url");
+      readerState.index=chapters.findIndex(function(c){ return c.url===url; });
+      readerView(url);
+    };
+  });
+}
+
+/* Redraws the Prev/Next row(s) from readerState — called on every reader
+   paint. */
+function renderReaderNav(){
+  var chapters=readerState.chapters, idx=readerState.index;
+  var html="";
+  if(chapters && idx>-1){
+    var prev=chapters[idx-1], next=chapters[idx+1];
+    html='<div style="display:flex;justify-content:space-between;margin:10px 0;gap:8px">'+
+      (prev?'<button class="linkish rprev">‹ Chapter '+esc(String(prev.number))+'</button>':'<span></span>')+
+      (next?'<button class="linkish rnext">Chapter '+esc(String(next.number))+' ›</button>':'<span></span>')+
+    '</div>';
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".readernavslot"), function(el){
+    el.innerHTML=html;
+    var p=el.querySelector(".rprev"), n=el.querySelector(".rnext");
+    if(p) p.onclick=function(){ readerState.index=idx-1; readerView(chapters[idx-1].url); };
+    if(n) n.onclick=function(){ readerState.index=idx+1; readerView(chapters[idx+1].url); };
+  });
+}
+
+/* Full-page reader: fetches the chapter's image URLs through the backend
+   (so the site's own anti-hotlinking / Cloudflare handling happens
+   server-side) and stacks them the way a webtoon reader would. Prev/Next
+   and "All chapters" come from readerState, set by whoever found/navigated
+   here. */
+function readerView(url){
+  stopRail();
+  var view=document.getElementById("app");
+  var hasChapters=!!readerState.chapters;
+  view.innerHTML='<button class="back" id="rbk">← Back</button>'+
+    (hasChapters?'<button class="linkish" id="rlist" style="float:right">All chapters</button>':'')+
+    '<h1>Chapter'+(readerState.domain?' — '+esc(readerState.domain):'')+'</h1>'+
+    '<div class="readernavslot"></div>'+
+    '<p class="sub" id="rstatus">Loading pages…</p>'+
+    '<div id="rpages"></div>'+
+    '<div class="readernavslot"></div>';
+  document.getElementById("rbk").onclick=readerState.back;
+  if(hasChapters) document.getElementById("rlist").onclick=openChapterBrowserFromState;
+  window.scrollTo(0,0);
+  renderReaderNav();
+
+  fetch(API_BASE+"/api/scrape?url="+encodeURIComponent(url))
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+    .then(function(res){
+      var status=document.getElementById("rstatus");
+      if(!status) return;   // they navigated away before this resolved
+      if(!res.ok){
+        status.textContent="Couldn't load this chapter — "+
+          (res.d && res.d.detail || "the source site may be blocking us.");
+        return;
+      }
+      var images=res.d.images||[];
+      if(!images.length){
+        status.textContent="No pages found at that link.";
+        return;
+      }
+      status.textContent=images.length+" page"+(images.length===1?"":"s");
+      document.getElementById("rpages").innerHTML=images.map(function(src){
+        return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
+          'src="'+esc(src)+'" referrerpolicy="no-referrer" alt="">';
+      }).join("");
+    })
+    .catch(function(e){
+      var status=document.getElementById("rstatus");
+      if(status) status.textContent="Couldn't reach the server — "+e.message;
+    });
 }
 
 function linkRow(l){

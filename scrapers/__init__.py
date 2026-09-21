@@ -1,19 +1,35 @@
 from .core import (
     clean_image_urls,
+    extract_chapter_list,
     extract_image_urls_from_html,
     fetch_html_httpx,
     fetch_html_playwright,
+    find_best_source,
     scrape_asurascans,
-    scrape_toongod,
+    scrape_asurascans_chapter_list,
     scrape_chapter,
+    scrape_series,
+    scrape_toongod,
+    scrape_toongod_chapter_list,
+    search_asurascans,
+    search_toongod,
 )
+from .matching import similar
 
 __all__ = [
     "clean_image_urls",
+    "extract_chapter_list",
     "extract_image_urls_from_html",
     "fetch_html_httpx",
     "fetch_html_playwright",
+    "find_best_source",
     "scrape_asurascans",
-    "scrape_toongod",
+    "scrape_asurascans_chapter_list",
     "scrape_chapter",
+    "scrape_series",
+    "scrape_toongod",
+    "scrape_toongod_chapter_list",
+    "search_asurascans",
+    "search_toongod",
+    "similar",
 ]
