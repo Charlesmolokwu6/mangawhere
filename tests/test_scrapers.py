@@ -1,6 +1,7 @@
 import unittest
 
 from scrapers import clean_image_urls, extract_chapter_list, extract_image_urls_from_html
+from scrapers.core import _best_match
 
 
 class ScraperParsingTests(unittest.IsolatedAsyncioTestCase):
@@ -105,6 +106,37 @@ class ScraperParsingTests(unittest.IsolatedAsyncioTestCase):
             html, 'a[href*="/chapter/"]', "https://asurascans.com/"
         )
         self.assertEqual(len(chapters), 1)
+
+
+class SourceMatchingTests(unittest.TestCase):
+    def test_best_match_picks_the_right_card_by_cover_alt_text(self):
+        html = """
+        <a href="/comics/shadow-slave-05c7df14"><img alt="Shadow Slave"></a>
+        <a href="/comics/some-other-manga-abc"><img alt="Some Other Manga"></a>
+        """
+        url = _best_match(
+            html, 'a[href^="/comics/"]', "https://asurascans.com/comics",
+            "Shadow Slave", use_alt=True,
+        )
+        self.assertEqual(url, "https://asurascans.com/comics/shadow-slave-05c7df14")
+
+    def test_best_match_ignores_extra_text_around_the_title(self):
+        # Real cards mix a rating into the link's own text (e.g. "9.4 Shadow
+        # Slave") — the cover image's alt text is what should be matched.
+        html = '<a href="/comics/shadow-slave-05c7df14">9.4 <img alt="Shadow Slave"></a>'
+        url = _best_match(
+            html, 'a[href^="/comics/"]', "https://asurascans.com/comics",
+            "Shadow Slave", use_alt=True,
+        )
+        self.assertEqual(url, "https://asurascans.com/comics/shadow-slave-05c7df14")
+
+    def test_best_match_returns_none_below_threshold(self):
+        html = '<a href="/comics/totally-unrelated"><img alt="Totally Unrelated Thing"></a>'
+        url = _best_match(
+            html, 'a[href^="/comics/"]', "https://asurascans.com/comics",
+            "Shadow Slave", use_alt=True,
+        )
+        self.assertIsNone(url)
 
 
 if __name__ == "__main__":

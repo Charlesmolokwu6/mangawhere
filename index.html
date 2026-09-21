@@ -2304,47 +2304,20 @@ function tagged(url){
 }
 
 /* ================= reader (scraper-backed) =================
-   The scraper backend only knows ToonGod and AsuraScans pages, and there's
-   no cross-site search — no way to go from an AniList/MU title straight to
-   a reading link. So this starts from a pasted link, which can be either a
-   chapter (opened directly) or a series page (browsed as a chapter list
-   first). Once a chapter list is loaded — either that way, or fetched in
-   the background for a directly-pasted chapter link — Prev/Next inside
-   the reader just walks it. */
-var readerState={chapters:null, index:-1, back:null};
-
-/* Chapter URL -> series URL, so a pasted chapter link can still get
-   Prev/Next once its series' chapter list loads in the background.
-   Handles both sites' predictable path shapes: AsuraScans' ".../chapter/N"
-   and the Madara ".../chapter-N/" convention ToonGod uses. */
-function guessSeriesUrl(u){
-  try{
-    var url=new URL(u);
-    var m1=url.pathname.match(/^(.*)\/chapter\/[\d.]+\/?$/i);
-    if(m1){ url.pathname=m1[1]; return url.toString(); }
-    var m2=url.pathname.match(/^(.*)\/chapter-[\d.]+[^/]*\/?$/i);
-    if(m2){ url.pathname=m2[1]+"/"; return url.toString(); }
-    return null;
-  }catch(e){ return null; }
-}
-
-function fetchSeries(url){
-  return fetch(API_BASE+"/api/series?url="+encodeURIComponent(url))
-    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, chapters:d.chapters, error:d.detail}; }); })
-    .catch(function(e){ return {ok:false, error:e.message}; });
-}
+   No pasting: this searches ToonGod and AsuraScans by the manga's own
+   title (server-side, via /api/find) and reads from whichever of the two
+   currently has the newer chapter. Whichever one wins hands back its full
+   chapter list in the same response, so Prev/Next and "All chapters" are
+   free from there — no extra round trip. */
+var readerState={chapters:null, index:-1, back:null, domain:null};
 
 function readerBox(){
   return '<div class="card">'+
     '<h3>Read here</h3>'+
-    '<p class="sub">Paste a ToonGod or AsuraScans link — a chapter, or the '+
-    'series page to browse all its chapters — and read it without leaving '+
-    'the app.</p>'+
-    '<div class="form">'+
-      '<input id="readerurl" type="url" placeholder="https://…">'+
-      '<button class="primary" id="readergo">Read</button>'+
-      '<p class="err" id="readererr"></p>'+
-    '</div>'+
+    '<p class="sub" id="readerhint">Checks ToonGod and Asura Scans and reads '+
+    'from whichever has the newer chapter.</p>'+
+    '<button class="primary" id="readergo">Find &amp; read latest chapter</button>'+
+    '<p class="err" id="readererr"></p>'+
   '</div>';
 }
 
@@ -2352,90 +2325,70 @@ function wireReader(m){
   var go=document.getElementById("readergo");
   if(!go) return;
   var back=function(){ showDetail(m, null); };
+  var label="Find & read latest chapter";
   go.onclick=function(){
-    var input=document.getElementById("readerurl");
     var err=document.getElementById("readererr");
-    var url=(input.value||"").trim();
     err.textContent="";
-    if(!/^https?:\/\//i.test(url)){
-      err.textContent="Paste a full link (starting with http)."; return;
-    }
-    if(!/toongod|asura/i.test(url)){
-      err.textContent="Only ToonGod and AsuraScans links are supported right now.";
-      return;
-    }
+    go.disabled=true; go.textContent="Searching…";
 
-    var seriesUrl=guessSeriesUrl(url);
-    if(seriesUrl){
-      // Looks like a chapter link already — open it now, and pick up
-      // Prev/Next in the background once the series' chapter list is back.
-      openChapterReader(url, back);
-      fetchSeries(seriesUrl).then(function(res){
-        var chapters=res.chapters||[];
-        if(!res.ok || !chapters.length) return;
-        readerState.chapters=chapters;
-        readerState.index=chapters.findIndex(function(c){ return c.url===url; });
-        renderReaderNav();
+    fetch(API_BASE+"/api/find?title="+encodeURIComponent(m.title))
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(res){
+        go.disabled=false; go.textContent=label;
+        if(!res.ok){
+          err.textContent=(res.d && res.d.detail) || "Couldn't find this title.";
+          return;
+        }
+        var chapters=res.d.chapters||[];
+        if(!chapters.length){
+          err.textContent="Found it, but couldn't read its chapter list.";
+          return;
+        }
+        readerState={chapters:chapters, index:chapters.length-1, back:back, domain:res.d.domain};
+        readerView(chapters[chapters.length-1].url);
+      })
+      .catch(function(e){
+        go.disabled=false; go.textContent=label;
+        err.textContent="Couldn't reach the server — "+e.message;
       });
-    }else{
-      openChapterBrowser(url, back);
-    }
   };
 }
 
-/* Series page -> a tappable chapter list. */
-function openChapterBrowser(seriesUrl, back){
+/* The chapter list readerState already holds -> a tappable list. No
+   fetch: /api/find already handed back every chapter on the winning site. */
+function openChapterBrowserFromState(){
+  var chapters=readerState.chapters, back=readerState.back;
+  if(!chapters) return;
   stopRail();
-  readerState={chapters:null, index:-1, back:back};
   var view=document.getElementById("app");
   view.innerHTML='<button class="back" id="rbk">← Back</button>'+
     '<h1>Chapters</h1>'+
-    '<p class="sub" id="rstatus">Loading chapter list…</p>'+
+    '<p class="sub">'+chapters.length+' chapter'+(chapters.length===1?"":"s")+
+    ' on '+esc(readerState.domain||"")+' — newest first</p>'+
     '<div id="rchapters"></div>';
   document.getElementById("rbk").onclick=back;
   window.scrollTo(0,0);
 
-  fetchSeries(seriesUrl).then(function(res){
-    var status=document.getElementById("rstatus");
-    if(!status) return;   // they navigated away before this resolved
-    if(!res.ok){
-      status.textContent="Couldn't load chapters — "+
-        (res.error||"the site may be blocking us.");
-      return;
-    }
-    var chapters=res.chapters||[];
-    if(!chapters.length){
-      status.textContent="No chapters found at that link.";
-      return;
-    }
-    status.textContent=chapters.length+" chapter"+(chapters.length===1?"":"s")+" — newest first";
-    var newestFirst=chapters.slice().reverse();
-    document.getElementById("rchapters").innerHTML=newestFirst.map(function(c){
-      return '<button data-url="'+esc(c.url)+'" class="chrow" style="display:flex;'+
-        'justify-content:space-between;align-items:center;width:100%;text-align:left;'+
-        'padding:14px 4px;border:0;border-bottom:1px solid rgba(127,127,127,.2);'+
-        'background:none;color:inherit;font:inherit;font-size:15px;cursor:pointer">'+
-        '<span>Chapter '+esc(String(c.number))+'</span>'+
-        '<span style="opacity:.55">Read →</span></button>';
-    }).join("");
-    Array.prototype.forEach.call(document.querySelectorAll(".chrow"), function(btn){
-      btn.onclick=function(){
-        var url=btn.getAttribute("data-url");
-        readerState.chapters=chapters;
-        readerState.index=chapters.findIndex(function(c){ return c.url===url; });
-        readerView(url);
-      };
-    });
+  var newestFirst=chapters.slice().reverse();
+  document.getElementById("rchapters").innerHTML=newestFirst.map(function(c){
+    return '<button data-url="'+esc(c.url)+'" class="chrow" style="display:flex;'+
+      'justify-content:space-between;align-items:center;width:100%;text-align:left;'+
+      'padding:14px 4px;border:0;border-bottom:1px solid rgba(127,127,127,.2);'+
+      'background:none;color:inherit;font:inherit;font-size:15px;cursor:pointer">'+
+      '<span>Chapter '+esc(String(c.number))+'</span>'+
+      '<span style="opacity:.55">Read →</span></button>';
+  }).join("");
+  Array.prototype.forEach.call(document.querySelectorAll(".chrow"), function(btn){
+    btn.onclick=function(){
+      var url=btn.getAttribute("data-url");
+      readerState.index=chapters.findIndex(function(c){ return c.url===url; });
+      readerView(url);
+    };
   });
 }
 
-function openChapterReader(url, back){
-  readerState={chapters:null, index:-1, back:back};
-  readerView(url);
-}
-
 /* Redraws the Prev/Next row(s) from readerState — called on every reader
-   paint, and again whenever a chapter list arrives after the fact. */
+   paint. */
 function renderReaderNav(){
   var chapters=readerState.chapters, idx=readerState.index;
   var html="";
@@ -2457,17 +2410,21 @@ function renderReaderNav(){
 /* Full-page reader: fetches the chapter's image URLs through the backend
    (so the site's own anti-hotlinking / Cloudflare handling happens
    server-side) and stacks them the way a webtoon reader would. Prev/Next
-   comes from readerState, set by whoever navigated here. */
+   and "All chapters" come from readerState, set by whoever found/navigated
+   here. */
 function readerView(url){
   stopRail();
   var view=document.getElementById("app");
+  var hasChapters=!!readerState.chapters;
   view.innerHTML='<button class="back" id="rbk">← Back</button>'+
-    '<h1>Chapter</h1>'+
+    (hasChapters?'<button class="linkish" id="rlist" style="float:right">All chapters</button>':'')+
+    '<h1>Chapter'+(readerState.domain?' — '+esc(readerState.domain):'')+'</h1>'+
     '<div class="readernavslot"></div>'+
     '<p class="sub" id="rstatus">Loading pages…</p>'+
     '<div id="rpages"></div>'+
     '<div class="readernavslot"></div>';
   document.getElementById("rbk").onclick=readerState.back;
+  if(hasChapters) document.getElementById("rlist").onclick=openChapterBrowserFromState;
   window.scrollTo(0,0);
   renderReaderNav();
 

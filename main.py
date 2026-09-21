@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from scrapers import scrape_chapter, scrape_series
+from scrapers import find_best_source, scrape_chapter, scrape_series
 from server import auth, captcha, db, poller, push, watch
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -97,6 +97,26 @@ async def api_series(url: str = Query(..., description="Series page URL to list 
         )
 
     response = JSONResponse(content=payload)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.get("/api/find")
+async def api_find(title: str = Query(..., description="Manga title to find a reading source for")):
+    if not title or not title.strip():
+        raise HTTPException(status_code=400, detail="Missing title query parameter")
+
+    try:
+        result = await find_best_source(title.strip())
+    except Exception:
+        raise HTTPException(status_code=502, detail="Couldn't search for that title right now.")
+
+    if not result:
+        raise HTTPException(
+            status_code=404, detail="Couldn't find this title on ToonGod or Asura Scans."
+        )
+
+    response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
 

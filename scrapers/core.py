@@ -1,10 +1,13 @@
+import asyncio
 import re
-from typing import Any, Dict, Iterable, List
-from urllib.parse import urljoin
+from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import quote, urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+
+from .matching import similar
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -213,6 +216,99 @@ async def scrape_series(url: str) -> Dict[str, Any]:
         chapters = []
 
     return {"domain": domain, "series_url": url, "chapters": chapters}
+
+
+MATCH_THRESHOLD = 0.5  # same bar the client's own MangaUpdates matching uses
+
+
+def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt: bool) -> Optional[str]:
+    """Score every candidate link's visible name against `title` and
+    return the best match's absolute URL, if it clears MATCH_THRESHOLD."""
+    soup = BeautifulSoup(html, "html.parser")
+    best_url, best_score = None, 0.0
+    seen = set()
+
+    for a in soup.select(selector):
+        href = a.get("href")
+        if not href or href in seen:
+            continue
+        seen.add(href)
+
+        name = ""
+        if use_alt:
+            img = a.select_one("img[alt]")
+            name = (img.get("alt") if img else "") or ""
+        name = name or a.get_text(" ", strip=True)
+        if not name:
+            continue
+
+        score = similar(title, name)
+        if score > best_score:
+            best_score, best_url = score, href
+
+    if best_url and best_score >= MATCH_THRESHOLD:
+        return urljoin(base_url, best_url)
+    return None
+
+
+async def search_toongod(title: str) -> Optional[str]:
+    """Find the best-matching series URL on ToonGod for a title, via the
+    Madara theme's standard search results page."""
+    search_url = f"https://toongod.org/?s={quote(title)}&post_type=wp-manga"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(search_url)
+        except Exception:
+            return None
+    return _best_match(html, ".post-title a", search_url, title, use_alt=False)
+
+
+async def search_asurascans(title: str) -> Optional[str]:
+    """Find the best-matching series URL on Asura Scans for a title. The
+    site's search box filters client-side (a plain fetch of a "?search="
+    URL returns the same unfiltered page), so this matches against the
+    full comics listing instead — each card's cover <img alt> carries the
+    clean title even where the link's own text has extra rating/badge text
+    mixed in."""
+    listing_url = "https://asurascans.com/comics"
+    try:
+        html = await fetch_html_httpx(listing_url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(listing_url)
+        except Exception:
+            return None
+    return _best_match(html, 'a[href^="/comics/"]', listing_url, title, use_alt=True)
+
+
+async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
+    """Search both sites for a title and read from whichever is more
+    up to date — i.e. has the higher chapter number right now."""
+    toongod_url, asurascans_url = await asyncio.gather(
+        search_toongod(title), search_asurascans(title)
+    )
+
+    candidates: List[Dict[str, Any]] = []
+    if toongod_url:
+        chapters = await scrape_toongod_chapter_list(toongod_url)
+        if chapters:
+            candidates.append(
+                {"domain": "toongod", "series_url": toongod_url, "chapters": chapters}
+            )
+    if asurascans_url:
+        chapters = await scrape_asurascans_chapter_list(asurascans_url)
+        if chapters:
+            candidates.append(
+                {"domain": "asurascans", "series_url": asurascans_url, "chapters": chapters}
+            )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: c["chapters"][-1]["number"], reverse=True)
+    return candidates[0]
 
 
 async def scrape_chapter(url: str) -> Dict[str, Any]:

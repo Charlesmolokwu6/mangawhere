@@ -1,33 +1,14 @@
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
+
+from scrapers.matching import similar
 
 MU = "https://api.mangaupdates.com/v1"
 HEADERS = {"Content-Type": "application/json"}
 
 COMIC_TYPES = ["manga", "manhwa", "manhua", "manhpa", "oel", "comic"]
-
-
-def _bigrams(s: str) -> List[str]:
-    s = re.sub(r"[^a-z0-9 ]", "", (s or "").lower()).strip()
-    return [s[i : i + 2] for i in range(len(s) - 1)]
-
-
-def similar(a: str, b: str) -> float:
-    """Dice bigram coefficient, ported from index.html's similar()."""
-    A, B = _bigrams(a), _bigrams(b)
-    if not A or not B:
-        return 1.0 if a == b else 0.0
-    counts: Dict[str, int] = {}
-    for g in A:
-        counts[g] = counts.get(g, 0) + 1
-    hits = 0
-    for g in B:
-        if counts.get(g, 0) > 0:
-            counts[g] -= 1
-            hits += 1
-    return 2 * hits / (len(A) + len(B))
 
 
 def is_comic(rec: Dict[str, Any]) -> bool:
