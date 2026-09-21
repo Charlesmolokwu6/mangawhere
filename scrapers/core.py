@@ -137,12 +137,7 @@ async def scrape_chapter(url: str) -> Dict[str, Any]:
         images = await scrape_asurascans(url)
     else:
         domain = "unknown"
-        if "toongod" in lowered:
-            images = await scrape_toongod(url)
-        elif "asura" in lowered:
-            images = await scrape_asurascans(url)
-        else:
-            images = []
+        images = []
 
     return {
         "domain": domain,
