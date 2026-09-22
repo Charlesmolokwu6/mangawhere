@@ -489,6 +489,18 @@ var API_BASE = /^https?:$/.test(location.protocol) ? location.origin : "";
   if(q) API_BASE=q.replace(/\/$/,"");
 })();
 
+// The reader (/api/scrape, /api/series, /api/find) only exists on this
+// project's own Python backend (main.py) — it's not part of the Deno
+// worker's API surface. Kept as its own variable, always defaulting to
+// this page's own origin, so pointing API_BASE at a different service
+// (accounts/push/proxy) via "?api=" doesn't also send reader calls there
+// and break them. "?reader=" overrides it the same way "?api=" does.
+var READER_BASE = /^https?:$/.test(location.protocol) ? location.origin : "";
+(function(){
+  var q=new URLSearchParams(location.search).get("reader");
+  if(q) READER_BASE=q.replace(/\/$/,"");
+})();
+
 var pushState={ supported:false, subscribed:false, endpoint:null, reason:"" };
 
 function isIOS(){
@@ -2331,7 +2343,7 @@ function wireReader(m){
     err.textContent="";
     go.disabled=true; go.textContent="Searching…";
 
-    fetch(API_BASE+"/api/find?title="+encodeURIComponent(m.title))
+    fetch(READER_BASE+"/api/find?title="+encodeURIComponent(m.title))
       .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
       .then(function(res){
         go.disabled=false; go.textContent=label;
@@ -2428,7 +2440,7 @@ function readerView(url){
   window.scrollTo(0,0);
   renderReaderNav();
 
-  fetch(API_BASE+"/api/scrape?url="+encodeURIComponent(url))
+  fetch(READER_BASE+"/api/scrape?url="+encodeURIComponent(url))
     .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
     .then(function(res){
       var status=document.getElementById("rstatus");
