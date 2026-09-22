@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     endpoint TEXT PRIMARY KEY,
     p256dh TEXT NOT NULL,
     auth TEXT NOT NULL,
+    user_id INTEGER,
     created_at REAL NOT NULL
 );
 
@@ -40,7 +41,6 @@ CREATE TABLE IF NOT EXISTS watches (
     links TEXT,
     seen_chapter REAL,
     latest_chapter REAL,
-    endpoint TEXT,
     updated_at REAL NOT NULL,
     PRIMARY KEY (user_id, key)
 );

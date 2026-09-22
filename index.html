@@ -440,14 +440,16 @@ padding:6px 0 0;cursor:pointer}
 /* ================= proxy =================
    MangaUpdates and TikTok refuse browser requests (no CORS headers), and
    they hold the two pieces of data this product is built on: the current
-   chapter, and the video's caption. A tiny proxy fixes both.
+   chapter, and the video's caption. A tiny proxy fixes both — main.py
+   itself implements it (any "?url=" on its root), so this defaults to
+   the same backend as everything else rather than a separate service.
 
-   Set it either way:
+   Override it either way:
      - edit PROXY below, or
      - open the page with ?proxy=https://yours.workers.dev
    Leave it empty and the app still runs — it just can't show chapter
    counts for ongoing series.                                            */
-var PROXY = "https://bland-swallow-2310.charlesmolokwu6.deno.net";
+var PROXY = /^https?:$/.test(location.protocol) ? location.origin : "";
 
 /* Adult titles. Off means everything shows, which is how AniList and
    MyAnimeList work too. Flip to true if you ever need to hide them —
@@ -489,13 +491,12 @@ var API_BASE = /^https?:$/.test(location.protocol) ? location.origin : "";
   if(q) API_BASE=q.replace(/\/$/,"");
 })();
 
-// The reader (/api/scrape, /api/series, /api/find) only exists on this
-// project's own Python backend (main.py) — it's not part of the Deno
-// worker's API surface. Kept as its own variable, always defaulting to
-// this page's own origin, so pointing API_BASE at a different service
-// (accounts/push/proxy) via "?api=" doesn't also send reader calls there
-// and break them. "?reader=" overrides it the same way "?api=" does.
-var READER_BASE = /^https?:$/.test(location.protocol) ? location.origin : "";
+// The reader (/api/scrape, /api/series, /api/find) lives on the same
+// backend as everything else (main.py), so this just follows API_BASE by
+// default. Kept as its own variable rather than used directly, so an
+// unusual setup that splits the reader onto a different host still can,
+// via "?reader=", without that becoming the default everyone else hits.
+var READER_BASE = API_BASE;
 (function(){
   var q=new URLSearchParams(location.search).get("reader");
   if(q) READER_BASE=q.replace(/\/$/,"");
