@@ -441,15 +441,20 @@ padding:6px 0 0;cursor:pointer}
    MangaUpdates and TikTok refuse browser requests (no CORS headers), and
    they hold the two pieces of data this product is built on: the current
    chapter, and the video's caption. A tiny proxy fixes both — main.py
-   itself implements it (any "?url=" on its root), so this defaults to
-   the same backend as everything else rather than a separate service.
+   itself implements it (any "?url=" on its root).
+
+   This is hardcoded to the deployed backend rather than defaulting to
+   same-origin, because the frontend (this file, on GitHub Pages) and the
+   backend (main.py, on Render) are two different origins — there's no
+   same-origin default that would reach it.
 
    Override it either way:
      - edit PROXY below, or
-     - open the page with ?proxy=https://yours.workers.dev
+     - open the page with ?proxy=https://yours.workers.dev (handy for
+       pointing a local index.html at a local `uvicorn main:app` instead)
    Leave it empty and the app still runs — it just can't show chapter
    counts for ongoing series.                                            */
-var PROXY = /^https?:$/.test(location.protocol) ? location.origin : "";
+var PROXY = "https://mangawhere.onrender.com";
 
 /* Adult titles. Off means everything shows, which is how AniList and
    MyAnimeList work too. Flip to true if you ever need to hide them —
@@ -482,10 +487,11 @@ function via(url){
 
    Push needs HTTPS. Opening this file from your computer will never
    work; that's a browser rule, not a bug.                              */
-// Served over http(s) — e.g. by this project's own main.py — the backend
-// is this same origin, so default to it. Opened as a bare file (file://)
-// there's nothing to default to, and it stays empty as before.
-var API_BASE = /^https?:$/.test(location.protocol) ? location.origin : "";
+// Hardcoded for the same reason as PROXY above: this file is served from
+// GitHub Pages, main.py runs on Render — different origins, so there's no
+// same-origin default that reaches it. Override with ?api=... (e.g. to
+// point a local index.html at a local `uvicorn main:app`).
+var API_BASE = "https://mangawhere.onrender.com";
 (function(){
   var q=new URLSearchParams(location.search).get("api");
   if(q) API_BASE=q.replace(/\/$/,"");
