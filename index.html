@@ -1986,13 +1986,15 @@ function detailHtml(m,videoCh){
     '<div><div class="k">'+(done?"Final chapter":"Latest out")+'</div>'+chapCell+'</div>'+
     '<div><div class="k">'+thirdK+'</div><div class="v sm">'+esc(String(thirdV))+'</div></div>'+
     '</div>'+behind+freshness+
-    shareRow(m)+
-    '<button class="trackbtn'+(inList(m.id)?" on":"")+'" id="trackbtn">'+
+    readerBox()+
+    '<div style="display:flex;gap:8px;margin-top:10px">'+
+    '<button class="trackbtn'+(inList(m.id)?" on":"")+'" id="trackbtn" style="flex:1;margin-top:0">'+
       (inList(m.id)?"✓ Tracking":(signedIn()?"Track this":"Track this"))+'</button>'+
+    shareRow(m)+
+    '</div>'+
     '</div>'+
     '<h3>'+(off.length?"Read it here":"Where to read")+'</h3>'+
     (off.length?off.map(linkRow).join(""):noEnglishBlock(m))+
-    readerBox()+
     buyRow(m)+adSlot()+
     (other.length?'<h3>More info</h3>'+other.slice(0,3).map(linkRow).join(""):"");
 }
@@ -2331,44 +2333,41 @@ function tagged(url){
 var readerState={chapters:null, index:-1, back:null, domain:null};
 
 function readerBox(){
-  return '<div class="card">'+
-    '<h3>Read here</h3>'+
-    '<p class="sub" id="readerhint">Checks ToonGod and Asura Scans and reads '+
-    'from whichever has the newer chapter.</p>'+
-    '<button class="primary" id="readergo">Find &amp; read latest chapter</button>'+
-    '<p class="err" id="readererr"></p>'+
-  '</div>';
+  return '<button class="primary" id="readergo" style="width:100%;margin-top:10px">Read</button>'+
+    '<p class="err" id="readererr"></p>';
 }
 
 function wireReader(m){
   var go=document.getElementById("readergo");
   if(!go) return;
   var back=function(){ showDetail(m, null); };
-  var label="Find & read latest chapter";
+  var label="Read";
   go.onclick=function(){
     var err=document.getElementById("readererr");
     err.textContent="";
-    go.disabled=true; go.textContent="Searching…";
+    go.disabled=true; go.textContent="Finding…";
 
     fetch(READER_BASE+"/api/find?title="+encodeURIComponent(m.title))
-      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, status:r.status, d:d}; }); })
       .then(function(res){
         go.disabled=false; go.textContent=label;
         if(!res.ok){
-          err.textContent=(res.d && res.d.detail) || "Couldn't find this title.";
+          err.textContent = res.status===404
+            ? "Couldn't find this title to read."
+            : "Couldn't load this right now — try again.";
           return;
         }
         var chapters=res.d.chapters||[];
         if(!chapters.length){
-          err.textContent="Found it, but couldn't read its chapter list.";
+          err.textContent="Couldn't load this right now — try again.";
           return;
         }
-        readerState={chapters:chapters, index:chapters.length-1, back:back, domain:res.d.domain};
+        readerState={chapters:chapters, index:chapters.length-1, back:back};
         readerView(chapters[chapters.length-1].url);
       })
-      .catch(function(e){
+      .catch(function(){
         go.disabled=false; go.textContent=label;
-        err.textContent="Couldn't reach the server — "+e.message;
+        err.textContent="Couldn't load this right now — try again.";
       });
   };
 }
@@ -2383,7 +2382,7 @@ function openChapterBrowserFromState(){
   view.innerHTML='<button class="back" id="rbk">← Back</button>'+
     '<h1>Chapters</h1>'+
     '<p class="sub">'+chapters.length+' chapter'+(chapters.length===1?"":"s")+
-    ' on '+esc(readerState.domain||"")+' — newest first</p>'+
+    ' — newest first</p>'+
     '<div id="rchapters"></div>';
   document.getElementById("rbk").onclick=back;
   window.scrollTo(0,0);
@@ -2437,7 +2436,7 @@ function readerView(url){
   var hasChapters=!!readerState.chapters;
   view.innerHTML='<button class="back" id="rbk">← Back</button>'+
     (hasChapters?'<button class="linkish" id="rlist" style="float:right">All chapters</button>':'')+
-    '<h1>Chapter'+(readerState.domain?' — '+esc(readerState.domain):'')+'</h1>'+
+    '<h1>Chapter</h1>'+
     '<div class="readernavslot"></div>'+
     '<p class="sub" id="rstatus">Loading pages…</p>'+
     '<div id="rpages"></div>'+
@@ -2453,13 +2452,12 @@ function readerView(url){
       var status=document.getElementById("rstatus");
       if(!status) return;   // they navigated away before this resolved
       if(!res.ok){
-        status.textContent="Couldn't load this chapter — "+
-          (res.d && res.d.detail || "the source site may be blocking us.");
+        status.textContent="Couldn't load this chapter — try again.";
         return;
       }
       var images=res.d.images||[];
       if(!images.length){
-        status.textContent="No pages found at that link.";
+        status.textContent="Couldn't load this chapter — try again.";
         return;
       }
       status.textContent=images.length+" page"+(images.length===1?"":"s");
@@ -2468,9 +2466,9 @@ function readerView(url){
           'src="'+esc(src)+'" referrerpolicy="no-referrer" alt="">';
       }).join("");
     })
-    .catch(function(e){
+    .catch(function(){
       var status=document.getElementById("rstatus");
-      if(status) status.textContent="Couldn't reach the server — "+e.message;
+      if(status) status.textContent="Couldn't load this chapter — try again.";
     });
 }
 
@@ -2592,8 +2590,18 @@ function shareUrl(m){
   return location.origin+location.pathname+"?m="+encodeURIComponent(m.id);
 }
 
+var SHARE_ICON_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '+
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+
+  '<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/>'+
+  '<polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';
+var CHECK_ICON_SVG='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" '+
+  'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+
+  '<polyline points="20 6 9 17 4 12"/></svg>';
+
 function shareRow(m){
-  return '<button class="sharebtn" id="sharebtn">Share this</button>';
+  return '<button class="sharebtn" id="sharebtn" aria-label="Share this" title="Share this" '+
+    'style="flex:0 0 48px;width:48px;margin-top:0;display:flex;align-items:center;'+
+    'justify-content:center;padding:0">'+SHARE_ICON_SVG+'</button>';
 }
 
 function wireShare(m){
@@ -2608,8 +2616,14 @@ function wireShare(m){
         .catch(function(){});
       return;
     }
-    var done=function(){ b.textContent="Link copied"; 
-      setTimeout(function(){ b.textContent="Share this"; },1800); };
+    var done=function(){
+      b.innerHTML=CHECK_ICON_SVG;
+      b.setAttribute("title","Link copied");
+      setTimeout(function(){
+        b.innerHTML=SHARE_ICON_SVG;
+        b.setAttribute("title","Share this");
+      },1800);
+    };
     if(navigator.clipboard && navigator.clipboard.writeText){
       navigator.clipboard.writeText(url).then(done).catch(function(){ fallbackCopy(url,done); });
     } else fallbackCopy(url,done);
