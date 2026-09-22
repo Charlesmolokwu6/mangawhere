@@ -17,8 +17,8 @@ def upsert(user_id: int, payload: Dict[str, Any]) -> None:
             """
             INSERT INTO watches
                 (user_id, key, name, cover, kind, country, links,
-                 seen_chapter, latest_chapter, endpoint, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 seen_chapter, latest_chapter, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, key) DO UPDATE SET
                 name = excluded.name,
                 cover = excluded.cover,
@@ -26,7 +26,6 @@ def upsert(user_id: int, payload: Dict[str, Any]) -> None:
                 country = excluded.country,
                 links = excluded.links,
                 seen_chapter = excluded.seen_chapter,
-                endpoint = excluded.endpoint,
                 updated_at = excluded.updated_at
             """,
             (
@@ -39,7 +38,6 @@ def upsert(user_id: int, payload: Dict[str, Any]) -> None:
                 json.dumps(title.get("links") or []),
                 payload.get("seen_chapter"),
                 payload.get("seen_chapter"),
-                payload.get("endpoint"),
                 time.time(),
             ),
         )
@@ -93,6 +91,26 @@ def list_for_user(user_id: int) -> List[Dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def links_for_key(key: str) -> List[Dict[str, Any]]:
+    """The richest set of external links stored for a title, from
+    whichever watcher's copy has the most recent non-empty one."""
+    conn = db.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT links FROM watches WHERE key = ? AND links IS NOT NULL "
+            "AND links != '[]' ORDER BY updated_at DESC LIMIT 1",
+            (key,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return []
+    try:
+        return json.loads(row["links"])
+    except (TypeError, ValueError):
+        return []
 
 
 def count_for_user(user_id: int) -> int:

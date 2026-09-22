@@ -4,7 +4,7 @@ import os
 import time
 from typing import Dict, List
 
-from . import db, mu, push
+from . import db, mu, push, watch, webtoon
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", 30 * 60))
 
@@ -19,15 +19,14 @@ def _distinct_titles() -> List[Dict]:
         ).fetchall()
     finally:
         conn.close()
-    return [{"key": r["key"], "name": r["name"]} for r in rows]
+    return [{"key": r["key"], "name": r["name"], "links": watch.links_for_key(r["key"])} for r in rows]
 
 
 def _watchers_for_key(key: str) -> List[Dict]:
     conn = db.get_connection()
     try:
         rows = conn.execute(
-            "SELECT user_id, seen_chapter, latest_chapter, endpoint, name "
-            "FROM watches WHERE key = ?",
+            "SELECT user_id, seen_chapter, latest_chapter FROM watches WHERE key = ?",
             (key,),
         ).fetchall()
     finally:
@@ -48,9 +47,21 @@ def _update_latest(user_id: int, key: str, latest: float) -> None:
         conn.close()
 
 
+async def _latest_for(title: Dict) -> Dict:
+    """The publisher's own Webtoons count when we have it (authoritative);
+    MangaUpdates otherwise (tracks fan releases, so it stalls once a title
+    gets licensed)."""
+    found = await webtoon.latest_chapter(title.get("links") or [])
+    if found:
+        return found
+    chapter = await mu.latest_chapter(title["name"])
+    return {"chapter": chapter, "source": "MangaUpdates", "url": ""} if chapter else {}
+
+
 async def _check_title(title: Dict) -> None:
-    latest = await mu.latest_chapter(title["name"])
-    if latest is None:
+    found = await _latest_for(title)
+    latest = found.get("chapter")
+    if not latest:
         return
 
     for watcher in _watchers_for_key(title["key"]):
@@ -60,17 +71,27 @@ async def _check_title(title: Dict) -> None:
         already_notified = previous is not None and latest <= previous
         seen = watcher["seen_chapter"]
         is_new_to_reader = seen is None or latest > seen
-        if already_notified or not is_new_to_reader or not watcher["endpoint"]:
+        if already_notified or not is_new_to_reader:
+            continue
+
+        # An account can be signed in on more than one device; all of them
+        # hear about it, not just whichever synced most recently.
+        subs = push.subscriptions_for_user(watcher["user_id"])
+        if not subs:
             continue
 
         payload = json.dumps(
             {
                 "title": "New chapter!",
-                "body": f"{title['name']} — chapter {latest:g} is out.",
+                "body": f"{title['name']} — chapter {latest:g} is out"
+                + (f" on {found['source']}" if found.get("source") else "")
+                + ".",
                 "tag": f"mangawhere-{title['key']}",
+                "url": found.get("url") or "/",
             }
         )
-        push.send(watcher["endpoint"], payload)
+        for sub in subs:
+            push.send(sub["endpoint"], payload)
 
 
 async def _run_forever() -> None:

@@ -40,19 +40,54 @@ def public_key_b64() -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
-def save_subscription(endpoint: str, p256dh: str, auth: str) -> None:
+def save_subscription(
+    endpoint: str, p256dh: str, auth: str, user_id: Optional[int] = None
+) -> None:
+    """Upsert a subscription. A user_id, if given, attaches it to that
+    account (without one, it's an anonymous device — still notifiable
+    directly via /api/test-push, just not by the poller)."""
     conn = db.get_connection()
     try:
         conn.execute(
-            "INSERT INTO push_subscriptions (endpoint, p256dh, auth, created_at) "
-            "VALUES (?, ?, ?, ?) "
+            "INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, "
-            "auth = excluded.auth",
-            (endpoint, p256dh, auth, time.time()),
+            "auth = excluded.auth, "
+            "user_id = COALESCE(excluded.user_id, push_subscriptions.user_id)",
+            (endpoint, p256dh, auth, user_id, time.time()),
         )
         conn.commit()
     finally:
         conn.close()
+
+
+def attach_subscription(endpoint: Optional[str], user_id: int) -> None:
+    """Links an already-subscribed device to an account, e.g. when
+    someone tracks a title from a browser that already allowed
+    notifications before signing in."""
+    if not endpoint:
+        return
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "UPDATE push_subscriptions SET user_id = ? WHERE endpoint = ?",
+            (user_id, endpoint),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def subscriptions_for_user(user_id: int) -> list:
+    conn = db.get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
 
 
 def _subscription_info(endpoint: str, conn=None) -> Optional[dict]:

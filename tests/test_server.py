@@ -2,7 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from server import auth, captcha, db, mu, watch
+from server import auth, captcha, db, mu, push, watch
+from server.webtoon import _rss_url
 
 
 class ServerTestCase(unittest.TestCase):
@@ -132,6 +133,51 @@ class WatchTests(ServerTestCase):
 
         watch.remove(user_id, "42")
         self.assertEqual(watch.count_for_user(user_id), 0)
+
+
+class PushTests(ServerTestCase):
+    def test_save_subscription_without_user_is_unattached(self):
+        push.save_subscription("https://push.example.com/x", "p256dh", "authkey")
+        self.assertEqual(push.subscriptions_for_user(1), [])
+
+    def test_attach_subscription_links_it_to_a_user(self):
+        push.save_subscription("https://push.example.com/x", "p256dh", "authkey")
+        push.attach_subscription("https://push.example.com/x", 7)
+        subs = push.subscriptions_for_user(7)
+        self.assertEqual(len(subs), 1)
+        self.assertEqual(subs[0]["endpoint"], "https://push.example.com/x")
+
+    def test_resubscribing_does_not_clear_an_existing_attachment(self):
+        push.save_subscription("https://push.example.com/x", "p256dh", "authkey")
+        push.attach_subscription("https://push.example.com/x", 7)
+        # Same device re-subscribes (e.g. key rotation) without a user_id
+        # in the call — must not silently detach it from the account.
+        push.save_subscription("https://push.example.com/x", "p256dh2", "authkey2")
+        subs = push.subscriptions_for_user(7)
+        self.assertEqual(len(subs), 1)
+        self.assertEqual(subs[0]["p256dh"], "p256dh2")
+
+    def test_attach_subscription_with_no_endpoint_is_a_noop(self):
+        push.attach_subscription(None, 7)  # must not raise
+        self.assertEqual(push.subscriptions_for_user(7), [])
+
+
+class WebtoonRssUrlTests(unittest.TestCase):
+    def test_builds_rss_url_from_series_url(self):
+        url = _rss_url(
+            "https://www.webtoons.com/en/fantasy/tower-of-god/list?title_no=95"
+        )
+        self.assertEqual(
+            url, "https://www.webtoons.com/en/fantasy/tower-of-god/rss?title_no=95"
+        )
+
+    def test_returns_none_for_non_webtoons_url(self):
+        self.assertIsNone(_rss_url("https://example.com/series?title_no=95"))
+
+    def test_returns_none_without_title_no(self):
+        self.assertIsNone(
+            _rss_url("https://www.webtoons.com/en/fantasy/tower-of-god/list")
+        )
 
 
 class MuSimilarityTests(unittest.TestCase):

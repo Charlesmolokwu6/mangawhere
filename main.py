@@ -1,18 +1,49 @@
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, scrape_chapter, scrape_series
 from server import auth, captcha, db, poller, push, watch
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="MangaWhere scraper API")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db.init_db()
+    poller.start()
+    yield
+    poller.stop()
+
+
+app = FastAPI(title="MangaWhere scraper API", lifespan=lifespan)
+
+# CORS proxy for the frontend's own client-side API calls (AniList, Jikan,
+# MangaUpdates, TikTok's oEmbed, Webtoons' RSS, ...) — those APIs don't
+# send CORS headers a browser would accept, so the frontend routes them
+# through here instead (see index.html's via()/PROXY). Without an
+# allowlist this is an open relay anyone could point anywhere.
+PROXY_ALLOWED_HOSTS = {
+    "api.mangaupdates.com",
+    "www.tiktok.com",
+    "vm.tiktok.com",
+    "www.youtube.com",
+    "youtu.be",
+    "api.jikan.moe",
+    "graphql.anilist.co",
+    "www.webtoons.com",
+    "global.mangaplus.shueisha.co.jp",
+    "manga.bilibili.com",
+}
+PROXY_UA = "MangaWhere/1.0 (+https://mangawhere.example)"
 
 # No cookies are used (auth is a bearer token the client stores itself), so
 # a wildcard origin doesn't expose this to CSRF — it only lets a
@@ -23,17 +54,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def on_startup():
-    db.init_db()
-    poller.start()
-
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    poller.stop()
 
 
 def _current_user(authorization: Optional[str]):
@@ -55,9 +75,49 @@ def _require_absolute_url(url: str) -> None:
         raise HTTPException(status_code=400, detail="url must be an absolute http(s) URL")
 
 
+async def _proxy(request: Request, target: str) -> Response:
+    parsed = urlparse(target)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return JSONResponse({"error": "malformed url"}, status_code=400)
+    if parsed.hostname not in PROXY_ALLOWED_HOSTS:
+        return JSONResponse(
+            {"error": "host not allowed", "host": parsed.hostname}, status_code=403
+        )
+
+    headers = {
+        "User-Agent": PROXY_UA,
+        "Accept": "application/json, text/xml, application/xml, */*",
+    }
+    body = None
+    if request.method == "POST":
+        body = await request.body()
+        headers["Content-Type"] = request.headers.get("content-type", "application/json")
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            upstream = await client.request(request.method, target, headers=headers, content=body)
+    except Exception as e:
+        return JSONResponse({"error": "upstream failed", "detail": str(e)}, status_code=502)
+
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type", "application/json"),
+    )
+
+
 @app.get("/")
-def serve_index():
+async def serve_index_or_proxy(request: Request, url: Optional[str] = Query(default=None)):
+    if url:
+        return await _proxy(request, url)
     return FileResponse(BASE_DIR / "index.html")
+
+
+@app.post("/")
+async def proxy_post(request: Request, url: Optional[str] = Query(default=None)):
+    if not url:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _proxy(request, url)
 
 
 @app.get("/api/scrape")
@@ -121,16 +181,29 @@ async def api_find(title: str = Query(..., description="Manga title to find a re
     return response
 
 
+def _attach_endpoint_from_payload(result: dict, payload: dict) -> None:
+    endpoint = payload.get("endpoint")
+    if not endpoint or "token" not in result:
+        return
+    user = auth.user_from_token(result["token"])
+    if user:
+        push.attach_subscription(endpoint, user["id"])
+
+
 @app.post("/api/register")
 async def api_register(request: Request):
     payload = await request.json()
-    return JSONResponse(auth.register(payload, captcha.verify))
+    result = auth.register(payload, captcha.verify)
+    _attach_endpoint_from_payload(result, payload)
+    return JSONResponse(result)
 
 
 @app.post("/api/login")
 async def api_login(request: Request):
     payload = await request.json()
-    return JSONResponse(auth.login(payload))
+    result = auth.login(payload)
+    _attach_endpoint_from_payload(result, payload)
+    return JSONResponse(result)
 
 
 @app.post("/api/logout")
@@ -153,14 +226,15 @@ async def api_config():
 
 
 @app.post("/api/subscribe")
-async def api_subscribe(request: Request):
+async def api_subscribe(request: Request, authorization: Optional[str] = Header(default=None)):
     payload = await request.json()
     endpoint = payload.get("endpoint")
     keys = payload.get("keys") or {}
     if not endpoint or not keys.get("p256dh") or not keys.get("auth"):
         raise HTTPException(status_code=400, detail="endpoint and keys are required")
-    push.save_subscription(endpoint, keys["p256dh"], keys["auth"])
-    return {"ok": True}
+    user = _current_user(authorization)
+    push.save_subscription(endpoint, keys["p256dh"], keys["auth"], user_id=user["id"] if user else None)
+    return {"ok": True, "attached": bool(user)}
 
 
 @app.post("/api/test-push")
@@ -192,6 +266,10 @@ async def api_watch(request: Request, authorization: Optional[str] = Header(defa
     user = _require_user(authorization)
     payload = await request.json()
     watch.upsert(user["id"], payload)
+    # If this browser already has push enabled, attach it for delivery —
+    # tracking works without it, but a device that's already subscribed
+    # shouldn't need a separate step to start actually receiving alerts.
+    push.attach_subscription(payload.get("endpoint"), user["id"])
     return {"ok": True}
 
 
