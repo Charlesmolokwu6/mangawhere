@@ -2326,22 +2326,26 @@ function tagged(url){
 }
 
 /* ================= reader (scraper-backed) =================
-   No pasting: this searches ToonGod and AsuraScans by the manga's own
-   title (server-side, via /api/find) and reads from whichever of the two
+   No pasting: this searches ToonGod, Asura Scans and MangaFreak by the
+   manga's own title (server-side, via /api/find) and reads from whichever
    currently has the newer chapter. Whichever one wins hands back its full
    chapter list in the same response, so the chapter picker and Prev/Next
    are free from there — no extra round trip.
 
-   Tapping into a title means reading it is the likely next step, so the
-   lookup starts the moment showDetail() paints (prefetchChapters(),
-   below) rather than waiting for a tap on Read — by the time someone
-   actually taps it, the search is often already done. Read and the
-   prefetch share one cache entry per title, so whichever gets there
-   first (the prefetch, usually) is what Read uses; a failed lookup isn't
-   cached, so tapping Read after one retries instead of replaying a
-   possibly-transient failure forever. */
+   Tapping into a title means reading it is the likely next step, so
+   BOTH lookups this needs — which site (/api/find) and that site's
+   actual chapter images (/api/scrape) — start the moment showDetail()
+   paints, chained one after the other, rather than waiting for a tap on
+   Read. By the time someone actually taps it, both are often already
+   done and there's nothing left to wait on. Read/readerView() and the
+   prefetch share the same two cache entries (by title, then by chapter
+   URL), so whichever gets there first is what gets used; a failed
+   lookup isn't cached, so retrying (tapping Read again, or opening the
+   same title again) tries fresh instead of replaying a possibly-
+   transient failure forever. */
 var readerState={chapters:null, index:-1, back:null, domain:null};
 var findCache={};
+var scrapeCache={};
 
 function findChapters(title){
   if(findCache[title]) return findCache[title];
@@ -2349,7 +2353,23 @@ function findChapters(title){
     .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, status:r.status, d:d}; }); })
     .catch(function(){ return {ok:false, status:0, d:null}; });
   findCache[title]=promise;
-  promise.then(function(res){ if(!res.ok) delete findCache[title]; });
+  promise.then(function(res){
+    if(!res.ok){ delete findCache[title]; return; }
+    // Found a source — start scraping its latest chapter's pages now
+    // too, not just once Read is tapped.
+    var chapters=res.d.chapters||[];
+    if(chapters.length) scrapeChapter(chapters[chapters.length-1].url);
+  });
+  return promise;
+}
+
+function scrapeChapter(url){
+  if(scrapeCache[url]) return scrapeCache[url];
+  var promise=fetch(READER_BASE+"/api/scrape?url="+encodeURIComponent(url))
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+    .catch(function(){ return {ok:false, d:null}; });
+  scrapeCache[url]=promise;
+  promise.then(function(res){ if(!res.ok) delete scrapeCache[url]; });
   return promise;
 }
 
@@ -2491,30 +2511,24 @@ function readerView(url){
   window.scrollTo(0,0);
   renderReaderNav();
 
-  fetch(READER_BASE+"/api/scrape?url="+encodeURIComponent(url))
-    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
-    .then(function(res){
-      var status=document.getElementById("rstatus");
-      if(!status) return;   // they navigated away before this resolved
-      if(!res.ok){
-        status.textContent="Couldn't load this chapter — try again.";
-        return;
-      }
-      var images=res.d.images||[];
-      if(!images.length){
-        status.textContent="Couldn't load this chapter — try again.";
-        return;
-      }
-      status.textContent="";   // loaded fine — no page count to show
-      document.getElementById("rpages").innerHTML=images.map(function(src){
-        return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
-          'src="'+esc(src)+'" referrerpolicy="no-referrer" alt="">';
-      }).join("");
-    })
-    .catch(function(){
-      var status=document.getElementById("rstatus");
-      if(status) status.textContent="Couldn't load this chapter — try again.";
-    });
+  scrapeChapter(url).then(function(res){
+    var status=document.getElementById("rstatus");
+    if(!status) return;   // they navigated away before this resolved
+    if(!res.ok){
+      status.textContent="Couldn't load this chapter — try again.";
+      return;
+    }
+    var images=res.d.images||[];
+    if(!images.length){
+      status.textContent="Couldn't load this chapter — try again.";
+      return;
+    }
+    status.textContent="";   // loaded fine — no page count to show
+    document.getElementById("rpages").innerHTML=images.map(function(src){
+      return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
+        'src="'+esc(src)+'" referrerpolicy="no-referrer" alt="">';
+    }).join("");
+  });
 }
 
 function linkRow(l){
