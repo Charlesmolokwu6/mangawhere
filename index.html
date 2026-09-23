@@ -1910,6 +1910,7 @@ function showDetail(m,ch,solo){
   var from=curTab;
   host.innerHTML='<button class="back" id="bk">← Back</button>'+detailHtml(m,ch);
   fillChapters(m,ch);
+  findChapters(m.title);   // start looking for a reading source now, not on Read tap
   // Back should return where they came from, the way an app does.
   document.getElementById("bk").onclick=function(){
     // Drop ?m= so Back doesn't bounce straight back into this page.
@@ -2329,8 +2330,28 @@ function tagged(url){
    title (server-side, via /api/find) and reads from whichever of the two
    currently has the newer chapter. Whichever one wins hands back its full
    chapter list in the same response, so the chapter picker and Prev/Next
-   are free from there — no extra round trip. */
+   are free from there — no extra round trip.
+
+   Tapping into a title means reading it is the likely next step, so the
+   lookup starts the moment showDetail() paints (prefetchChapters(),
+   below) rather than waiting for a tap on Read — by the time someone
+   actually taps it, the search is often already done. Read and the
+   prefetch share one cache entry per title, so whichever gets there
+   first (the prefetch, usually) is what Read uses; a failed lookup isn't
+   cached, so tapping Read after one retries instead of replaying a
+   possibly-transient failure forever. */
 var readerState={chapters:null, index:-1, back:null, domain:null};
+var findCache={};
+
+function findChapters(title){
+  if(findCache[title]) return findCache[title];
+  var promise=fetch(READER_BASE+"/api/find?title="+encodeURIComponent(title))
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, status:r.status, d:d}; }); })
+    .catch(function(){ return {ok:false, status:0, d:null}; });
+  findCache[title]=promise;
+  promise.then(function(res){ if(!res.ok) delete findCache[title]; });
+  return promise;
+}
 
 function readerBox(){
   return '<button class="primary" id="readergo" style="width:100%;margin-top:10px">Read</button>'+
@@ -2347,28 +2368,22 @@ function wireReader(m){
     err.textContent="";
     go.disabled=true; go.textContent="Finding…";
 
-    fetch(READER_BASE+"/api/find?title="+encodeURIComponent(m.title))
-      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, status:r.status, d:d}; }); })
-      .then(function(res){
-        go.disabled=false; go.textContent=label;
-        if(!res.ok){
-          err.textContent = res.status===404
-            ? "Couldn't find this title to read."
-            : "Couldn't load this right now — try again.";
-          return;
-        }
-        var chapters=res.d.chapters||[];
-        if(!chapters.length){
-          err.textContent="Couldn't load this right now — try again.";
-          return;
-        }
-        readerState={chapters:chapters, index:chapters.length-1, back:back};
-        readerView(chapters[chapters.length-1].url);
-      })
-      .catch(function(){
-        go.disabled=false; go.textContent=label;
+    findChapters(m.title).then(function(res){
+      go.disabled=false; go.textContent=label;
+      if(!res.ok){
+        err.textContent = res.status===404
+          ? "Couldn't find this title to read."
+          : "Couldn't load this right now — try again.";
+        return;
+      }
+      var chapters=res.d.chapters||[];
+      if(!chapters.length){
         err.textContent="Couldn't load this right now — try again.";
-      });
+        return;
+      }
+      readerState={chapters:chapters, index:chapters.length-1, back:back};
+      readerView(chapters[chapters.length-1].url);
+    });
   };
 }
 
