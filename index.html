@@ -2328,8 +2328,8 @@ function tagged(url){
    No pasting: this searches ToonGod and AsuraScans by the manga's own
    title (server-side, via /api/find) and reads from whichever of the two
    currently has the newer chapter. Whichever one wins hands back its full
-   chapter list in the same response, so Prev/Next and "All chapters" are
-   free from there — no extra round trip. */
+   chapter list in the same response, so the chapter picker and Prev/Next
+   are free from there — no extra round trip. */
 var readerState={chapters:null, index:-1, back:null, domain:null};
 
 function readerBox(){
@@ -2372,50 +2372,79 @@ function wireReader(m){
   };
 }
 
-/* The chapter list readerState already holds -> a tappable list. No
-   fetch: /api/find already handed back every chapter on the winning site. */
-function openChapterBrowserFromState(){
-  var chapters=readerState.chapters, back=readerState.back;
-  if(!chapters) return;
-  stopRail();
-  var view=document.getElementById("app");
-  view.innerHTML='<button class="back" id="rbk">← Back</button>'+
-    '<h1>Chapters</h1>'+
-    '<p class="sub">'+chapters.length+' chapter'+(chapters.length===1?"":"s")+
-    ' — newest first</p>'+
-    '<div id="rchapters"></div>';
-  document.getElementById("rbk").onclick=back;
-  window.scrollTo(0,0);
+/* The chapter-card dropdown, top-right of the reader. Renders from
+   readerState.chapters — no fetch, /api/find already handed back every
+   chapter on the winning site. Only one can be open at a time; a single
+   document-level listener (armed once, below) closes it on an outside
+   tap instead of each readerView() paint adding its own leaked listener. */
+var openChapterDropdown=null;
 
-  var newestFirst=chapters.slice().reverse();
-  document.getElementById("rchapters").innerHTML=newestFirst.map(function(c){
-    return '<button data-url="'+esc(c.url)+'" class="chrow" style="display:flex;'+
-      'justify-content:space-between;align-items:center;width:100%;text-align:left;'+
-      'padding:14px 4px;border:0;border-bottom:1px solid rgba(127,127,127,.2);'+
-      'background:none;color:inherit;font:inherit;font-size:15px;cursor:pointer">'+
-      '<span>Chapter '+esc(String(c.number))+'</span>'+
-      '<span style="opacity:.55">Read →</span></button>';
-  }).join("");
-  Array.prototype.forEach.call(document.querySelectorAll(".chrow"), function(btn){
-    btn.onclick=function(){
-      var url=btn.getAttribute("data-url");
-      readerState.index=chapters.findIndex(function(c){ return c.url===url; });
-      readerView(url);
-    };
-  });
+document.addEventListener("click", function(e){
+  if(!openChapterDropdown) return;
+  var d=openChapterDropdown;
+  if(!d.drop.contains(e.target) && e.target!==d.btn){
+    d.drop.style.display="none";
+    openChapterDropdown=null;
+  }
+});
+
+function chapterPickerHtml(){
+  var chapters=readerState.chapters, idx=readerState.index;
+  var current=idx>-1?chapters[idx]:null;
+  return '<div style="position:relative;flex-shrink:0">'+
+    '<button class="linkish" id="rchapbtn" style="white-space:nowrap">'+
+      (current?"Chapter "+esc(String(current.number)):"Chapters")+
+      ' <span style="opacity:.6">▾</span>'+
+    '</button>'+
+    '<div id="rchapdrop" style="display:none;position:absolute;right:0;top:calc(100% + 6px);'+
+      'max-height:320px;overflow-y:auto;background:var(--surf2);border:1px solid var(--line);'+
+      'border-radius:12px;min-width:170px;z-index:30;box-shadow:0 10px 30px rgba(0,0,0,.35)"></div>'+
+  '</div>';
 }
 
-/* Redraws the Prev/Next row(s) from readerState — called on every reader
-   paint. */
+function wireChapterPicker(){
+  var btn=document.getElementById("rchapbtn"), drop=document.getElementById("rchapdrop");
+  if(!btn||!drop) return;
+  var chapters=readerState.chapters;
+
+  btn.onclick=function(e){
+    e.stopPropagation();
+    if(openChapterDropdown){ drop.style.display="none"; openChapterDropdown=null; return; }
+
+    var newestFirst=chapters.slice().reverse();
+    drop.innerHTML=newestFirst.map(function(c){
+      var active=chapters[readerState.index]===c;
+      return '<button data-url="'+esc(c.url)+'" class="chrow" style="display:block;width:100%;'+
+        'text-align:left;padding:11px 14px;border:0;border-bottom:1px solid rgba(127,127,127,.15);'+
+        'background:'+(active?"rgba(61,231,195,.12)":"none")+';color:inherit;font:inherit;'+
+        'font-size:14px;cursor:pointer">Chapter '+esc(String(c.number))+'</button>';
+    }).join("");
+    Array.prototype.forEach.call(drop.querySelectorAll(".chrow"), function(row){
+      row.onclick=function(){
+        var url=row.getAttribute("data-url");
+        readerState.index=chapters.findIndex(function(c){ return c.url===url; });
+        drop.style.display="none"; openChapterDropdown=null;
+        readerView(url);
+      };
+    });
+    drop.style.display="block";
+    openChapterDropdown={btn:btn, drop:drop};
+  };
+}
+
+/* The Prev/Next bar at the end of a chapter's pages. */
 function renderReaderNav(){
   var chapters=readerState.chapters, idx=readerState.index;
   var html="";
   if(chapters && idx>-1){
     var prev=chapters[idx-1], next=chapters[idx+1];
-    html='<div style="display:flex;justify-content:space-between;margin:10px 0;gap:8px">'+
-      (prev?'<button class="linkish rprev">‹ Chapter '+esc(String(prev.number))+'</button>':'<span></span>')+
-      (next?'<button class="linkish rnext">Chapter '+esc(String(next.number))+' ›</button>':'<span></span>')+
-    '</div>';
+    if(prev||next){
+      html='<div style="display:flex;gap:8px;margin:16px 0">'+
+        (prev?'<button class="trackbtn rprev" style="flex:1;margin-top:0;'+
+          'background:var(--surf2);color:var(--text);border:1px solid var(--line)">‹ Prev</button>':'')+
+        (next?'<button class="trackbtn rnext" style="flex:1;margin-top:0">Next ›</button>':'')+
+      '</div>';
+    }
   }
   Array.prototype.forEach.call(document.querySelectorAll(".readernavslot"), function(el){
     el.innerHTML=html;
@@ -2427,22 +2456,23 @@ function renderReaderNav(){
 
 /* Full-page reader: fetches the chapter's image URLs through the backend
    (so the site's own anti-hotlinking / Cloudflare handling happens
-   server-side) and stacks them the way a webtoon reader would. Prev/Next
-   and "All chapters" come from readerState, set by whoever found/navigated
-   here. */
+   server-side) and stacks them the way a webtoon reader would. The
+   chapter picker and Prev/Next come from readerState, set by whoever
+   found/navigated here. */
 function readerView(url){
   stopRail();
+  openChapterDropdown=null;
   var view=document.getElementById("app");
   var hasChapters=!!readerState.chapters;
-  view.innerHTML='<button class="back" id="rbk">← Back</button>'+
-    (hasChapters?'<button class="linkish" id="rlist" style="float:right">All chapters</button>':'')+
-    '<h1>Chapter</h1>'+
-    '<div class="readernavslot"></div>'+
-    '<p class="sub" id="rstatus">Loading pages…</p>'+
+  view.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
+      '<button class="back" id="rbk" style="margin:0">← Back</button>'+
+      (hasChapters?chapterPickerHtml():'')+
+    '</div>'+
+    '<p class="sub" id="rstatus">Loading…</p>'+
     '<div id="rpages"></div>'+
     '<div class="readernavslot"></div>';
   document.getElementById("rbk").onclick=readerState.back;
-  if(hasChapters) document.getElementById("rlist").onclick=openChapterBrowserFromState;
+  if(hasChapters) wireChapterPicker();
   window.scrollTo(0,0);
   renderReaderNav();
 
@@ -2460,7 +2490,7 @@ function readerView(url){
         status.textContent="Couldn't load this chapter — try again.";
         return;
       }
-      status.textContent=images.length+" page"+(images.length===1?"":"s");
+      status.textContent="";   // loaded fine — no page count to show
       document.getElementById("rpages").innerHTML=images.map(function(src){
         return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
           'src="'+esc(src)+'" referrerpolicy="no-referrer" alt="">';
