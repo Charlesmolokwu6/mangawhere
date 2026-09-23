@@ -107,6 +107,22 @@ class ScraperParsingTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(chapters), 1)
 
+    def test_extract_chapter_list_from_mangafreak_style_markup(self):
+        # MangaFreak's chapter URLs don't contain the word "chapter" at
+        # all, and the link text has a subtitle after the number
+        # ("Chapter 1 - Romance Dawn") so it isn't at the end either —
+        # only the trailing-number-in-href fallback can read these.
+        html = """
+        <a class="chapter-link" href="/Read1_One_Piece_2">Chapter 2 - They Call Him Strawhat Luffy</a>
+        <a class="chapter-link" href="/Read1_One_Piece_1">Chapter 1 - Romance Dawn</a>
+        <a class="chapter-link" href="/Read1_One_Piece_10">Chapter 10 - Ordeal</a>
+        """
+        chapters = extract_chapter_list(html, "a.chapter-link", "https://ww3.mangafreak.me/")
+        self.assertEqual([c["number"] for c in chapters], [1.0, 2.0, 10.0])
+        self.assertEqual(
+            chapters[0]["url"], "https://ww3.mangafreak.me/Read1_One_Piece_1"
+        )
+
 
 class SourceMatchingTests(unittest.TestCase):
     def test_best_match_picks_the_right_card_by_cover_alt_text(self):
@@ -129,6 +145,24 @@ class SourceMatchingTests(unittest.TestCase):
             "Shadow Slave", use_alt=True,
         )
         self.assertEqual(url, "https://asurascans.com/comics/shadow-slave-05c7df14")
+
+    def test_best_match_finds_a_titled_anchor_after_a_nameless_one_sharing_its_href(self):
+        # MangaFreak's search cards wrap two anchors around the same href —
+        # a bare cover-image link first, a titled link second. The bare
+        # one used to get marked "seen" before its emptiness was checked,
+        # which blocked the titled anchor right after it from ever being
+        # scored.
+        html = """
+        <div class="manga_search_item">
+            <a href="/Manga/One_Piece"><img src="https://x/one_piece.jpg"></a>
+            <a href="/Manga/One_Piece">One Piece</a>
+        </div>
+        """
+        url = _best_match(
+            html, '.manga_search_item a[href^="/Manga/"]',
+            "https://ww3.mangafreak.me/Find/one%20piece", "One Piece", use_alt=False,
+        )
+        self.assertEqual(url, "https://ww3.mangafreak.me/Manga/One_Piece")
 
     def test_best_match_returns_none_below_threshold(self):
         html = '<a href="/comics/totally-unrelated"><img alt="Totally Unrelated Thing"></a>'

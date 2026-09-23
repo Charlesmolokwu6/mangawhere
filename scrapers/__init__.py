@@ -8,10 +8,13 @@ from .core import (
     scrape_asurascans,
     scrape_asurascans_chapter_list,
     scrape_chapter,
+    scrape_mangafreak,
+    scrape_mangafreak_chapter_list,
     scrape_series,
     scrape_toongod,
     scrape_toongod_chapter_list,
     search_asurascans,
+    search_mangafreak,
     search_toongod,
 )
 from .matching import similar
@@ -26,10 +29,13 @@ __all__ = [
     "scrape_asurascans",
     "scrape_asurascans_chapter_list",
     "scrape_chapter",
+    "scrape_mangafreak",
+    "scrape_mangafreak_chapter_list",
     "scrape_series",
     "scrape_toongod",
     "scrape_toongod_chapter_list",
     "search_asurascans",
+    "search_mangafreak",
     "search_toongod",
     "similar",
 ]

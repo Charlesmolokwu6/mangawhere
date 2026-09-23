@@ -130,12 +130,6 @@ async def api_scrape(url: str = Query(..., description="Chapter URL to scrape"))
         raise HTTPException(
             status_code=502, detail="Couldn't reach that page — the site may be blocking us."
         )
-    host = urlparse(url).netloc.lower().replace("www.", "")
-
-    if "toongod" in host:
-        payload["domain"] = "toongod"
-    elif "asurascans" in host or "asura" in host:
-        payload["domain"] = "asurascans"
 
     payload["chapter_url"] = url
     payload["images"] = [img for img in payload.get("images", []) if img]

@@ -148,15 +148,32 @@ async def scrape_asurascans(url: str) -> List[str]:
     return extract_image_urls_from_html(html or "", selectors)
 
 
+async def scrape_mangafreak(url: str) -> List[str]:
+    """Scrape MangaFreak chapter pages. Server-rendered, no Cloudflare
+    challenge in practice, so the plain fetch is tried first."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+
+    return extract_image_urls_from_html(html or "", ['img[id="gohere"]'])
+
+
 CHAPTER_NUMBER_IN_HREF = re.compile(r"chapter[-/](\d+(?:\.\d+)?)", re.I)
+# MangaFreak's chapter URLs don't contain the word "chapter" at all —
+# /Read1_One_Piece_1 — just a number at the very end of the path.
+CHAPTER_NUMBER_TRAILING_IN_HREF = re.compile(r"_(\d+(?:\.\d+)?)/?(?:[?#]|$)")
 CHAPTER_NUMBER_IN_TEXT = re.compile(r"(\d+(?:\.\d+)?)\s*$")
 
 
 def extract_chapter_list(html: str, selector: str, base_url: str) -> List[Dict[str, Any]]:
     """Collect a series page's chapter links, deduplicated and sorted by
-    chapter number. Numbers are read from the URL first (reliable on both
-    sites' predictable /chapter-N/ and /chapter/N paths) and only fall
-    back to the link text for markup that doesn't follow that pattern."""
+    chapter number. Numbers are read from the URL first (reliable on every
+    site's own predictable pattern) and only fall back to the link text
+    for markup that doesn't follow one."""
     soup = BeautifulSoup(html, "html.parser")
     chapters: Dict[float, Dict[str, Any]] = {}
 
@@ -165,7 +182,11 @@ def extract_chapter_list(html: str, selector: str, base_url: str) -> List[Dict[s
         if not href:
             continue
         text = a.get_text(" ", strip=True)
-        match = CHAPTER_NUMBER_IN_HREF.search(href) or CHAPTER_NUMBER_IN_TEXT.search(text)
+        match = (
+            CHAPTER_NUMBER_IN_HREF.search(href)
+            or CHAPTER_NUMBER_TRAILING_IN_HREF.search(href)
+            or CHAPTER_NUMBER_IN_TEXT.search(text)
+        )
         if not match:
             continue
         number = float(match.group(1))
@@ -201,18 +222,40 @@ async def scrape_asurascans_chapter_list(url: str) -> List[Dict[str, Any]]:
     return extract_chapter_list(html or "", 'a[href*="/chapter/"]', url)
 
 
+async def scrape_mangafreak_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a MangaFreak series page."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    return extract_chapter_list(html or "", "a.chapter-link", url)
+
+
+def _detect_domain(url: str) -> str:
+    lowered = (url or "").lower()
+    if "toongod" in lowered:
+        return "toongod"
+    if "asurascans" in lowered or "asura" in lowered:
+        return "asurascans"
+    if "mangafreak" in lowered:
+        return "mangafreak"
+    return "unknown"
+
+
 async def scrape_series(url: str) -> Dict[str, Any]:
     """Auto-detect the site and return the series' chapter list."""
-    lowered = (url or "").lower()
+    domain = _detect_domain(url)
 
-    if "toongod" in lowered:
-        domain = "toongod"
+    if domain == "toongod":
         chapters = await scrape_toongod_chapter_list(url)
-    elif "asurascans" in lowered or "asura" in lowered:
-        domain = "asurascans"
+    elif domain == "asurascans":
         chapters = await scrape_asurascans_chapter_list(url)
+    elif domain == "mangafreak":
+        chapters = await scrape_mangafreak_chapter_list(url)
     else:
-        domain = "unknown"
         chapters = []
 
     return {"domain": domain, "series_url": url, "chapters": chapters}
@@ -230,9 +273,8 @@ def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt:
 
     for a in soup.select(selector):
         href = a.get("href")
-        if not href or href in seen:
+        if not href:
             continue
-        seen.add(href)
 
         name = ""
         if use_alt:
@@ -240,7 +282,14 @@ def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt:
             name = (img.get("alt") if img else "") or ""
         name = name or a.get_text(" ", strip=True)
         if not name:
+            # Some cards wrap two anchors around one href — a bare cover
+            # image first, the titled link second. Skip a nameless one
+            # without marking its href "seen", or the titled anchor right
+            # after it never gets a chance to be scored.
             continue
+        if href in seen:
+            continue
+        seen.add(href)
 
         score = similar(title, name)
         if score > best_score:
@@ -283,26 +332,42 @@ async def search_asurascans(title: str) -> Optional[str]:
     return _best_match(html, 'a[href^="/comics/"]', listing_url, title, use_alt=True)
 
 
-async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
-    """Search both sites for a title and read from whichever is more
-    up to date — i.e. has the higher chapter number right now."""
-    toongod_url, asurascans_url = await asyncio.gather(
-        search_toongod(title), search_asurascans(title)
+async def search_mangafreak(title: str) -> Optional[str]:
+    """Find the best-matching series URL on MangaFreak for a title, via
+    its own search results page (/Find/<query>)."""
+    search_url = f"https://ww3.mangafreak.me/Find/{quote(title)}"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(search_url)
+        except Exception:
+            return None
+    return _best_match(
+        html, '.manga_search_item a[href^="/Manga/"]', search_url, title, use_alt=False
     )
 
+
+SOURCES = {
+    "toongod": (search_toongod, scrape_toongod_chapter_list),
+    "asurascans": (search_asurascans, scrape_asurascans_chapter_list),
+    "mangafreak": (search_mangafreak, scrape_mangafreak_chapter_list),
+}
+
+
+async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
+    """Search every site for a title and read from whichever is more
+    up to date — i.e. has the higher chapter number right now."""
+    domains = list(SOURCES.keys())
+    urls = await asyncio.gather(*(SOURCES[d][0](title) for d in domains))
+
     candidates: List[Dict[str, Any]] = []
-    if toongod_url:
-        chapters = await scrape_toongod_chapter_list(toongod_url)
+    for domain, series_url in zip(domains, urls):
+        if not series_url:
+            continue
+        chapters = await SOURCES[domain][1](series_url)
         if chapters:
-            candidates.append(
-                {"domain": "toongod", "series_url": toongod_url, "chapters": chapters}
-            )
-    if asurascans_url:
-        chapters = await scrape_asurascans_chapter_list(asurascans_url)
-        if chapters:
-            candidates.append(
-                {"domain": "asurascans", "series_url": asurascans_url, "chapters": chapters}
-            )
+            candidates.append({"domain": domain, "series_url": series_url, "chapters": chapters})
 
     if not candidates:
         return None
@@ -313,16 +378,15 @@ async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
 
 async def scrape_chapter(url: str) -> Dict[str, Any]:
     """Auto-detect the site and return the normalized chapter payload."""
-    lowered = (url or "").lower()
+    domain = _detect_domain(url)
 
-    if "toongod" in lowered:
-        domain = "toongod"
+    if domain == "toongod":
         images = await scrape_toongod(url)
-    elif "asurascans" in lowered or "asura" in lowered:
-        domain = "asurascans"
+    elif domain == "asurascans":
         images = await scrape_asurascans(url)
+    elif domain == "mangafreak":
+        images = await scrape_mangafreak(url)
     else:
-        domain = "unknown"
         images = []
 
     return {
