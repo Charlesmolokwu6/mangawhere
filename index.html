@@ -1978,7 +1978,6 @@ function showDetail(m,ch,solo){
 }
 
 function detailHtml(m,videoCh){
-  var off=m.links.filter(function(l){return l.official;});
   var other=m.links.filter(function(l){return !l.official;});
   var st=statusInfo(m.status);
   var done = st.key==="complete";
@@ -2052,8 +2051,8 @@ function detailHtml(m,videoCh){
     shareRow(m)+
     '</div>'+
     '</div>'+
-    '<h3>'+(off.length?"Read it here":"Where to read")+'</h3>'+
-    (off.length?off.map(linkRow).join(""):noEnglishBlock(m))+
+    '<h3>Chapters</h3>'+
+    '<div id="detailchapters"><p class="sub" style="margin:0">Looking for a chapter list…</p></div>'+
     buyRow(m)+adSlot()+
     (other.length?'<h3>More info</h3>'+other.slice(0,3).map(linkRow).join(""):"");
 }
@@ -2180,6 +2179,7 @@ function fillChapters(m, videoCh){
   // here, so this is the one place this needs to be wired up.
   findChapters(m.title).then(function(res){
     if(res.ok) reconcileChapterCount(res.d.chapters, res.d.domain);
+    renderDetailChapters(m, res);
   });
 
   if(m.chapters) return;                  // count already known
@@ -2384,36 +2384,6 @@ function reconcileChapterCount(chapters, domain){
   }
 }
 
-/* No English licence doesn't mean nowhere to read it — it almost always
-   means the original-language platform. Point there instead of showing a
-   dead end. We link to their search, not a guessed series URL, so the
-   link never 404s. */
-var ORIGIN_HOMES={
-  KR:[{site:"Naver Series",  url:"https://series.naver.com/search/search.series?t=comic&q="},
-      {site:"KakaoPage",     url:"https://page.kakao.com/search?word="}],
-  JP:[{site:"MANGA Plus",    url:"https://mangaplus.shueisha.co.jp/manga_list/all"},
-      {site:"Comic Walker",  url:"https://comic-walker.com/search?q="}],
-  CN:[{site:"Bilibili Comics",url:"https://manga.bilibili.com/search?keyword="}]
-};
-
-function noEnglishBlock(m){
-  var homes=ORIGIN_HOMES[(m.country||"").toUpperCase()]||[];
-  var langName={KR:"Korean",JP:"Japanese",CN:"Chinese"}[(m.country||"").toUpperCase()]||"original";
-  var head='<div class="note"><p><strong>No English publisher yet</strong>'+
-    'Nobody has licensed this one in English so far'+
-    (homes.length?'. It should still be readable on the '+langName+
-      ' platform it was published on — your browser can translate the page.':'.')+
-    '</p></div>';
-  if(!homes.length) return head;
-  return head+homes.map(function(h){
-    var url=h.url.indexOf("=")===h.url.length-1
-      ? h.url+encodeURIComponent(m.title) : h.url;
-    return '<a class="read no" target="_blank" rel="noopener" href="'+esc(url)+'">'+
-      '<span><span class="n">Search '+esc(h.site)+'</span><br>'+
-      '<span class="t">Official '+esc(langName)+' platform</span></span>'+
-      '<span class="go">Open →</span></a>';
-  }).join("");
-}
 
 /* Print volumes are the one thing a reader can buy that we can be paid
    for today — Amazon has a self-serve programme, unlike any of the manga
@@ -2504,6 +2474,48 @@ function scrapeChapter(url){
   scrapeCache[url]=promise;
   promise.then(function(res){ if(!res.ok) delete scrapeCache[url]; });
   return promise;
+}
+
+/* The chapter list on a title's detail page — replaces what used to be a
+   list of external "official" platform links. Those were often nothing
+   more than a dead end (unlicensed titles, or a platform that doesn't
+   actually carry it); this instead lists every chapter /api/find already
+   found on the winning scanlation site, each one tappable straight into
+   the reader. Shares the same findChapters() promise as the "Read"
+   button and the prefetch, so this never re-fetches on its own. */
+function renderDetailChapters(m, res){
+  var box=document.getElementById("detailchapters");
+  if(!box) return;   // navigated away before this resolved
+  if(!res.ok){
+    box.innerHTML='<div class="note"><p><strong>No chapter list yet</strong>'+
+      (res.status===404
+        ? "Couldn't find this title on any of the sites this app reads from."
+        : "Couldn't load the chapter list right now — try again.")+'</p></div>';
+    return;
+  }
+  var chapters=res.d.chapters||[];
+  if(!chapters.length){
+    box.innerHTML='<div class="note"><p><strong>No chapters yet</strong>'+
+      'Nothing has been scanned for this title yet.</p></div>';
+    return;
+  }
+  var back=function(){ showDetail(m, null); };
+  var newestFirst=chapters.slice().reverse();
+  box.innerHTML='<div style="max-height:420px;overflow-y:auto">'+
+    newestFirst.map(function(c){
+      return '<button class="read chrow" data-url="'+esc(c.url)+'">'+
+        '<span><span class="n">Chapter '+esc(String(c.number))+'</span></span>'+
+        '<span class="go">Read →</span></button>';
+    }).join("")+
+  '</div>';
+  Array.prototype.forEach.call(box.querySelectorAll(".chrow"), function(row){
+    row.onclick=function(){
+      var url=row.getAttribute("data-url");
+      var idx=chapters.findIndex(function(c){ return c.url===url; });
+      readerState={chapters:chapters, index:idx, back:back, manga:m};
+      readerView(url);
+    };
+  });
 }
 
 function readerBox(){
