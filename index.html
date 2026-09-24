@@ -2478,24 +2478,47 @@ function renderDetailChapters(m, res){
   }
   var back=function(){ showDetail(m, null); };
   var newestFirst=chapters.slice().reverse();
-  // Flows with the rest of the page rather than being boxed into its own
-  // small scroller — the whole point of putting the list here is to
-  // browse it, not peer at it through a letterbox.
-  box.innerHTML=newestFirst.map(function(c){
+  var CHAPTER_PAGE_SIZE=30;
+
+  function chapterRowHtml(c){
     var subtitle=chapterSubtitle(c);
     return '<button class="read chrow" data-url="'+esc(c.url)+'">'+
       '<span><span class="n">Chapter '+esc(String(c.number))+'</span>'+
       (subtitle?'<br><span class="t">'+esc(subtitle)+'</span>':'')+'</span>'+
       '<span class="go">Read →</span></button>';
-  }).join("");
-  Array.prototype.forEach.call(box.querySelectorAll(".chrow"), function(row){
-    row.onclick=function(){
-      var url=row.getAttribute("data-url");
-      var idx=chapters.findIndex(function(c){ return c.url===url; });
-      readerState={chapters:chapters, index:idx, back:back, manga:m};
-      readerView(url);
-    };
-  });
+  }
+
+  function wireRows(){
+    Array.prototype.forEach.call(box.querySelectorAll(".chrow"), function(row){
+      row.onclick=function(){
+        var url=row.getAttribute("data-url");
+        var idx=chapters.findIndex(function(c){ return c.url===url; });
+        readerState={chapters:chapters, index:idx, back:back, manga:m};
+        readerView(url);
+      };
+    });
+  }
+
+  // Most people only want the latest handful — dumping all of a
+  // 200+ chapter series onto the page at once made it an enormous
+  // scroll for no benefit. Shows the newest CHAPTER_PAGE_SIZE with a
+  // button to reveal the rest, rather than boxing the whole thing back
+  // into a small scroller.
+  function paint(count){
+    var shown=newestFirst.slice(0, count);
+    var remaining=newestFirst.length-shown.length;
+    box.innerHTML=shown.map(chapterRowHtml).join("")+
+      (remaining>0
+        ? '<button class="linkish" id="chshowmore" style="display:block;width:100%;'+
+          'text-align:center;padding:14px 0;margin-top:4px">Show '+remaining+
+          ' more chapter'+(remaining===1?"":"s")+' ↓</button>'
+        : "");
+    wireRows();
+    var more=document.getElementById("chshowmore");
+    if(more) more.onclick=function(){ paint(newestFirst.length); };
+  }
+
+  paint(Math.min(CHAPTER_PAGE_SIZE, newestFirst.length));
 }
 
 function readerBox(){
