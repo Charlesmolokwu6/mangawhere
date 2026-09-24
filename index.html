@@ -2444,6 +2444,15 @@ function scrapeChapter(url){
   return promise;
 }
 
+/* Each scraped chapter carries its own site-supplied title (a subtitle,
+   sometimes a release date, occasionally nothing but "Chapter N" again)
+   — strip a leading "Chapter N" off it so the row isn't just repeating
+   the number twice, and drop it entirely if nothing else was there. */
+function chapterSubtitle(c){
+  var t=(c.title||"").replace(/^chapter\s*[\d.]+\s*[-:.]?\s*/i,"").trim();
+  return t||null;
+}
+
 /* The chapter list on a title's detail page — replaces what used to be a
    list of external "official" platform links. Those were often nothing
    more than a dead end (unlicensed titles, or a platform that doesn't
@@ -2473,8 +2482,10 @@ function renderDetailChapters(m, res){
   // small scroller — the whole point of putting the list here is to
   // browse it, not peer at it through a letterbox.
   box.innerHTML=newestFirst.map(function(c){
+    var subtitle=chapterSubtitle(c);
     return '<button class="read chrow" data-url="'+esc(c.url)+'">'+
-      '<span><span class="n">Chapter '+esc(String(c.number))+'</span></span>'+
+      '<span><span class="n">Chapter '+esc(String(c.number))+'</span>'+
+      (subtitle?'<br><span class="t">'+esc(subtitle)+'</span>':'')+'</span>'+
       '<span class="go">Read →</span></button>';
   }).join("");
   Array.prototype.forEach.call(box.querySelectorAll(".chrow"), function(row){
