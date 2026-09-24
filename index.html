@@ -439,7 +439,7 @@ padding:6px 0 0;cursor:pointer}
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
 
-<div class="foot">We don't host manga. We tell you where to read it officially.<span class="ver">build 34</span></div>
+<div class="foot"><span class="ver">build 35</span></div>
 
 <script>
 /* ================= proxy =================
@@ -1978,7 +1978,6 @@ function showDetail(m,ch,solo){
 }
 
 function detailHtml(m,videoCh){
-  var other=m.links.filter(function(l){return !l.official;});
   var st=statusInfo(m.status);
   var done = st.key==="complete";
 
@@ -2053,8 +2052,7 @@ function detailHtml(m,videoCh){
     '</div>'+
     '<h3>Chapters</h3>'+
     '<div id="detailchapters"><p class="sub" style="margin:0">Looking for a chapter list…</p></div>'+
-    buyRow(m)+adSlot()+
-    (other.length?'<h3>More info</h3>'+other.slice(0,3).map(linkRow).join(""):"");
+    buyRow(m)+adSlot();
 }
 
 /* Called right after a detail card is painted. Fills the "Latest out"
@@ -2403,31 +2401,6 @@ function adSlot(){
   return AD_SLOT_HTML ? '<div class="adslot">'+AD_SLOT_HTML+'</div>' : "";
 }
 
-/* Tags outbound links so the publisher's own analytics show where the
-   reader came from. utm_source is the standard every analytics tool reads,
-   so this needs no agreement from them to start working — and when you do
-   eventually email Comikey or Manta, the number is already in their
-   dashboard rather than something you're asking them to take on trust.
-
-   Existing query strings are preserved: WEBTOON links carry title_no, and
-   dropping it would break the link entirely. */
-var REF_TAG = "mangawhere";
-
-function tagged(url){
-  if(!REF_TAG) return url;
-  try{
-    var u=new URL(url);
-    // Don't overwrite a campaign the publisher already set.
-    if(!u.searchParams.get("utm_source")){
-      u.searchParams.set("utm_source", REF_TAG);
-      u.searchParams.set("utm_medium", "referral");
-    }
-    return u.toString();
-  }catch(e){
-    return url;   // malformed URL — send it untouched rather than breaking it
-  }
-}
-
 /* ================= reader (scraper-backed) =================
    No pasting: this searches ToonGod, Asura Scans and MangaFreak by the
    manga's own title (server-side, via /api/find) and reads from whichever
@@ -2501,13 +2474,14 @@ function renderDetailChapters(m, res){
   }
   var back=function(){ showDetail(m, null); };
   var newestFirst=chapters.slice().reverse();
-  box.innerHTML='<div style="max-height:420px;overflow-y:auto">'+
-    newestFirst.map(function(c){
-      return '<button class="read chrow" data-url="'+esc(c.url)+'">'+
-        '<span><span class="n">Chapter '+esc(String(c.number))+'</span></span>'+
-        '<span class="go">Read →</span></button>';
-    }).join("")+
-  '</div>';
+  // Flows with the rest of the page rather than being boxed into its own
+  // small scroller — the whole point of putting the list here is to
+  // browse it, not peer at it through a letterbox.
+  box.innerHTML=newestFirst.map(function(c){
+    return '<button class="read chrow" data-url="'+esc(c.url)+'">'+
+      '<span><span class="n">Chapter '+esc(String(c.number))+'</span></span>'+
+      '<span class="go">Read →</span></button>';
+  }).join("");
   Array.prototype.forEach.call(box.querySelectorAll(".chrow"), function(row){
     row.onclick=function(){
       var url=row.getAttribute("data-url");
@@ -2827,20 +2801,6 @@ function loadRecommendations(){
     var el=document.getElementById("recsbox");
     if(el) el.hidden=true;
   });
-}
-
-function linkRow(l){
-  var info=platformInfo(l.site);
-  var cost=info?info.cost:"";
-  var label=info?info.note:(l.official?"Official publisher":"Reference");
-  var lang=(l.language&&l.language.toLowerCase().indexOf("english")===-1)?" · "+esc(l.language):"";
-  return '<a class="read'+(l.official?"":" no")+(cost?" c-"+cost:"")+
-   '" target="_blank" rel="noopener" href="'+esc(tagged(l.url))+'">'+
-   '<span><span class="n">'+esc(l.site||"Link")+'</span><br>'+
-   '<span class="t">'+esc(label)+lang+'</span></span>'+
-   (cost?'<span class="tagcost '+cost+'">'+(cost==="free"?"FREE":cost==="mixed"?"FREE-ISH":
-     cost==="sub"?"SUB":"PAID")+'</span>':'')+
-   '<span class="go">Open →</span></a>';
 }
 
 /* A visible answer to "why isn't it showing chapters" — tests each
