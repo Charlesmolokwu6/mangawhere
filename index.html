@@ -34,11 +34,6 @@ body.reading.chrome-hidden .top{transform:translateY(-100%)}
 body.reading.chrome-hidden .tabs{transform:translateY(100%)}
 .logo{font-weight:700;font-size:17px;letter-spacing:-.02em;background:none;border:none;color:var(--text);padding:0}
 .logo b{color:var(--mint)}
-.listbtn{background:var(--surf);border:1px solid var(--line);color:var(--text);
-font-size:13px;font-weight:600;padding:7px 13px;border-radius:9px;display:flex;
-align-items:center;gap:7px}
-.listbtn:hover{border-color:var(--mint)}
-.acctbtn{padding:7px 11px;font-size:15px}
 .acct{text-align:center}
 .acct h4{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
 margin:0 0 10px;font-weight:600}
@@ -403,15 +398,12 @@ overflow:hidden}
 padding:6px 0 0;cursor:pointer}
 .adultflag{color:#ff8fa8}
 .back{background:none;border:none;color:var(--dim);font-size:13px;padding:0;margin-bottom:14px}
-.foot{border-top:1px solid var(--line);padding:14px;text-align:center;font-size:12px;color:var(--dim)}
-.ver{display:block;margin-top:4px;font-family:ui-monospace,Consolas,monospace;font-size:10px;opacity:.5}
 </style>
 </head>
 <body>
 
 <div class="top">
   <button class="logo" id="home">manga<b>where</b></button>
-  <button class="listbtn acctbtn" id="acctbtn" title="Your devices">⚙</button>
 </div>
 
 <main>
@@ -438,8 +430,6 @@ padding:6px 0 0;cursor:pointer}
   <button id="installgo">Install</button>
   <button class="x" id="installno" aria-label="Dismiss">×</button>
 </div>
-
-<div class="foot"><span class="ver">build 35</span></div>
 
 <script>
 /* ================= proxy =================
@@ -3562,8 +3552,6 @@ function latestFor(x){
     });
   }).catch(function(){ return null; });
 }
-
-document.getElementById("acctbtn").onclick=function(){ setTab("account"); };
 
 /* ---- tab navigation ----
    One place that decides what's on screen, so the highlighted tab and the
