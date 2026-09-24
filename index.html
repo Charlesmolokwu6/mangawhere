@@ -302,6 +302,11 @@ text-decoration:none;color:var(--text);margin-bottom:8px}
 .read .n{font-weight:600;font-size:15px}
 .read .t{font-size:10px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
 .read .go{color:var(--mint);font-weight:600;font-size:13px;flex-shrink:0}
+/* A <button> with display:flex doesn't stretch to its container's width
+   the way a <div> or <a> does — left as buttons default to shrink-wrap,
+   so a short chapter number leaves most of the row's width unclickable
+   and the row visibly short of the screen edge. */
+.chrow{width:100%;box-sizing:border-box;text-align:left}
 .mu-note{}
 .tagcost{font-size:10px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:20px;
 flex-shrink:0;margin-left:auto;font-family:ui-monospace,Consolas,monospace}
