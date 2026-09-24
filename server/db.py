@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     salt TEXT NOT NULL,
+    avatar_url TEXT,
     created_at REAL NOT NULL
 );
 
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     name TEXT NOT NULL,
+    avatar_url TEXT,
     title_key TEXT NOT NULL,
     chapter_key TEXT NOT NULL,
     body TEXT NOT NULL,
@@ -72,10 +74,24 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after a table already existed. CREATE TABLE
+    IF NOT EXISTS only helps on a fresh database — an upgrade needs its
+    own ALTER TABLE, guarded so re-running it is a no-op."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    if "avatar_url" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+
+    comment_cols = {row["name"] for row in conn.execute("PRAGMA table_info(comments)")}
+    if "avatar_url" not in comment_cols:
+        conn.execute("ALTER TABLE comments ADD COLUMN avatar_url TEXT")
+
+
 def init_db() -> None:
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()

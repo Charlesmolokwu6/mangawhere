@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import db
 
@@ -7,7 +7,14 @@ MAX_BODY_LENGTH = 2000
 LIST_LIMIT = 100
 
 
-def add(user_id: int, name: str, title_key: str, chapter_key: str, body: str) -> Dict[str, Any]:
+def add(
+    user_id: int,
+    name: str,
+    avatar_url: Optional[str],
+    title_key: str,
+    chapter_key: str,
+    body: str,
+) -> Dict[str, Any]:
     title_key = (title_key or "").strip()
     chapter_key = (chapter_key or "").strip()
     body = (body or "").strip()[:MAX_BODY_LENGTH]
@@ -19,10 +26,10 @@ def add(user_id: int, name: str, title_key: str, chapter_key: str, body: str) ->
     try:
         cur = conn.execute(
             """
-            INSERT INTO comments (user_id, name, title_key, chapter_key, body, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO comments (user_id, name, avatar_url, title_key, chapter_key, body, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, name, title_key, chapter_key, body, created_at),
+            (user_id, name, avatar_url, title_key, chapter_key, body, created_at),
         )
         conn.commit()
         comment_id = cur.lastrowid
@@ -32,6 +39,7 @@ def add(user_id: int, name: str, title_key: str, chapter_key: str, body: str) ->
     return {
         "id": comment_id,
         "name": name,
+        "avatar_url": avatar_url,
         "body": body,
         "created_at": created_at,
     }
@@ -46,7 +54,7 @@ def list_for(title_key: str, chapter_key: str) -> List[Dict[str, Any]]:
     conn = db.get_connection()
     try:
         rows = conn.execute(
-            "SELECT id, name, body, created_at FROM comments "
+            "SELECT id, name, avatar_url, body, created_at FROM comments "
             "WHERE title_key = ? AND chapter_key = ? "
             "ORDER BY created_at DESC LIMIT ?",
             (title_key, chapter_key, LIST_LIMIT),
@@ -55,6 +63,12 @@ def list_for(title_key: str, chapter_key: str) -> List[Dict[str, Any]]:
         conn.close()
 
     return [
-        {"id": row["id"], "name": row["name"], "body": row["body"], "created_at": row["created_at"]}
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "avatar_url": row["avatar_url"],
+            "body": row["body"],
+            "created_at": row["created_at"],
+        }
         for row in rows
     ]

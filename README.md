@@ -33,6 +33,30 @@ Optional environment variables (see `render.yaml`):
   your deployment misbehaves. Defaults to a placeholder; set a real one.
 - `POLL_INTERVAL_SECONDS` — how often the background job checks tracked
   titles for new chapters. Defaults to 1800 (30 minutes).
+- `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
+  — enable profile picture uploads (see below). Everyone gets a default
+  initials avatar with none of these set; uploading a custom photo just
+  returns a clear error until all three are present.
+
+## Profile pictures
+
+Uploaded avatars can't live on Render's own disk for the same reason the
+database can't — it's wiped on every redeploy. `POST /api/avatar`
+instead uploads to [Cloudinary](https://cloudinary.com) (free tier: 25GB
+storage, 25GB bandwidth/month), which is real persistent storage and
+handles image hosting for you.
+
+To turn it on:
+1. Create a free Cloudinary account.
+2. From its dashboard, copy the **Cloud name**, **API Key**, and **API
+   Secret**.
+3. Set them as `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
+   `CLOUDINARY_API_SECRET` in Render's environment variables for this
+   service, then redeploy.
+
+Only the URL Cloudinary returns is stored in the app's own database
+(`users.avatar_url`) — the image bytes themselves never touch the
+ephemeral disk.
 
 ## Tests
 

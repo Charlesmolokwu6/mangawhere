@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from server import auth, db
+from server import auth, db, media
 
 
 class MainTestCase(unittest.TestCase):
@@ -92,6 +92,66 @@ class CommentsApiTests(MainTestCase):
             headers={"Authorization": "Bearer " + token},
         )
         self.assertEqual(r.status_code, 400)
+
+
+class AvatarApiTests(MainTestCase):
+    def setUp(self):
+        super().setUp()
+        # Force "not configured" regardless of what's in the environment
+        # this test happens to run in.
+        self._cloud = media.CLOUDINARY_CLOUD_NAME
+        self._key = media.CLOUDINARY_API_KEY
+        self._secret = media.CLOUDINARY_API_SECRET
+        media.CLOUDINARY_CLOUD_NAME = ""
+        media.CLOUDINARY_API_KEY = ""
+        media.CLOUDINARY_API_SECRET = ""
+
+    def tearDown(self):
+        media.CLOUDINARY_CLOUD_NAME = self._cloud
+        media.CLOUDINARY_API_KEY = self._key
+        media.CLOUDINARY_API_SECRET = self._secret
+        super().tearDown()
+
+    def _token(self):
+        db.init_db()
+        result = auth.register(
+            {"email": "reader@example.com", "password": "password123", "elapsed": 5},
+            lambda *_: True,
+        )
+        return result["token"]
+
+    def test_uploading_requires_sign_in(self):
+        r = self.client.post(
+            "/api/avatar", files={"file": ("a.png", b"\x89PNG", "image/png")}
+        )
+        self.assertEqual(r.status_code, 401)
+
+    def test_disallowed_content_type_is_rejected(self):
+        token = self._token()
+        r = self.client.post(
+            "/api/avatar",
+            files={"file": ("a.pdf", b"not-an-image", "application/pdf")},
+            headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_upload_without_cloudinary_configured_is_a_clear_503(self):
+        token = self._token()
+        r = self.client.post(
+            "/api/avatar",
+            files={"file": ("a.png", b"\x89PNG", "image/png")},
+            headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(r.status_code, 503)
+
+    def test_me_reports_avatar_url(self):
+        token = self._token()
+        r = self.client.get("/api/me", headers={"Authorization": "Bearer " + token})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertTrue(body["signed_in"])
+        self.assertIsNone(body["avatar_url"])
+        self.assertEqual(body["name"], "reader")
 
 
 if __name__ == "__main__":

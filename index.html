@@ -1396,6 +1396,21 @@ function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});}
 function setDiag(t){ try{ console.log("[mangawhere]", t); }catch(e){} }
 
+/* A profile picture if one's been uploaded, otherwise the same initials
+   circle everyone starts with (no storage needed for that fallback). Used
+   both for the signed-in account page and for whoever posted a comment. */
+function avatarHtml(name, email, avatarUrl, size){
+  size=size||44;
+  var sizeStyle = size===44 ? "" :
+    "width:"+size+"px;height:"+size+"px;font-size:"+Math.round(size*0.41)+"px;";
+  if(avatarUrl){
+    return '<img class="avatar" style="'+sizeStyle+'object-fit:cover" '+
+      'src="'+esc(avatarUrl)+'" referrerpolicy="no-referrer" alt="">';
+  }
+  var initial=(name||email||"?").trim().charAt(0).toUpperCase();
+  return '<div class="avatar" style="'+sizeStyle+'">'+esc(initial||"?")+'</div>';
+}
+
 function homeView(){
   app.innerHTML=
    '<h1>Saw a manga edit? Find where to read it.</h1>'+
@@ -2601,24 +2616,31 @@ function commentFormHtml(){
     return '<p class="sub" style="margin:0">'+
       '<button class="linkish" id="cmtsignin">Sign in</button> to leave a comment.</p>';
   }
-  return '<div style="display:flex;flex-direction:column;gap:8px">'+
-    '<textarea id="cmtbody" rows="3" placeholder="What did you think of this chapter?" '+
-    'style="background:var(--surf);border:1px solid var(--line);border-radius:10px;'+
-    'padding:12px;color:var(--text);font-size:14px;font-family:inherit;resize:vertical"></textarea>'+
-    '<button class="trackbtn" id="cmtpost" '+
-      'style="margin-top:0;align-self:flex-end;width:auto;padding:10px 20px">Post</button>'+
-    '<p class="err" id="cmterr" style="margin:0"></p>'+
+  return '<div style="display:flex;gap:10px;align-items:flex-start">'+
+    avatarHtml(auth.name, auth.email, auth.avatar_url, 32)+
+    '<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:8px">'+
+      '<textarea id="cmtbody" rows="3" placeholder="What did you think of this chapter?" '+
+      'style="background:var(--surf);border:1px solid var(--line);border-radius:10px;'+
+      'padding:12px;color:var(--text);font-size:14px;font-family:inherit;resize:vertical"></textarea>'+
+      '<button class="trackbtn" id="cmtpost" '+
+        'style="margin-top:0;align-self:flex-end;width:auto;padding:10px 20px">Post</button>'+
+      '<p class="err" id="cmterr" style="margin:0"></p>'+
+    '</div>'+
   '</div>';
 }
 
 function renderCommentRow(c){
   var when=new Date(c.created_at*1000);
-  return '<div style="border-bottom:1px solid var(--line);padding-bottom:12px">'+
-    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'+
-      '<strong style="font-size:13px">'+esc(c.name)+'</strong>'+
-      '<span class="mono" style="font-size:10px;color:var(--dim)">'+esc(when.toLocaleDateString())+'</span>'+
+  return '<div style="display:flex;gap:10px;align-items:flex-start;'+
+    'border-bottom:1px solid var(--line);padding-bottom:12px">'+
+    avatarHtml(c.name, "", c.avatar_url, 32)+
+    '<div style="flex:1;min-width:0">'+
+      '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'+
+        '<strong style="font-size:13px">'+esc(c.name)+'</strong>'+
+        '<span class="mono" style="font-size:10px;color:var(--dim)">'+esc(when.toLocaleDateString())+'</span>'+
+      '</div>'+
+      '<p style="margin:4px 0 0;font-size:14px;white-space:pre-wrap">'+esc(c.body)+'</p>'+
     '</div>'+
-    '<p style="margin:4px 0 0;font-size:14px;white-space:pre-wrap">'+esc(c.body)+'</p>'+
   '</div>';
 }
 
@@ -2978,17 +3000,17 @@ function wireRecent(){
 /* ---- auth ----
    The token is the session. Kept in the same storage as the list so both
    survive a reload, and sent as a bearer header on anything account-shaped. */
-var auth = { token:null, email:null, name:null };
+var auth = { token:null, email:null, name:null, avatar_url:null };
 
 function loadAuth(){
   try{
     var raw=store.get("mw.auth");
     if(raw) auth=JSON.parse(raw);
-  }catch(e){ auth={token:null,email:null,name:null}; }
+  }catch(e){ auth={token:null,email:null,name:null,avatar_url:null}; }
   return auth;
 }
 function saveAuth(a){
-  auth=a||{token:null,email:null,name:null};
+  auth=a||{token:null,email:null,name:null,avatar_url:null};
   if(auth.token) store.set("mw.auth", JSON.stringify(auth));
   else store.set("mw.auth","");
 }
@@ -3117,7 +3139,7 @@ function authView(mode, thenTrack){
         go.disabled=false; go.textContent=login?"Sign in":"Create account";
         return;
       }
-      saveAuth({token:d.token, email:d.email, name:d.name});
+      saveAuth({token:d.token, email:d.email, name:d.name, avatar_url:d.avatar_url||null});
       // If push was already allowed here, hand the endpoint over now that
       // there's an account to attach it to.
       if(pushState.endpoint){
@@ -3232,15 +3254,20 @@ function accountView(){
     return;
   }
 
-  var initial=(auth.name||auth.email||"?").charAt(0).toUpperCase();
   view.innerHTML='<button class="back" id="ab">← Back</button>'+
     '<h1>Your account</h1>'+
     '<div class="card">'+
       '<div class="who">'+
-        '<div class="avatar">'+esc(initial)+'</div>'+
+        '<div id="ac-avatar">'+avatarHtml(auth.name, auth.email, auth.avatar_url, 44)+'</div>'+
         '<div class="whoin"><h4>'+esc(auth.name||"")+'</h4>'+
           '<p>'+esc(auth.email||"")+'</p></div>'+
       '</div>'+
+      '<div style="display:flex;align-items:center;gap:10px;margin-top:12px">'+
+        '<button class="linkish" id="ac-avatarbtn">Change photo</button>'+
+        '<input type="file" id="ac-avatarfile" accept="image/png,image/jpeg,image/webp,image/gif" '+
+          'style="display:none">'+
+      '</div>'+
+      '<p class="err" id="ac-avatarerr" style="margin:4px 0 0"></p>'+
       '<div class="acstat">'+
         '<span class="v" id="ac-tracked">—</span>'+
         '<span class="k" id="ac-trackedl">series tracked</span>'+
@@ -3259,6 +3286,7 @@ function accountView(){
 
   document.getElementById("ab").onclick=function(){ setTab("home"); };
   document.getElementById("signout").onclick=signOut;
+  wireAvatarUpload();
 
   showNotifState();
 
@@ -3268,11 +3296,61 @@ function accountView(){
     document.getElementById("ac-tracked").textContent=n;
     document.getElementById("ac-trackedl").textContent=
       n===1 ? "series tracked" : "series tracked";
+    // Another device may have changed the photo/name since we last saved
+    // this locally — pick up the server's copy.
+    if(d.avatar_url!==auth.avatar_url || d.name!==auth.name || d.email!==auth.email){
+      auth.name=d.name; auth.email=d.email; auth.avatar_url=d.avatar_url;
+      saveAuth(auth);
+      var box=document.getElementById("ac-avatar");
+      if(box) box.innerHTML=avatarHtml(auth.name, auth.email, auth.avatar_url, 44);
+    }
   }).catch(function(e){
     document.getElementById("ac-tracked").textContent=getList().length;
     console.log("[mangawhere] /api/me unreachable:", e.message);
   });
   window.scrollTo(0,0);
+}
+
+/* Custom-styled "Change photo" button driving a hidden file input —
+   multipart, so it bypasses api()'s JSON content-type and sets the
+   Authorization header itself. */
+function wireAvatarUpload(){
+  var btn=document.getElementById("ac-avatarbtn");
+  var file=document.getElementById("ac-avatarfile");
+  var err=document.getElementById("ac-avatarerr");
+  if(!btn || !file) return;
+
+  btn.onclick=function(){ file.click(); };
+  file.onchange=function(){
+    var f=file.files && file.files[0];
+    if(!f) return;
+    err.textContent="";
+    btn.disabled=true; btn.textContent="Uploading…";
+
+    var fd=new FormData();
+    fd.append("file", f);
+    fetch(API_BASE+"/api/avatar", {
+      method:"POST",
+      headers: auth.token ? {"Authorization":"Bearer "+auth.token} : {},
+      body: fd
+    }).then(function(r){
+      return r.json().then(function(d){ return {ok:r.ok, d:d}; });
+    }).then(function(res){
+      btn.disabled=false; btn.textContent="Change photo";
+      file.value="";
+      if(!res.ok){
+        err.textContent=(res.d && res.d.detail) || "Couldn't upload that — try again.";
+        return;
+      }
+      auth.avatar_url=res.d.avatar_url;
+      saveAuth(auth);
+      var box=document.getElementById("ac-avatar");
+      if(box) box.innerHTML=avatarHtml(auth.name, auth.email, auth.avatar_url, 44);
+    }).catch(function(){
+      btn.disabled=false; btn.textContent="Change photo";
+      err.textContent="Couldn't upload that — try again.";
+    });
+  };
 }
 
 /* After linking, the server knows about titles this browser doesn't. */

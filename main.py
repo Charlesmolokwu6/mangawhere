@@ -5,13 +5,13 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, scrape_chapter, scrape_series
-from server import auth, captcha, comments, db, poller, push, watch
+from server import auth, captcha, comments, db, media, poller, push, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -211,7 +211,34 @@ async def api_me(authorization: Optional[str] = Header(default=None)):
     user = _current_user(authorization)
     if not user:
         return {"signed_in": False}
-    return {"signed_in": True, "tracked": watch.count_for_user(user["id"])}
+    return {
+        "signed_in": True,
+        "tracked": watch.count_for_user(user["id"]),
+        "name": user["name"],
+        "email": user["email"],
+        "avatar_url": user["avatar_url"],
+    }
+
+
+@app.post("/api/avatar")
+async def api_avatar(
+    file: UploadFile = File(...), authorization: Optional[str] = Header(default=None)
+):
+    user = _require_user(authorization)
+    content = await file.read()
+
+    try:
+        media.validate_avatar(file.content_type or "", content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        avatar_url = await media.upload_avatar(user["id"], content, file.filename or "avatar")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    auth.set_avatar(user["id"], avatar_url)
+    return {"avatar_url": avatar_url}
 
 
 @app.get("/api/config")
@@ -310,7 +337,9 @@ async def api_comments_post(request: Request, authorization: Optional[str] = Hea
         raise HTTPException(status_code=400, detail="title, chapter, and body are required")
 
     try:
-        comment = comments.add(user["id"], user["name"], title_key, chapter_key, body)
+        comment = comments.add(
+            user["id"], user["name"], user["avatar_url"], title_key, chapter_key, body
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return comment
