@@ -20,7 +20,12 @@ def _hash_password(password: str, salt: str) -> str:
 
 
 def _user_row_to_dict(row) -> Dict[str, Any]:
-    return {"id": row["id"], "email": row["email"], "name": row["name"]}
+    return {
+        "id": row["id"],
+        "email": row["email"],
+        "name": row["name"],
+        "avatar_url": row["avatar_url"],
+    }
 
 
 def register(payload: Dict[str, Any], verify_captcha) -> Dict[str, Any]:
@@ -67,7 +72,7 @@ def register(payload: Dict[str, Any], verify_captcha) -> Dict[str, Any]:
         conn.close()
 
     token = create_session(user_id)
-    return {"token": token, "email": email, "name": name}
+    return {"token": token, "email": email, "name": name, "avatar_url": None}
 
 
 def login(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -90,7 +95,12 @@ def login(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "Incorrect email or password."}
 
     token = create_session(row["id"])
-    return {"token": token, "email": row["email"], "name": row["name"]}
+    return {
+        "token": token,
+        "email": row["email"],
+        "name": row["name"],
+        "avatar_url": row["avatar_url"],
+    }
 
 
 def create_session(user_id: int) -> str:
@@ -133,6 +143,15 @@ def user_from_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
     finally:
         conn.close()
     return _user_row_to_dict(row) if row else None
+
+
+def set_avatar(user_id: int, url: str) -> None:
+    conn = db.get_connection()
+    try:
+        conn.execute("UPDATE users SET avatar_url = ? WHERE id = ?", (url, user_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def bearer_token(authorization_header: Optional[str]) -> Optional[str]:

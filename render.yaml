@@ -12,3 +12,11 @@ services:
         sync: false
       - key: POLL_INTERVAL_SECONDS
         value: "1800"
+      # Optional — profile picture uploads (see README.md). Leaving these
+      # unset is fine; avatars just stay the default initials circle.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
