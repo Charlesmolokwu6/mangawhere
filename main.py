@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, scrape_chapter, scrape_series
-from server import auth, captcha, db, poller, push, watch
+from server import auth, captcha, comments, db, poller, push, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -287,6 +287,33 @@ async def api_mark_read(request: Request, authorization: Optional[str] = Header(
 async def api_list(authorization: Optional[str] = Header(default=None)):
     user = _require_user(authorization)
     return {"titles": watch.list_for_user(user["id"])}
+
+
+@app.get("/api/comments")
+async def api_comments_list(
+    title: str = Query(..., description="Title key the comments belong to"),
+    chapter: str = Query(..., description="Chapter key within that title"),
+):
+    if not title.strip() or not chapter.strip():
+        raise HTTPException(status_code=400, detail="title and chapter are required")
+    return {"comments": comments.list_for(title.strip(), chapter.strip())}
+
+
+@app.post("/api/comments")
+async def api_comments_post(request: Request, authorization: Optional[str] = Header(default=None)):
+    user = _require_user(authorization)
+    payload = await request.json()
+    title_key = str(payload.get("title") or "")
+    chapter_key = str(payload.get("chapter") or "")
+    body = str(payload.get("body") or "")
+    if not title_key.strip() or not chapter_key.strip() or not body.strip():
+        raise HTTPException(status_code=400, detail="title, chapter, and body are required")
+
+    try:
+        comment = comments.add(user["id"], user["name"], title_key, chapter_key, body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return comment
 
 
 app.mount("/", StaticFiles(directory=str(BASE_DIR), html=True), name="static")

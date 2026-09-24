@@ -50,6 +50,18 @@ CREATE TABLE IF NOT EXISTS captchas (
     answer TEXT NOT NULL,
     expires_at REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    title_key TEXT NOT NULL,
+    chapter_key TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comments_lookup
+    ON comments (title_key, chapter_key, created_at);
 """
 
 

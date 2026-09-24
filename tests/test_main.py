@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from server import db
+from server import auth, db
 
 
 class MainTestCase(unittest.TestCase):
@@ -45,6 +45,53 @@ class ProxyTests(MainTestCase):
             "/", params={"url": "https://evil.example.com/steal"}, json={}
         )
         self.assertEqual(r.status_code, 403)
+
+
+class CommentsApiTests(MainTestCase):
+    def _token(self):
+        db.init_db()
+        result = auth.register(
+            {"email": "reader@example.com", "password": "password123", "elapsed": 5},
+            lambda *_: True,
+        )
+        return result["token"]
+
+    def test_posting_a_comment_requires_sign_in(self):
+        r = self.client.post(
+            "/api/comments", json={"title": "al-1", "chapter": "1", "body": "hi"}
+        )
+        self.assertEqual(r.status_code, 401)
+
+    def test_post_then_list_roundtrip(self):
+        token = self._token()
+        r = self.client.post(
+            "/api/comments",
+            json={"title": "al-1", "chapter": "1", "body": "Loved this chapter!"},
+            headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["body"], "Loved this chapter!")
+
+        listed = self.client.get(
+            "/api/comments", params={"title": "al-1", "chapter": "1"}
+        )
+        self.assertEqual(listed.status_code, 200)
+        rows = listed.json()["comments"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["body"], "Loved this chapter!")
+
+    def test_list_requires_title_and_chapter(self):
+        r = self.client.get("/api/comments", params={"title": "al-1"})
+        self.assertEqual(r.status_code, 422)  # missing required query param
+
+    def test_post_rejects_blank_body(self):
+        token = self._token()
+        r = self.client.post(
+            "/api/comments",
+            json={"title": "al-1", "chapter": "1", "body": "   "},
+            headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(r.status_code, 400)
 
 
 if __name__ == "__main__":

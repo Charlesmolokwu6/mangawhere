@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from server import auth, captcha, db, mu, push, watch
+from server import auth, captcha, comments, db, mu, push, watch
 from server.webtoon import _rss_url
 
 
@@ -160,6 +160,34 @@ class PushTests(ServerTestCase):
     def test_attach_subscription_with_no_endpoint_is_a_noop(self):
         push.attach_subscription(None, 7)  # must not raise
         self.assertEqual(push.subscriptions_for_user(7), [])
+
+
+class CommentsTests(ServerTestCase):
+    def test_add_then_list_roundtrip(self):
+        comments.add(1, "Reader", "al-123", "12", "Great chapter!")
+        rows = comments.list_for("al-123", "12")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "Reader")
+        self.assertEqual(rows[0]["body"], "Great chapter!")
+
+    def test_newest_comment_listed_first(self):
+        comments.add(1, "A", "al-1", "1", "first")
+        comments.add(2, "B", "al-1", "1", "second")
+        rows = comments.list_for("al-1", "1")
+        self.assertEqual([r["body"] for r in rows], ["second", "first"])
+
+    def test_comments_are_scoped_to_their_own_chapter(self):
+        comments.add(1, "A", "al-1", "1", "chapter one comment")
+        comments.add(1, "A", "al-1", "2", "chapter two comment")
+        self.assertEqual(len(comments.list_for("al-1", "1")), 1)
+        self.assertEqual(len(comments.list_for("al-1", "2")), 1)
+
+    def test_add_rejects_blank_body(self):
+        with self.assertRaises(ValueError):
+            comments.add(1, "A", "al-1", "1", "   ")
+
+    def test_list_for_missing_chapter_is_empty(self):
+        self.assertEqual(comments.list_for("al-1", ""), [])
 
 
 class WebtoonRssUrlTests(unittest.TestCase):
