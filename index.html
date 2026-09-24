@@ -26,7 +26,12 @@ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-h
 img{display:block;max-width:100%}button{font-family:inherit;cursor:pointer}
 .mono{font-family:ui-monospace,Consolas,monospace}
 .top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 16px;
-border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:20}
+border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:20;
+transition:transform .25s ease}
+/* Scoped to the reader (body.reading) only — the chrome never auto-hides
+   anywhere else in the app. */
+body.reading.chrome-hidden .top{transform:translateY(-100%)}
+body.reading.chrome-hidden .tabs{transform:translateY(100%)}
 .logo{font-weight:700;font-size:17px;letter-spacing:-.02em;background:none;border:none;color:var(--text);padding:0}
 .logo b{color:var(--mint)}
 .listbtn{background:var(--surf);border:1px solid var(--line);color:var(--text);
@@ -113,7 +118,7 @@ font-size:11px;font-weight:700;display:none}
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;
 background:rgba(18,16,28,.96);backdrop-filter:blur(12px);
 border-top:1px solid var(--line);
-padding-bottom:env(safe-area-inset-bottom,0)}
+padding-bottom:env(safe-area-inset-bottom,0);transition:transform .25s ease}
 .tab{flex:1;background:none;border:none;color:var(--dim);cursor:pointer;
 display:flex;flex-direction:column;align-items:center;gap:3px;
 padding:9px 0 7px;font-size:10px;font-weight:600;position:relative;
@@ -1747,6 +1752,42 @@ function initRail(railId, trackId, reverse){
 function stopRail(){
   railTimers.forEach(function(cancel){ try{ cancel(); }catch(e){} });
   railTimers=[];
+  exitReaderChrome();
+}
+
+/* Auto-hiding header/tab bar while reading: scrolling down hides both so
+   the page itself, and now people's comments and recommendations, aren't
+   crowded by chrome that's already served its purpose; scrolling up (or
+   being near the top) brings them straight back. Scoped to the reader via
+   body.reading so it never touches any other view. exitReaderChrome() is
+   called from stopRail(), which already runs at the start of every other
+   view-transition function, so leaving the reader always cleans this up. */
+var readerScrollY=0, readerChromeWired=false;
+
+function onReaderScroll(){
+  var y=window.scrollY||window.pageYOffset||0;
+  if(y<=60){ document.body.classList.remove("chrome-hidden"); readerScrollY=y; return; }
+  if(y>readerScrollY+4) document.body.classList.add("chrome-hidden");
+  else if(y<readerScrollY-4) document.body.classList.remove("chrome-hidden");
+  readerScrollY=y;
+}
+
+function enterReaderChrome(){
+  document.body.classList.add("reading");
+  document.body.classList.remove("chrome-hidden");
+  readerScrollY=window.scrollY||0;
+  if(!readerChromeWired){
+    window.addEventListener("scroll", onReaderScroll, {passive:true});
+    readerChromeWired=true;
+  }
+}
+
+function exitReaderChrome(){
+  document.body.classList.remove("reading","chrome-hidden");
+  if(readerChromeWired){
+    window.removeEventListener("scroll", onReaderScroll);
+    readerChromeWired=false;
+  }
 }
 
 function run(){
@@ -2343,7 +2384,7 @@ function tagged(url){
    lookup isn't cached, so retrying (tapping Read again, or opening the
    same title again) tries fresh instead of replaying a possibly-
    transient failure forever. */
-var readerState={chapters:null, index:-1, back:null, domain:null};
+var readerState={chapters:null, index:-1, back:null, domain:null, manga:null};
 var findCache={};
 var scrapeCache={};
 
@@ -2401,7 +2442,7 @@ function wireReader(m){
         err.textContent="Couldn't load this right now — try again.";
         return;
       }
-      readerState={chapters:chapters, index:chapters.length-1, back:back};
+      readerState={chapters:chapters, index:chapters.length-1, back:back, manga:m};
       readerView(chapters[chapters.length-1].url);
     });
   };
@@ -2496,6 +2537,7 @@ function renderReaderNav(){
    found/navigated here. */
 function readerView(url){
   stopRail();
+  enterReaderChrome();
   openChapterDropdown=null;
   var view=document.getElementById("app");
   var hasChapters=!!readerState.chapters;
@@ -2505,11 +2547,15 @@ function readerView(url){
     '</div>'+
     '<p class="sub" id="rstatus">Loading…</p>'+
     '<div id="rpages"></div>'+
-    '<div class="readernavslot"></div>';
+    '<div class="readernavslot"></div>'+
+    commentsHtml()+
+    recommendationsHtml();
   document.getElementById("rbk").onclick=readerState.back;
   if(hasChapters) wireChapterPicker();
   window.scrollTo(0,0);
   renderReaderNav();
+  wireComments();
+  loadRecommendations();
 
   scrapeChapter(url).then(function(res){
     var status=document.getElementById("rstatus");
@@ -2528,6 +2574,147 @@ function readerView(url){
       return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
         'src="'+esc(src)+'" referrerpolicy="no-referrer" alt="">';
     }).join("");
+  });
+}
+
+/* Comments, scoped to the exact title + chapter someone just read (not
+   the whole series) — "chapter they read" was the ask, and readerState
+   already carries both the manga (set by wireReader) and the current
+   chapter index. Reading them is public; posting reuses the same
+   sign-in-required api() helper as tracking a title. */
+function commentKey(){
+  var m=readerState.manga, chapters=readerState.chapters, idx=readerState.index;
+  if(!m || !chapters || idx<0 || !chapters[idx]) return null;
+  return {title:m.id, chapter:String(chapters[idx].number)};
+}
+
+function commentsHtml(){
+  return '<div id="commentsbox" style="margin-top:24px">'+
+    '<h3 style="margin:0 0 10px">Comments</h3>'+
+    '<div id="commentform"></div>'+
+    '<div id="commentlist" style="display:flex;flex-direction:column;gap:12px;margin-top:14px"></div>'+
+  '</div>';
+}
+
+function commentFormHtml(){
+  if(!signedIn()){
+    return '<p class="sub" style="margin:0">'+
+      '<button class="linkish" id="cmtsignin">Sign in</button> to leave a comment.</p>';
+  }
+  return '<div style="display:flex;flex-direction:column;gap:8px">'+
+    '<textarea id="cmtbody" rows="3" placeholder="What did you think of this chapter?" '+
+    'style="background:var(--surf);border:1px solid var(--line);border-radius:10px;'+
+    'padding:12px;color:var(--text);font-size:14px;font-family:inherit;resize:vertical"></textarea>'+
+    '<button class="trackbtn" id="cmtpost" '+
+      'style="margin-top:0;align-self:flex-end;width:auto;padding:10px 20px">Post</button>'+
+    '<p class="err" id="cmterr" style="margin:0"></p>'+
+  '</div>';
+}
+
+function renderCommentRow(c){
+  var when=new Date(c.created_at*1000);
+  return '<div style="border-bottom:1px solid var(--line);padding-bottom:12px">'+
+    '<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'+
+      '<strong style="font-size:13px">'+esc(c.name)+'</strong>'+
+      '<span class="mono" style="font-size:10px;color:var(--dim)">'+esc(when.toLocaleDateString())+'</span>'+
+    '</div>'+
+    '<p style="margin:4px 0 0;font-size:14px;white-space:pre-wrap">'+esc(c.body)+'</p>'+
+  '</div>';
+}
+
+function loadComments(){
+  var key=commentKey();
+  var list=document.getElementById("commentlist");
+  if(!key || !list) return;
+  list.innerHTML='<p class="sub" style="margin:0">Loading comments…</p>';
+  fetch(API_BASE+"/api/comments?title="+encodeURIComponent(key.title)+
+    "&chapter="+encodeURIComponent(key.chapter))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var el=document.getElementById("commentlist");
+      if(!el) return;   // navigated away before this resolved
+      var rows=(d&&d.comments)||[];
+      el.innerHTML = rows.length
+        ? rows.map(renderCommentRow).join("")
+        : '<p class="sub" style="margin:0">No comments yet — be the first.</p>';
+    })
+    .catch(function(){
+      var el=document.getElementById("commentlist");
+      if(el) el.innerHTML='<p class="sub" style="margin:0">Couldn\'t load comments.</p>';
+    });
+}
+
+function wireComments(){
+  var form=document.getElementById("commentform");
+  if(!form || !commentKey()) return;
+  form.innerHTML=commentFormHtml();
+  var signinBtn=document.getElementById("cmtsignin");
+  if(signinBtn) signinBtn.onclick=function(){ authView("login"); };
+  var postBtn=document.getElementById("cmtpost");
+  if(postBtn){
+    postBtn.onclick=function(){
+      var key=commentKey();
+      var body=document.getElementById("cmtbody"), err=document.getElementById("cmterr");
+      var text=body.value.trim();
+      if(!key || !text) return;
+      postBtn.disabled=true;
+      api("/api/comments",{method:"POST",
+        body:JSON.stringify({title:key.title, chapter:key.chapter, body:text})
+      }).then(function(d){
+        postBtn.disabled=false;
+        if(d && d.detail){ err.textContent=d.detail; return; }
+        body.value="";
+        loadComments();
+      }).catch(function(){
+        postBtn.disabled=false;
+        err.textContent="Couldn't post — try again.";
+      });
+    };
+  }
+  loadComments();
+}
+
+/* Recommendations, right after comments. Reuses alTrending() — it already
+   filters server-side by country + genre, which is the same "similar
+   manga" signal regardless of whether this title came from MAL, AniList
+   or MangaDex, since all three shapes carry uniform .country/.genres. */
+function recommendationsHtml(){
+  return '<div id="recsbox" style="margin-top:26px">'+
+    '<h3 style="margin:0 0 10px">You might also like</h3>'+
+    '<div id="recsrail"><div class="rail"><div class="track">'+
+      Array(6).fill('<div class="tile"><div class="skel"></div></div>').join("")+
+    '</div></div></div>'+
+  '</div>';
+}
+
+function loadRecommendations(){
+  var m=readerState.manga;
+  var box=document.getElementById("recsbox");
+  if(!m || !box){ if(box) box.hidden=true; return; }
+  var genre=(m.genres&&m.genres[0])||"";
+  alTrending(m.country||"", genre).then(function(rows){
+    var el=document.getElementById("recsrail");
+    box=document.getElementById("recsbox");
+    if(!el || !box) return;   // navigated away before this resolved
+    rows=rows.filter(function(r){ return r.title && r.title!==m.title; });
+    if(HIDE_ADULT) rows=rows.filter(function(r){ return !r.adult; });
+    rows=rows.slice(0,12);
+    if(!rows.length){ box.hidden=true; return; }
+    box.hidden=false;
+    el.innerHTML='<div class="rail"><div class="track">'+
+      rows.map(function(r,i){
+        return '<button class="tile" data-i="'+i+'">'+
+          (r.cover?'<img loading="lazy" alt="" src="'+esc(r.cover)+'" referrerpolicy="no-referrer">':'<div class="ph"></div>')+
+          '<h4>'+esc(r.title)+'</h4><p class="meta">'+esc(r.kind||"")+
+          (r.chapters?" · "+r.chapters+" ch":"")+'</p></button>';
+      }).join("")+
+    '</div></div>';
+    Array.prototype.forEach.call(el.querySelectorAll(".tile"), function(btn,i){
+      btn.onclick=function(){ showDetail(rows[i], null); };
+    });
+  }).catch(function(){
+    var el=document.getElementById("recsbox");
+    if(el) el.hidden=true;
   });
 }
 
