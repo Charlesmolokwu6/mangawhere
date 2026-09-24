@@ -1966,7 +1966,6 @@ function showDetail(m,ch,solo){
   var from=curTab;
   host.innerHTML='<button class="back" id="bk">← Back</button>'+detailHtml(m,ch);
   fillChapters(m,ch);
-  findChapters(m.title);   // start looking for a reading source now, not on Read tap
   // Back should return where they came from, the way an app does.
   document.getElementById("bk").onclick=function(){
     // Drop ?m= so Back doesn't bounce straight back into this page.
@@ -2000,10 +1999,13 @@ function detailHtml(m,videoCh){
   }
 
   // Ongoing series have no count from AniList/MAL, so leave a slot that
-  // the MangaUpdates lookup fills in a moment later.
+  // the MangaUpdates lookup fills in a moment later. id/data-chapter stay
+  // on the cell either way — reconcileChapterCount() needs somewhere to
+  // correct this number later if the live scrape of the actual reading
+  // source turns out to be further along.
   var chapCell = m.chapters
-    ? '<div class="v">'+m.chapters+'</div>'
-    : '<div class="v sm" id="chapslot">checking…</div>';
+    ? '<div class="v" id="chapslot" data-chapter="'+m.chapters+'">'+m.chapters+'</div>'
+    : '<div class="v sm" id="chapslot" data-chapter="">checking…</div>';
 
   // A completed series is a different proposition to an ongoing one, so
   // say it in words rather than making them read a status chip.
@@ -2169,8 +2171,18 @@ function fillChapters(m, videoCh){
   wireShare(m);
   wireSynopsis();
   wireReader(m);
-  var slot=document.getElementById("chapslot");
-  if(!slot) return;                       // count already known
+
+  // Start looking for a reading source now, not on Read tap — and once it
+  // resolves, use its real, live chapter list to correct the "Latest
+  // chapter" figure if the WEBTOON/MangaUpdates guess below (or AniList's
+  // own count) turns out to be behind (a capped RSS feed, a stalled fan
+  // translation, etc). Every path that opens a detail page routes through
+  // here, so this is the one place this needs to be wired up.
+  findChapters(m.title).then(function(res){
+    if(res.ok) reconcileChapterCount(res.d.chapters, res.d.domain);
+  });
+
+  if(m.chapters) return;                  // count already known
 
   // Publisher first — it's authoritative. MangaUpdates only as fallback.
   webtoonLatest(m.links).then(function(pub){
@@ -2212,11 +2224,25 @@ function applyChapter(m, videoCh, hitPromise){
       slot.title="No source publishes a chapter count for this one yet.";
       return;
     }
+    // findChapters()'s live scrape (see reconcileChapterCount()) can win
+    // this race and already have posted a higher, more current number by
+    // the time this resolves — a slow WEBTOON/MangaUpdates lookup landing
+    // after it shouldn't drag the display back down to a stale one.
+    var already=parseFloat(slot.dataset.chapter||"");
+    var outclassed = !(hit.season>1) && !isNaN(already) && already>hit.chapter;
+
     slot.className="v";
-    slot.innerHTML=(hit.season&&hit.season>1?'<span class="seasontag">S'+hit.season+'</span>':"")+
-      hit.chapter+(hit.publisher?"":'<span class="approx">~</span>');
-    slot.title="Latest chapter tracked by MangaUpdates"+
-      (hit.alternates>1?" (highest of "+hit.alternates+" matching records)":"");
+    if(!outclassed){
+      slot.innerHTML=(hit.season&&hit.season>1?'<span class="seasontag">S'+hit.season+'</span>':"")+
+        hit.chapter+(hit.publisher?"":'<span class="approx">~</span>');
+      slot.title="Latest chapter tracked by MangaUpdates"+
+        (hit.alternates>1?" (highest of "+hit.alternates+" matching records)":"");
+    }
+    // Season numbering restarts per-season, so it isn't comparable to a
+    // reading site's own (usually continuous) chapter count — leave that
+    // reconciliation alone rather than have it clobber the season display.
+    if(hit.season && hit.season>1) slot.dataset.season="1";
+    else if(!outclassed) slot.dataset.chapter=hit.chapter;
 
     var cur=getList();
     var touched=false;
@@ -2229,7 +2255,7 @@ function applyChapter(m, videoCh, hitPromise){
     if(touched){ saveList(cur); }
 
     var mc=document.getElementById("metachap");
-    if(mc) mc.textContent = (hit.season&&hit.season>1)
+    if(mc && !outclassed) mc.textContent = (hit.season&&hit.season>1)
       ? ("season "+hit.season+", chapter "+hit.chapter)
       : (hit.chapter+" chapters");
 
@@ -2258,12 +2284,12 @@ function applyChapter(m, videoCh, hitPromise){
     }
 
     var box=slot.parentNode;
-    if(box){
+    if(box && !outclassed){
       var k=box.querySelector(".k");
       if(k) k.textContent="Latest chapter";
     }
     var v=document.getElementById("verdictslot");
-    if(v) v.innerHTML="Still running &middot; up to chapter "+hit.chapter+
+    if(v && !outclassed) v.innerHTML="Still running &middot; up to chapter "+hit.chapter+
       " so far. New chapters keep coming.";
 
     // If the video's chapter is behind, say how far — the single most
@@ -2281,7 +2307,7 @@ function applyChapter(m, videoCh, hitPromise){
     var old=document.querySelector(".card .fresh");
     if(old && /last checked/i.test(old.textContent)) old.remove();
 
-    if(hit.updated){
+    if(hit.updated && !outclassed){
       var upd=document.createElement("p");
       upd.className="behind";
       upd.textContent=(hit.season&&hit.season>1?"Season "+hit.season+" chapter ":"Chapter ")+
@@ -2290,21 +2316,72 @@ function applyChapter(m, videoCh, hitPromise){
       if(c0 && !c0.querySelector(".mu-upd")){ upd.classList.add("mu-upd"); c0.appendChild(upd); }
     }
 
-    var note=document.createElement("p");
-    note.className="fresh";
-    // A licensed series is precisely where this number goes stale: fan
-    // translation stops, the official platform carries on. Say so, and
-    // point them at the publisher, who always has the true count.
-    if(hit.publisher){
-      note.textContent="Source: "+hit.publisher;
-      note.classList.add("authoritative");
-    } else {
-      note.textContent="";
+    if(!outclassed){
+      var note=document.createElement("p");
+      note.className="fresh";
+      // A licensed series is precisely where this number goes stale: fan
+      // translation stops, the official platform carries on. Say so, and
+      // point them at the publisher, who always has the true count.
+      if(hit.publisher){
+        note.textContent="Source: "+hit.publisher;
+        note.classList.add("authoritative");
+      } else {
+        note.textContent="";
+      }
+      var card2=slot.closest(".card");
+      if(card2 && !card2.querySelector(".mu-note")){ note.classList.add("mu-note");
+        card2.appendChild(note); }
     }
-    var card2=slot.closest(".card");
-    if(card2 && !card2.querySelector(".mu-note")){ note.classList.add("mu-note");
-      card2.appendChild(note); }
   });
+}
+
+var READER_SITE_LABEL={toongod:"ToonGod", asurascans:"Asura Scans", mangafreak:"MangaFreak"};
+
+/* WEBTOON's RSS feed and MangaUpdates are both third-party guesses at
+   how far a series has gotten, and both can lag behind: the RSS feed
+   only ever lists a handful of recent episodes, and a MangaUpdates
+   record stops updating the moment whoever was tracking it there stops.
+   /api/find is different — it's a live scrape of the actual site
+   "Read" is about to open, so its chapter list is the real, current
+   one. Whenever it resolves with more chapters than what's already
+   shown, that's the true "latest chapter" and should replace the guess. */
+function reconcileChapterCount(chapters, domain){
+  var top=0;
+  (chapters||[]).forEach(function(c){ if(c.number>top) top=c.number; });
+  if(!top) return;
+
+  var slot=document.getElementById("chapslot");
+  if(!slot || slot.dataset.season) return;   // navigated away, or season-numbered — leave that display alone
+
+  var shown=parseFloat(slot.dataset.chapter||"");
+  if(!isNaN(shown) && shown>=top) return;   // what's already shown is at least as current
+
+  slot.dataset.chapter=top;
+  slot.className="v";
+  slot.textContent=top;
+  slot.title="Latest chapter available on "+(READER_SITE_LABEL[domain]||"the reading source");
+
+  var mc=document.getElementById("metachap");
+  if(mc) mc.textContent=top+" chapters";
+
+  var box=slot.parentNode;
+  if(box){
+    var k=box.querySelector(".k");
+    if(k) k.textContent="Latest chapter";
+  }
+  var v=document.getElementById("verdictslot");
+  if(v) v.innerHTML="Still running &middot; up to chapter "+top+" so far. New chapters keep coming.";
+
+  // Whatever WEBTOON/MangaUpdates line was there no longer matches the
+  // chapter number we just corrected — drop it rather than leave it
+  // pointing at a chapter that isn't the latest one any more.
+  var card=slot.closest(".card");
+  if(card){
+    var staleUpd=card.querySelector(".mu-upd");
+    if(staleUpd) staleUpd.remove();
+    var staleNote=card.querySelector(".mu-note");
+    if(staleNote) staleNote.remove();
+  }
 }
 
 /* No English licence doesn't mean nowhere to read it — it almost always
