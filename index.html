@@ -324,6 +324,8 @@ padding:10px;width:100%;text-align:left;color:inherit;margin-bottom:8px}
 .pick img,.pick .ph{width:46px;height:66px;object-fit:cover;border-radius:6px;flex-shrink:0;background:var(--surf2)}
 .pick h4{font-size:14px;font-weight:600;margin:2px 0 3px;line-height:1.25}
 .pick .meta{font-size:10px;color:var(--dim);margin:0;font-family:ui-monospace,Consolas,monospace}
+.pick .avail{font-size:10px;margin:3px 0 0;color:var(--dim)}
+.pick .avail.ok{color:var(--mint)}
 .note{background:var(--surf);border:1px solid var(--line);border-left:3px solid var(--warn);
 border-radius:0 12px 12px 0;padding:14px 16px;margin-bottom:14px}
 .note p{margin:0;font-size:13px;color:var(--dim)}
@@ -1945,19 +1947,39 @@ function render(r){
   var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
   if(sure){ out.innerHTML=head+detailHtml(top.m,r.parsed.chapter);
             fillChapters(top.m,r.parsed.chapter); return; }
+  var picks=scored.slice(0,5);
   out.innerHTML=head+'<div class="note"><p><strong>Which one is it?</strong>Not certain — '+
     'pick the right title.</p></div>'+
-    scored.slice(0,5).map(function(x,i){var m=x.m;
+    picks.map(function(x,i){var m=x.m;
       return '<button class="pick" data-i="'+i+'">'+
         (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
         '<div><h4>'+esc(m.title)+'</h4><p class="meta">'+esc(m.kind||"")+' · '+
-        (m.chapters?m.chapters+" ch":"? ch")+' · '+esc(statusInfo(m.status).label)+
-        '</p></div></button>';}).join("");
+        (m.chapters?m.chapters+" ch":"? ch")+' · '+esc(statusInfo(m.status).label)+'</p>'+
+        '<p class="avail" id="pickavail-'+i+'">Checking if it\'s readable here…</p>'+
+        '</div></button>';}).join("");
   var els=out.querySelectorAll(".pick");
   for(var i=0;i<els.length;i++)
     els[i].onclick=(function(m){return function(){
       out.innerHTML=head+detailHtml(m,r.parsed.chapter);
       fillChapters(m,r.parsed.chapter); window.scrollTo(0,0);};})(scored[+els[i].dataset.i].m);
+
+  // Jikan/AniList/MangaDex only know the title exists — whether it's
+  // actually scanned on one of our three reading sources is a separate,
+  // heavier check (findChapters() does a real scrape). Checked once per
+  // candidate actually shown here, not on every keystroke like the
+  // type-ahead suggestions do.
+  picks.forEach(function(x,i){
+    findChapters(x.m.title).then(function(res){
+      var el=document.getElementById("pickavail-"+i);
+      if(!el) return;   // picked already, or navigated away
+      if(res.ok && (res.d.chapters||[]).length){
+        el.textContent="✓ Available to read here";
+        el.classList.add("ok");
+      }else{
+        el.textContent="Not available to read here yet";
+      }
+    });
+  });
 }
 
 function showDetail(m,ch,solo){
