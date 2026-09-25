@@ -1055,11 +1055,23 @@ function dropAdult(rows){
 }
 
 function search(q,n){
+  // Jikan skews toward well-known, anime-adjacent titles — plenty of
+  // manhwa/manhua it simply has no record of, so it comes back with an
+  // empty (not failed) result. That used to end the chain right there:
+  // the .catch() below only fires on an actual Jikan error, so a
+  // successful-but-empty response skipped AniList entirely and fell
+  // straight to MangaDex's much smaller catalog. Now every stage falls
+  // through to the next on either a failure or a genuinely empty result.
   return withRetry(function(){return jikanSearch(q,n);})
     .then(function(r){ sourceUsed="Jikan"; return dropAdult(r); })
-    .catch(function(){
+    .catch(function(){ sourceUsed=null; return []; })
+    .then(function(rows){
+      if(rows && rows.length) return rows;
+      var priorSource=sourceUsed;
       return alSearch(q,n).then(function(r){
-        sourceUsed="AniList (Jikan down)"; return dropAdult(r); });
+        sourceUsed = priorSource ? "AniList ("+priorSource+" had nothing)" : "AniList (Jikan down)";
+        return dropAdult(r);
+      }).catch(function(){ return rows; });
     })
     .then(function(rows){
       if(rows && rows.length) return rows;
