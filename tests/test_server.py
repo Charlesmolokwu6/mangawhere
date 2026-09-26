@@ -109,6 +109,51 @@ class AuthTests(ServerTestCase):
         auth.logout(result["token"])
         self.assertIsNone(auth.user_from_token(result["token"]))
 
+    def test_skip_captcha_bypasses_custom_captcha_when_turnstile_passed(self):
+        # skip_captcha=True (Turnstile configured) means the custom captcha
+        # is never consulted -- a deliberately wrong answer still succeeds
+        # as long as turnstile_ok is True.
+        result = auth.register(
+            {
+                "email": "turnstile-ok@example.com",
+                "password": "password123",
+                "elapsed": 5,
+                "captcha_id": "bogus",
+                "captcha": "wrong",
+            },
+            captcha.verify,
+            skip_captcha=True,
+            turnstile_ok=True,
+        )
+        self.assertIn("token", result)
+
+    def test_skip_captcha_rejects_registration_when_turnstile_failed(self):
+        result = auth.register(
+            {
+                "email": "turnstile-fail@example.com",
+                "password": "password123",
+                "elapsed": 5,
+            },
+            captcha.verify,
+            skip_captcha=True,
+            turnstile_ok=False,
+        )
+        self.assertIn("error", result)
+
+    def test_honeypot_still_blocks_registration_when_turnstile_configured(self):
+        result = auth.register(
+            {
+                "email": "bot2@example.com",
+                "password": "password123",
+                "website": "http://spam.example",
+                "elapsed": 5,
+            },
+            captcha.verify,
+            skip_captcha=True,
+            turnstile_ok=True,
+        )
+        self.assertIn("error", result)
+
 
 class WatchTests(ServerTestCase):
     def test_upsert_list_mark_read_unwatch_roundtrip(self):

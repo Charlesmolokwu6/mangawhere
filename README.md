@@ -43,6 +43,8 @@ Optional environment variables (see `render.yaml`):
   lists/comments off the ephemeral disk and onto a real database (see
   below). Strongly recommended; left unset, storage behaves exactly as it
   always has.
+- `TURNSTILE_SECRET_KEY` — verifies Cloudflare Turnstile on sign-up (see
+  below). Left unset, sign-up keeps using the custom SVG captcha.
 
 ## Persistent storage (Turso)
 
@@ -121,6 +123,60 @@ to a private temp file at runtime, and handed straight to yt-dlp — it's
 never logged, and never appears in any API response. It'll need
 re-exporting occasionally once the session it holds expires or is signed
 out.
+
+## Bot detection
+
+Sign-up already has three layers: a honeypot field, a too-fast-to-be-human
+timing check, and a custom distorted-text captcha (`server/captcha.py`).
+Cloudflare adds a fourth, stronger option — in two independent pieces,
+since only one of them needs a domain you own.
+
+### Cloudflare Turnstile (sign-up form)
+
+[Turnstile](https://developers.cloudflare.com/turnstile/) is Cloudflare's
+free CAPTCHA replacement — usually no interaction needed at all, just a
+background check. Once configured, it **replaces** the custom captcha on
+sign-up rather than stacking with it (`server/turnstile.py`,
+`server/auth.py`'s `register()`); the honeypot and timing checks stay on
+regardless. Doesn't need a custom domain — it works fine against the
+`onrender.com`/GitHub Pages URLs as they are today.
+
+To turn it on:
+1. In the [Cloudflare dashboard](https://dash.cloudflare.com), go to
+   **Turnstile** → **Add widget**. Give it the domain the frontend is
+   actually served from (e.g. your `github.io` page, or `localhost` while
+   testing), and leave the widget mode on **Managed**.
+2. It gives you two keys. The **site key** is public — paste it into
+   `index.html`'s `TURNSTILE_SITE_KEY` near the top of the `<script>`
+   block, then redeploy the frontend (push to GitHub Pages).
+3. The **secret key** is private — set it as `TURNSTILE_SECRET_KEY` in
+   Render's environment variables for the backend service, then redeploy.
+
+Both need to be set for Turnstile to activate; either one missing and
+sign-up falls back to the custom captcha exactly as it always has.
+
+### Cloudflare in front of the whole site (needs a domain)
+
+This is the heavier option — routing all traffic through Cloudflare's edge
+(WAF, Bot Fight Mode, DDoS protection) before it ever reaches Render — and
+it specifically requires a domain you control, since it works by pointing
+that domain's DNS through Cloudflare. The current `mangawhere.onrender.com`
+address can't be proxied this way. Nothing to configure in this repo until
+you have one; when you do, the setup is:
+
+1. Buy or already own a domain, and add it to a Cloudflare account (free
+   plan is fine) — Cloudflare becomes its DNS provider.
+2. In Render, add that domain as a **Custom Domain** on the `mangawhere`
+   service ([Render's docs](https://render.com/docs/custom-domains)) —
+   it'll give you a CNAME target to point at.
+3. In Cloudflare's DNS settings, add that CNAME record with the proxy
+   status **on** (the orange cloud, not grey/DNS-only) — that's what
+   actually routes traffic through Cloudflare's edge instead of straight to
+   Render.
+4. Set Cloudflare's SSL/TLS mode to **Full (strict)** — Render already
+   serves real, valid HTTPS, so Cloudflare can verify it end-to-end.
+5. Turn on **Bot Fight Mode** (free) or a **WAF** rule, under Cloudflare's
+   Security settings, for the actual bot-blocking.
 
 ## Tests
 

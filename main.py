@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from server import auth, captcha, comments, db, media, poller, push, watch
+from server import auth, captcha, comments, db, media, poller, push, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -224,7 +224,13 @@ def _attach_endpoint_from_payload(result: dict, payload: dict) -> None:
 @app.post("/api/register")
 async def api_register(request: Request):
     payload = await request.json()
-    result = auth.register(payload, captcha.verify)
+    turnstile_configured = turnstile.is_configured()
+    turnstile_ok = (
+        await turnstile.verify(payload.get("turnstile_token")) if turnstile_configured else True
+    )
+    result = auth.register(
+        payload, captcha.verify, skip_captcha=turnstile_configured, turnstile_ok=turnstile_ok
+    )
     _attach_endpoint_from_payload(result, payload)
     return JSONResponse(result)
 
