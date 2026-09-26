@@ -1,7 +1,56 @@
+import os
 import unittest
 from unittest.mock import patch
 
 from scrapers import video
+
+
+class CookiesPathTests(unittest.TestCase):
+    def setUp(self):
+        # _cookies_path() caches its result for the life of the process
+        # (the env var can't change without a redeploy) -- reset that cache
+        # between tests so each one sees its own patched environment.
+        video._cookie_file_loaded = False
+        video._cookie_file_path = None
+
+    def tearDown(self):
+        if video._cookie_file_path:
+            try:
+                os.remove(video._cookie_file_path)
+            except OSError:
+                pass
+        video._cookie_file_loaded = False
+        video._cookie_file_path = None
+
+    def test_returns_none_when_unset(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("YOUTUBE_COOKIES", None)
+            self.assertIsNone(video._cookies_path())
+
+    def test_writes_cookie_content_to_a_private_temp_file(self):
+        content = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123"
+        with patch.dict(os.environ, {"YOUTUBE_COOKIES": content}):
+            path = video._cookies_path()
+        self.assertIsNotNone(path)
+        with open(path) as f:
+            self.assertIn("SID\tabc123", f.read())
+        self.assertEqual(oct(os.stat(path).st_mode)[-3:], "600")
+
+    def test_result_is_cached_across_calls(self):
+        with patch.dict(os.environ, {"YOUTUBE_COOKIES": "cookie-a"}):
+            first = video._cookies_path()
+        with patch.dict(os.environ, {"YOUTUBE_COOKIES": "cookie-b"}):
+            second = video._cookies_path()
+        self.assertEqual(first, second)
+
+    def test_extract_metadata_passes_cookiefile_when_configured(self):
+        with patch.dict(os.environ, {"YOUTUBE_COOKIES": "cookie-content"}), \
+             patch("yt_dlp.YoutubeDL") as mock_ydl_cls:
+            mock_ydl = mock_ydl_cls.return_value.__enter__.return_value
+            mock_ydl.extract_info.return_value = {"title": "t", "description": "d", "duration": 5}
+            video._extract_metadata("https://example.com/v")
+        opts = mock_ydl_cls.call_args[0][0]
+        self.assertEqual(opts["cookiefile"], video._cookie_file_path)
 
 
 class VideoLookupTests(unittest.IsolatedAsyncioTestCase):

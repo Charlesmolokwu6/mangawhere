@@ -16,6 +16,7 @@ returns whatever it already has rather than raising — the caller falls
 back to the manual-paste box either way.
 """
 import asyncio
+import os
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -33,6 +34,32 @@ MAX_TRANSCRIBE_SECONDS = 180
 WHISPER_MODEL_SIZE = "tiny.en"
 
 _whisper_model = None
+
+# A Netscape-format cookies.txt from a real, signed-in YouTube session
+# (README.md explains how to export one). YouTube's "Sign in to confirm
+# you're not a bot" challenge is checking for exactly this — a request that
+# carries a real account's session looks like a browser instead of a bare
+# script, so it mostly avoids the block that a cookie-less request hits.
+# Entirely optional: everything here still runs without it, just less
+# reliably. Cached to a temp file once per process rather than re-written
+# on every lookup, since the env var can't change without a redeploy anyway.
+_cookie_file_path: Optional[str] = None
+_cookie_file_loaded = False
+
+
+def _cookies_path() -> Optional[str]:
+    global _cookie_file_path, _cookie_file_loaded
+    if _cookie_file_loaded:
+        return _cookie_file_path
+    _cookie_file_loaded = True
+    raw = os.environ.get("YOUTUBE_COOKIES", "").strip()
+    if raw:
+        fd, path = tempfile.mkstemp(prefix="ytcookies-", suffix=".txt")
+        os.chmod(path, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(raw + "\n")
+        _cookie_file_path = path
+    return _cookie_file_path
 
 
 def _get_whisper_model():
@@ -55,6 +82,9 @@ def _extract_metadata(url: str) -> dict:
         "skip_download": True,
         "noplaylist": True,
     }
+    cookies = _cookies_path()
+    if cookies:
+        opts["cookiefile"] = cookies
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     return {
@@ -76,6 +106,9 @@ def _download_audio(url: str, dest_dir: str) -> Optional[str]:
         "format": "bestaudio/best",
         "outtmpl": str(Path(dest_dir) / "audio.%(ext)s"),
     }
+    cookies = _cookies_path()
+    if cookies:
+        opts["cookiefile"] = cookies
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
         path = ydl.prepare_filename(info)

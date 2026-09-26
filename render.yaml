@@ -28,3 +28,9 @@ services:
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
+      # Optional — makes the video-link title lookup's audio transcription
+      # (see README.md) far less likely to hit YouTube's bot-check. Leaving
+      # it unset is fine; that lookup just falls back to the paste-caption
+      # box more often.
+      - key: YOUTUBE_COOKIES
+        sync: false
