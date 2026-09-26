@@ -1385,6 +1385,14 @@ function oembed(url){
     // A real HTTP response means CORS allowed the request — the platform
     // answered, it just didn't like the URL.
     if(r.status===404) throw new Error("notfound|That video is private, deleted, or the link is wrong.");
+    // YouTube's oEmbed specifically uses 401 for "the uploader turned off
+    // embedding for this video" — not an auth problem on our end, and not
+    // fixable by retrying. The embed player would fail the exact same way
+    // (YouTube enforces the same restriction there), so there's no
+    // fallback player worth offering for this one.
+    if(!tt && r.status===401)
+      throw new Error("embeddisabled|The uploader has disabled embedding for this video, "+
+        "so its caption can't be read automatically.");
     if(!r.ok) throw new Error("http|"+(tt?"TikTok":"YouTube")+" returned "+r.status+".");
     return r.json();
   }).then(function(d){
@@ -1877,13 +1885,16 @@ function render(r){
     var code=parts[0], msg=parts[1]||r.err;
     var heading = code==="cors" ? "Caption blocked by the platform"
                 : code==="notfound" ? "Video not found"
+                : code==="embeddisabled" ? "Embedding turned off for this video"
                 : "Couldn't read that video";
     out.innerHTML='<div class="note bad"><p><strong>'+heading+'</strong>'+esc(msg)+
       (code==="cors"
         ? ' This is exactly the job the Python backend does — it fetches the caption '+
           'server-side where CORS doesn\'t apply.'
         : "")+'</p></div>'+
-      watchHtml(r)+
+      // The embed player enforces the exact same restriction as oEmbed —
+      // offering it here would just be a second, slower way to fail.
+      (code==="embeddisabled" ? "" : watchHtml(r))+
       '<div class="note"><p><strong>Test the matching anyway</strong>'+
       'Copy the video\'s caption text and paste it here — everything after the caption '+
       'fetch is identical, so this still proves the parser and matcher work.</p></div>'+
