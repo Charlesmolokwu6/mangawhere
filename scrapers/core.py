@@ -327,7 +327,13 @@ async def search_toongod(title: str) -> Optional[str]:
         except Exception as e2:
             print(f"[toongod] Playwright fallback also failed: {e2}")
             return None
-    return _best_match(html, ".post-title a", search_url, title, use_alt=False)
+    result = _best_match(html, ".post-title a", search_url, title, use_alt=False)
+    if result is None:
+        # Temporary: the site's markup has apparently changed (zero
+        # candidates via the old selector even though the page itself
+        # loaded fine) — dumping a snippet to find the current one.
+        print(f"[toongod] raw HTML snippet: {html[:2500]!r}")
+    return result
 
 
 async def search_asurascans(title: str) -> Optional[str]:
