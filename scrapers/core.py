@@ -306,10 +306,12 @@ async def search_toongod(title: str) -> Optional[str]:
     search_url = f"https://toongod.org/?s={quote(title)}&post_type=wp-manga"
     try:
         html = await fetch_html_httpx(search_url)
-    except Exception:
+    except Exception as e:
+        print(f"[toongod] plain fetch failed ({e}), falling back to Playwright")
         try:
             html = await fetch_html_playwright(search_url)
-        except Exception:
+        except Exception as e2:
+            print(f"[toongod] Playwright fallback also failed: {e2}")
             return None
     return _best_match(html, ".post-title a", search_url, title, use_alt=False)
 
@@ -324,10 +326,12 @@ async def search_asurascans(title: str) -> Optional[str]:
     listing_url = "https://asurascans.com/comics"
     try:
         html = await fetch_html_httpx(listing_url)
-    except Exception:
+    except Exception as e:
+        print(f"[asurascans] plain fetch failed ({e}), falling back to Playwright")
         try:
             html = await fetch_html_playwright(listing_url)
-        except Exception:
+        except Exception as e2:
+            print(f"[asurascans] Playwright fallback also failed: {e2}")
             return None
     return _best_match(html, 'a[href^="/comics/"]', listing_url, title, use_alt=True)
 
@@ -338,10 +342,12 @@ async def search_mangafreak(title: str) -> Optional[str]:
     search_url = f"https://ww3.mangafreak.me/Find/{quote(title)}"
     try:
         html = await fetch_html_httpx(search_url)
-    except Exception:
+    except Exception as e:
+        print(f"[mangafreak] plain fetch failed ({e}), falling back to Playwright")
         try:
             html = await fetch_html_playwright(search_url)
-        except Exception:
+        except Exception as e2:
+            print(f"[mangafreak] Playwright fallback also failed: {e2}")
             return None
     return _best_match(
         html, '.manga_search_item a[href^="/Manga/"]', search_url, title, use_alt=False
