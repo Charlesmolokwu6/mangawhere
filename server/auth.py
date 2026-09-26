@@ -28,7 +28,12 @@ def _user_row_to_dict(row) -> Dict[str, Any]:
     }
 
 
-def register(payload: Dict[str, Any], verify_captcha) -> Dict[str, Any]:
+def register(
+    payload: Dict[str, Any],
+    verify_captcha,
+    skip_captcha: bool = False,
+    turnstile_ok: bool = True,
+) -> Dict[str, Any]:
     email = (payload.get("email") or "").strip().lower()
     password = payload.get("password") or ""
     website = payload.get("website") or ""
@@ -46,7 +51,14 @@ def register(payload: Dict[str, Any], verify_captcha) -> Dict[str, Any]:
     if website.strip() or (isinstance(elapsed, (int, float)) and elapsed < 1.5):
         return {"error": GENERIC_ERROR, "captcha_failed": True}
 
-    if not verify_captcha(captcha_id, captcha_answer):
+    # skip_captcha is set once Cloudflare Turnstile is configured — its
+    # result (verified against Cloudflare's API before this function is
+    # ever called, since that's an async HTTP call this sync function can't
+    # make itself) replaces the custom captcha rather than stacking with it.
+    if skip_captcha:
+        if not turnstile_ok:
+            return {"error": "That didn't match. Try again.", "captcha_failed": True}
+    elif not verify_captcha(captcha_id, captcha_answer):
         return {"error": "That didn't match. Try again.", "captcha_failed": True}
 
     conn = db.get_connection()

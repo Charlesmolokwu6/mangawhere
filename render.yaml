@@ -43,3 +43,9 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
+      # Optional (see README.md) — the *secret* key for Cloudflare Turnstile,
+      # which replaces the sign-up form's custom captcha with Cloudflare's
+      # bot-detection widget once both this and index.html's public site key
+      # are set. Leaving it unset keeps the custom captcha exactly as it is.
+      - key: TURNSTILE_SECRET_KEY
+        sync: false

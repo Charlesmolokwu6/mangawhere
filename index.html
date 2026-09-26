@@ -473,6 +473,22 @@ var AMAZON_TAG = "";
    below the read-here links — after the reader has been given what they
    came for, never above it. */
 var AD_SLOT_HTML = "";
+
+/* Cloudflare Turnstile — a free, privacy-friendly CAPTCHA replacement for
+   the sign-up form's bot check. This is the *site key*, which is public
+   and safe to hardcode here (unlike its matching secret key, which stays
+   server-side as Render's TURNSTILE_SECRET_KEY — see README.md). Left
+   empty, sign-up keeps using the custom SVG captcha exactly as it always
+   has; setting this one value is what switches it over.
+   Get one at dash.cloudflare.com → Turnstile → Add widget. */
+var TURNSTILE_SITE_KEY = "";
+(function(){
+  if(!TURNSTILE_SITE_KEY) return;
+  var s=document.createElement("script");
+  s.src="https://challenge.cloudflare.com/turnstile/v0/api.js";
+  s.async=true; s.defer=true;
+  document.head.appendChild(s);
+})();
 (function(){
   var q=new URLSearchParams(location.search).get("proxy");
   if(q) PROXY=q.replace(/\/$/,"");
@@ -3240,14 +3256,16 @@ function authView(mode, thenTrack){
       '<div class="hp" aria-hidden="true">'+
         '<label>Website<input id="au-hp" type="text" tabindex="-1" '+
         'autocomplete="off"></label></div>'+
-      (login?"":'<label>Type the characters'+
-        '<div class="cap"><div class="capimg" id="capimg">'+
-          '<span class="caploading">loading…</span></div>'+
-          '<button type="button" class="caprefresh" id="caprefresh" '+
-          'title="Show a different one" aria-label="Show a different one">↻</button>'+
-        '</div>'+
-        '<input id="au-cap" type="text" autocomplete="off" autocapitalize="characters" '+
-        'spellcheck="false" maxlength="5" placeholder="5 characters"></label>')+
+      (login?"":(TURNSTILE_SITE_KEY
+        ? '<div id="cf-turnstile"></div>'
+        : '<label>Type the characters'+
+          '<div class="cap"><div class="capimg" id="capimg">'+
+            '<span class="caploading">loading…</span></div>'+
+            '<button type="button" class="caprefresh" id="caprefresh" '+
+            'title="Show a different one" aria-label="Show a different one">↻</button>'+
+          '</div>'+
+          '<input id="au-cap" type="text" autocomplete="off" autocapitalize="characters" '+
+          'spellcheck="false" maxlength="5" placeholder="5 characters"></label>'))+
       '<button class="primary" id="au-go">'+(login?"Sign in":"Create account")+'</button>'+
       '<p class="err" id="au-err"></p>'+
     '</div>'+
@@ -3264,10 +3282,32 @@ function authView(mode, thenTrack){
   var err=document.getElementById("au-err");
   var openedAt=Date.now();   // how long the form took, to spot scripts
   var capId=null;
+  var turnstileWidgetId=null;
+
+  /* The custom captcha's script tag loads once, up front (see near PROXY),
+     but the widget div it renders into is recreated fresh every time this
+     form is. Cloudflare's implicit auto-render only scans the page once on
+     load, so it never sees a div added afterward — this renders it
+     explicitly instead, retrying briefly if the script itself is still
+     loading. */
+  function renderTurnstile(retries){
+    if(!TURNSTILE_SITE_KEY || login) return;
+    var el=document.getElementById("cf-turnstile");
+    if(!el) return;
+    if(typeof turnstile==="undefined" || !turnstile.render){
+      if(retries===undefined) retries=20;
+      if(retries<=0){ el.textContent="Couldn't load the verification check — reload the page."; return; }
+      setTimeout(function(){ renderTurnstile(retries-1); }, 250);
+      return;
+    }
+    el.innerHTML="";
+    turnstileWidgetId=turnstile.render(el, {sitekey:TURNSTILE_SITE_KEY});
+  }
+  renderTurnstile();
 
   /* The answer stays on the server; we only ever hold the id. */
   function loadCaptcha(){
-    if(login) return;
+    if(login || TURNSTILE_SITE_KEY) return;
     var box=document.getElementById("capimg");
     if(!box) return;
     box.innerHTML='<span class="caploading">loading…</span>';
@@ -3301,8 +3341,13 @@ function authView(mode, thenTrack){
       err.textContent="Passwords don't match."; return;
     }
     var capEl=document.getElementById("au-cap");
-    if(!login && capEl && !capEl.value.trim()){
+    if(!login && capEl && !TURNSTILE_SITE_KEY && !capEl.value.trim()){
       err.textContent="Type the characters shown in the picture."; return;
+    }
+    var turnstileToken=(!login && TURNSTILE_SITE_KEY && typeof turnstile!=="undefined")
+      ? turnstile.getResponse(turnstileWidgetId) : undefined;
+    if(!login && TURNSTILE_SITE_KEY && !turnstileToken){
+      err.textContent="Complete the verification check."; return;
     }
     go.disabled=true; go.textContent=login?"Signing in…":"Creating…";
     err.textContent="";
@@ -3314,13 +3359,16 @@ function authView(mode, thenTrack){
         website:(hp?hp.value:""),
         elapsed:(Date.now()-openedAt)/1000,
         captcha_id:capId||undefined,
-        captcha:(capEl?capEl.value.trim():undefined)})
+        captcha:(capEl?capEl.value.trim():undefined),
+        turnstile_token:turnstileToken})
     }).then(function(d){
       if(d.error){
         err.textContent=d.error;
-        // A used challenge is gone, so always issue a fresh picture rather
-        // than leaving them retyping one that can no longer pass.
+        // A used challenge is gone, so always issue a fresh one rather than
+        // leaving them retrying with a token/picture that can no longer pass.
         if(d.captcha_failed || !login) loadCaptcha();
+        if(!login && TURNSTILE_SITE_KEY && typeof turnstile!=="undefined" && turnstileWidgetId!=null)
+          turnstile.reset(turnstileWidgetId);
         go.disabled=false; go.textContent=login?"Sign in":"Create account";
         return;
       }

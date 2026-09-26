@@ -48,6 +48,61 @@ class ProxyTests(MainTestCase):
         self.assertEqual(r.status_code, 403)
 
 
+class RegisterApiTests(MainTestCase):
+    def test_register_via_custom_captcha_when_turnstile_not_configured(self):
+        db.init_db()
+        c = self.client.get("/api/captcha").json()
+        conn = db.get_connection()
+        answer = conn.execute(
+            "SELECT answer FROM captchas WHERE id = ?", (c["id"],)
+        ).fetchone()["answer"]
+        conn.close()
+
+        r = self.client.post(
+            "/api/register",
+            json={
+                "email": "reader@example.com",
+                "password": "password123",
+                "elapsed": 5,
+                "captcha_id": c["id"],
+                "captcha": answer,
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("token", r.json())
+
+    def test_register_blocked_when_turnstile_configured_and_fails(self):
+        import main
+
+        db.init_db()
+        with patch.object(main.turnstile, "is_configured", return_value=True), \
+             patch.object(main.turnstile, "verify", return_value=False):
+            r = self.client.post(
+                "/api/register",
+                json={"email": "blocked@example.com", "password": "password123", "elapsed": 5},
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("error", r.json())
+
+    def test_register_succeeds_when_turnstile_configured_and_passes(self):
+        import main
+
+        db.init_db()
+        with patch.object(main.turnstile, "is_configured", return_value=True), \
+             patch.object(main.turnstile, "verify", return_value=True):
+            r = self.client.post(
+                "/api/register",
+                json={
+                    "email": "passed@example.com",
+                    "password": "password123",
+                    "elapsed": 5,
+                    "turnstile_token": "some-real-looking-token",
+                },
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("token", r.json())
+
+
 class VideoLookupApiTests(MainTestCase):
     def test_disallowed_host_is_rejected(self):
         r = self.client.get(
