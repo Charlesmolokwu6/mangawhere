@@ -20,13 +20,11 @@ Then open `http://localhost:8000/`.
 New → Blueprint → point it at this repo, and it picks up `render.yaml`
 automatically.
 
-**A real caveat on the free tier:** the app stores accounts, watch
-lists, and push subscriptions in a local SQLite file (`data/`). Render's
-free plan has no persistent disk, so that file is wiped on every
-redeploy. Fine for trying things out; for anything you don't want to
-lose, either add a paid Render persistent disk mounted at `data/`, or
-move the storage to a managed database (Render's own Postgres, for
-instance) — neither is set up here yet.
+**A real caveat on the free tier:** without `TURSO_DATABASE_URL` set (see
+below), the app stores accounts, watch lists, and comments in a local
+SQLite file (`data/`), and Render's free plan has no persistent disk — that
+file is wiped on every redeploy. Fine for trying things out; set up Turso
+(free, a few minutes) for anything you don't want to lose.
 
 Optional environment variables (see `render.yaml`):
 - `VAPID_CONTACT_EMAIL` — contact address push services can reach if
@@ -41,6 +39,35 @@ Optional environment variables (see `render.yaml`):
   transcription reliable (see below). Left unset, that step still runs but
   frequently gets refused by YouTube's bot-check, and the app falls back to
   the paste-caption box.
+- `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` — move accounts/watch
+  lists/comments off the ephemeral disk and onto a real database (see
+  below). Strongly recommended; left unset, storage behaves exactly as it
+  always has.
+
+## Persistent storage (Turso)
+
+`server/db.py` talks to [Turso](https://turso.tech) — a hosted,
+SQLite-compatible database with a real free tier — as an "embedded
+replica": a local file that mirrors a remote primary, so reads stay just
+as fast as plain SQLite while writes are transparently forwarded to, and
+made durable on, the remote database. Every existing query in
+`auth.py`/`watch.py`/`comments.py`/`push.py`/`poller.py` runs completely
+unchanged either way.
+
+To turn it on:
+1. Create a free account at [turso.tech](https://turso.tech), or install
+   their CLI (`curl -sSfL https://get.tur.so/install.sh | bash`) and run
+   `turso auth signup`.
+2. Create a database: `turso db create mangawhere`.
+3. Get its URL: `turso db show mangawhere --url` (starts with `libsql://`).
+4. Create a token: `turso db tokens create mangawhere`.
+5. Set those as `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in Render's
+   environment variables for this service, then redeploy.
+
+With both set, the app pulls down the real remote database on startup
+(`init_db()`), so a redeploy no longer means starting over. Leave either
+one unset and nothing changes — same local SQLite file as before this
+existed.
 
 ## Profile pictures
 

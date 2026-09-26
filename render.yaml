@@ -34,3 +34,12 @@ services:
       # box more often.
       - key: YOUTUBE_COOKIES
         sync: false
+      # Strongly recommended (see README.md) — without these, accounts,
+      # watch lists, and comments all live in data/, which Render's free
+      # plan wipes on every redeploy. Set both to move that storage to a
+      # real (free-tier) Turso database instead; leaving them unset keeps
+      # today's behavior exactly as it is.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false

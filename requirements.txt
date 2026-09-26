@@ -7,3 +7,4 @@ pywebpush==2.5.0
 python-multipart==0.0.9
 yt-dlp==2026.8.19
 faster-whisper==1.2.1
+libsql==0.1.11
