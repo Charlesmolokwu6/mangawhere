@@ -3,11 +3,19 @@ services:
     name: mangawhere
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt && playwright install chromium
+    buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      # Render's Python build and runtime steps don't share ~/.cache, so a
+      # browser installed there (Playwright's default) is gone by the time
+      # the app actually runs. This makes `playwright install` put it
+      # inside the installed playwright package itself instead, which
+      # *is* carried over — and the app needs the same value at runtime
+      # so it looks in the same place.
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: VAPID_CONTACT_EMAIL
         sync: false
       - key: POLL_INTERVAL_SECONDS
