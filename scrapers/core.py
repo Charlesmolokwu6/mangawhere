@@ -268,8 +268,9 @@ def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt:
     """Score every candidate link's visible name against `title` and
     return the best match's absolute URL, if it clears MATCH_THRESHOLD."""
     soup = BeautifulSoup(html, "html.parser")
-    best_url, best_score = None, 0.0
+    best_url, best_name, best_score = None, None, 0.0
     seen = set()
+    candidate_count = 0
 
     for a in soup.select(selector):
         href = a.get("href")
@@ -290,13 +291,26 @@ def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt:
         if href in seen:
             continue
         seen.add(href)
+        candidate_count += 1
 
         score = similar(title, name)
         if score > best_score:
-            best_score, best_url = score, href
+            best_score, best_url, best_name = score, href, name
 
     if best_url and best_score >= MATCH_THRESHOLD:
         return urljoin(base_url, best_url)
+
+    # Distinguishes "the page had nothing to match" (selector drift, or the
+    # site's own search genuinely has nothing) from "something was there
+    # but scored too low to trust" — otherwise a rejected match and a
+    # broken selector look identical from the outside.
+    if candidate_count:
+        print(
+            f"[match] {candidate_count} candidate(s) for \"{title}\" via {selector!r}; "
+            f"best was \"{best_name}\" (score {best_score:.2f}, threshold {MATCH_THRESHOLD})"
+        )
+    else:
+        print(f"[match] no candidates found for \"{title}\" via {selector!r} — selector may not match the page")
     return None
 
 
