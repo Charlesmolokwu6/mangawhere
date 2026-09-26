@@ -3,7 +3,7 @@ services:
     name: mangawhere
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt && playwright install --with-deps chromium
+    buildCommand: pip install -r requirements.txt && playwright install chromium
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
