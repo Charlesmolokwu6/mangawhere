@@ -80,21 +80,36 @@ def extract_image_urls_from_html(html: str, selectors: Iterable[str]) -> List[st
     return clean_image_urls(raw_sources)
 
 
+class CloudflareChallenge(PermissionError):
+    """Cloudflare's JS-computation interstitial ("Just a moment...") — a
+    real browser can run the JS and get past this."""
+
+
+class CloudflareBlocked(PermissionError):
+    """A hard, network-level Cloudflare deny rule (its "error 1005"-style
+    page, typically aimed at whole datacenter/hosting IP ranges). No
+    browser, however real, gets past this — Cloudflare rejects the
+    connection before serving anything a JS challenge would apply to, so
+    a real one just gets the identical deny page a plain fetch did."""
+
+
 async def fetch_html_httpx(url: str) -> str:
     """Fast standard fetch path for normal HTML pages."""
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
         response = await client.get(url)
         lowered = response.text.lower()
-        # Cloudflare's actual interstitial challenge page — not just any
-        # page that happens to load Cloudflare's (very common) analytics
-        # beacon script, which the bare substring "cloudflare" also matches.
+        if "used cloudflare to restrict access" in lowered:
+            raise CloudflareBlocked("Cloudflare denied this request outright")
+        # The actual interstitial challenge page — not just any page that
+        # happens to load Cloudflare's (very common) analytics beacon
+        # script, which the bare substring "cloudflare" also matches.
         is_challenge_page = (
             "just a moment" in lowered
             or "cf-browser-verification" in lowered
             or "cf_chl_opt" in lowered
         )
         if response.status_code in (403, 429) or is_challenge_page:
-            raise PermissionError("Cloudflare protection active")
+            raise CloudflareChallenge("Cloudflare protection active")
         response.raise_for_status()
         return response.text
 
@@ -117,6 +132,8 @@ async def scrape_toongod(url: str) -> List[str]:
     """Scrape ToonGod chapter pages using the Madara widget structure."""
     try:
         html = await fetch_html_httpx(url)
+    except CloudflareBlocked:
+        html = ""
     except PermissionError:
         html = await fetch_html_playwright(url)
 
@@ -205,6 +222,8 @@ async def scrape_toongod_chapter_list(url: str) -> List[Dict[str, Any]]:
     """List chapters from a ToonGod series page (Madara theme chapter list)."""
     try:
         html = await fetch_html_httpx(url)
+    except CloudflareBlocked:
+        html = ""
     except PermissionError:
         html = await fetch_html_playwright(url)
     return extract_chapter_list(html, ".wp-manga-chapter a", url)
@@ -320,6 +339,13 @@ async def search_toongod(title: str) -> Optional[str]:
     search_url = f"https://toongod.org/?s={quote(title)}&post_type=wp-manga"
     try:
         html = await fetch_html_httpx(search_url)
+    except CloudflareBlocked:
+        # A real browser would hit the identical deny page — not worth a
+        # multi-second Playwright launch to find that out again. Confirmed
+        # directly: ToonGod's Cloudflare rule denies this host outright,
+        # every time, regardless of how the request is made.
+        print("[toongod] hard-blocked by Cloudflare — not retrying via Playwright")
+        return None
     except Exception as e:
         print(f"[toongod] plain fetch failed ({e}), falling back to Playwright")
         try:
@@ -327,13 +353,7 @@ async def search_toongod(title: str) -> Optional[str]:
         except Exception as e2:
             print(f"[toongod] Playwright fallback also failed: {e2}")
             return None
-    result = _best_match(html, ".post-title a", search_url, title, use_alt=False)
-    if result is None:
-        # Temporary: the site's markup has apparently changed (zero
-        # candidates via the old selector even though the page itself
-        # loaded fine) — dumping a snippet to find the current one.
-        print(f"[toongod] raw HTML snippet: {html[:2500]!r}")
-    return result
+    return _best_match(html, ".post-title a", search_url, title, use_alt=False)
 
 
 async def search_asurascans(title: str) -> Optional[str]:
