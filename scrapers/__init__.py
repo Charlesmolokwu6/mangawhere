@@ -18,6 +18,7 @@ from .core import (
     search_toongod,
 )
 from .matching import similar
+from .video import lookup as lookup_video
 
 __all__ = [
     "clean_image_urls",
@@ -26,6 +27,7 @@ __all__ = [
     "fetch_html_httpx",
     "fetch_html_playwright",
     "find_best_source",
+    "lookup_video",
     "scrape_asurascans",
     "scrape_asurascans_chapter_list",
     "scrape_chapter",

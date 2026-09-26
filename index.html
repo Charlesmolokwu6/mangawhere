@@ -717,6 +717,35 @@ function parseCaption(c){var t=exTitle(c),ch=exCh(c);
  var p=prose(t);
  return {title:t,chapter:ch,confidence:p?"low":(t&&ch?"high":(t?"medium":"none"))};}
 
+/* Descriptions and audio transcripts are longer and messier than a caption
+   -- exTitle()'s "pick the longest dash/colon-delimited segment" heuristic
+   above was tuned for a single short line, and against multi-paragraph text
+   it just as often picks unrelated prose (a copyright disclaimer runs on
+   with no punctuation to split it, so it "wins" on raw length) as the real
+   name. An explicit label is a much narrower, much more reliable signal
+   when one's there, so it's checked first and separately -- only when none
+   of these lines exist does deepenTitle() fall back to the generic
+   heuristic, and only against the shorter caption/title text. */
+var LABEL_WORDS=["manhwa","manhua","manga","comic","webtoon","source","sauce","title","name"];
+// A leading label is often two words ("Manhwa Name:", "Source Manga:"), not
+// just one, so this checks whether any label word appears anywhere before
+// the first separator rather than anchoring the match to a single word.
+function extractLabeledTitle(text){
+ if(!text) return null;
+ var lines=clean(text).split(/\n+/);
+ for(var i=0;i<lines.length;i++){
+  var m=lines[i].trim().match(/^([^:\-–—]{0,40})[:\-–—]\s*(.+)$/);
+  if(!m) continue;
+  var label=m[1].toLowerCase();
+  var hasWord=LABEL_WORDS.some(function(w){return label.indexOf(w)>-1;});
+  if(!hasWord) continue;
+  var val=m[2].replace(/#\w+/g," ").replace(/https?:\/\/\S+/g," ").trim();
+  val=(val.split(SPLIT)[0]||"").trim();
+  if(val.length>=3 && !/^\d+$/.test(val)) return val;
+ }
+ return null;
+}
+
 /* ================= matching ================= */
 function bg(s){s=(s||"").toLowerCase().replace(/[^a-z0-9 ]/g,"").trim();
  var o=[];for(var i=0;i<s.length-1;i++)o.push(s.slice(i,i+2));return o;}
@@ -1407,6 +1436,38 @@ function oembed(url){
   });
 }
 
+/* oEmbed only ever returns the video's *caption* (or, for YouTube, just its
+   title) — never the upload description, and never anything from the audio
+   track. Plenty of edits name the manga in one of those two places instead
+   of the caption, and neither is blocked by an embedding restriction the way
+   oEmbed itself is: the video is still fully public, so the backend can
+   read its description and (for clips short enough to be worth it)
+   transcribe its audio. Best-effort — a failure here just means no extra
+   text came back, same as if this hadn't been tried at all. */
+function deepenTitle(url, existingCaption){
+  var out=document.getElementById("out");
+  if(out) out.innerHTML='<div class="spin">Checking the video’s description and audio for a name…</div>';
+  var ep=API_BASE+"/api/video-lookup?url="+encodeURIComponent(url);
+  return fetchTimeout(ep, null, 45000).then(function(r){
+    if(!r.ok) throw new Error("lookup failed");
+    return r.json();
+  }).then(function(d){
+    var all=[existingCaption,d.title,d.description,d.transcript].filter(Boolean).join("\n");
+    var ch=exCh(all);
+    var labeled=extractLabeledTitle(d.description)||extractLabeledTitle(d.transcript);
+    if(labeled) return {title:labeled, chapter:ch, confidence:"medium",
+                         caption:existingCaption||d.title||""};
+    // No explicit label -- safe to run the generic heuristic only on the
+    // short pieces, never the raw description (see extractLabeledTitle's
+    // comment above for why).
+    var p=parseCaption([existingCaption,d.title,d.transcript].filter(Boolean).join("\n"));
+    return {title:p.title, chapter:p.chapter===null?ch:p.chapter, confidence:p.confidence,
+            caption:existingCaption||d.title||""};
+  }).catch(function(){
+    return {title:null, chapter:null, confidence:"none", caption:existingCaption||""};
+  });
+}
+
 /* ================= ui ================= */
 var app=document.getElementById("app");
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
@@ -1832,12 +1893,20 @@ function run(){
   var job = isLink
     ? oembed(raw).then(function(meta){
         var p=parseCaption(meta.caption);
-        if(!p.title) return {kind:"noTitle",caption:meta.caption,
-          embedUrl:meta.embedUrl,embedTall:meta.embedTall};
-        return search(p.title).then(function(rows){
+        if(p.title) return search(p.title).then(function(rows){
           return {kind:"results",rows:rows,parsed:p,caption:meta.caption,
                   author:meta.author,platform:meta.platform,
                   embedUrl:meta.embedUrl,embedTall:meta.embedTall};});
+        // The caption alone didn't name it — try the description/audio
+        // before giving up.
+        return deepenTitle(raw, meta.caption).then(function(deep){
+          if(!deep.title) return {kind:"noTitle",caption:meta.caption,
+            embedUrl:meta.embedUrl,embedTall:meta.embedTall};
+          return search(deep.title).then(function(rows){
+            return {kind:"results",rows:rows,parsed:deep,caption:deep.caption,
+                    author:meta.author,platform:meta.platform,
+                    embedUrl:meta.embedUrl,embedTall:meta.embedTall};});
+        });
       }).catch(function(e){
         if(e.message==="unsupported") return {kind:"unsupported"};
         // oEmbed itself failed (CORS, 401, whatever) — no caption came
@@ -1846,10 +1915,20 @@ function run(){
         // title-matching never got off the ground.
         var tt=/tiktok\.com/i.test(raw);
         var ttId=(raw.match(/\/video\/(\d+)/)||[])[1];
-        return {kind:"oembedFail",err:e.message,
-          embedUrl: tt ? (ttId?"https://www.tiktok.com/embed/v2/"+ttId:null)
-                       : (ytId(raw)?"https://www.youtube-nocookie.com/embed/"+ytId(raw):null),
-          embedTall: tt};
+        var embedUrl = tt ? (ttId?"https://www.tiktok.com/embed/v2/"+ttId:null)
+                     : (ytId(raw)?"https://www.youtube-nocookie.com/embed/"+ytId(raw):null);
+        // A 404 means the video itself is gone — the description/audio
+        // fallback would fail identically, no point trying. Every other
+        // failure (embedding disabled, CORS, a timeout) still leaves a
+        // fully public video the backend can read independently of oEmbed.
+        var code=(e.message||"").split("|")[0];
+        if(code==="notfound") return {kind:"oembedFail",err:e.message,embedUrl:embedUrl,embedTall:tt};
+        return deepenTitle(raw,"").then(function(deep){
+          if(!deep.title) return {kind:"oembedFail",err:e.message,embedUrl:embedUrl,embedTall:tt};
+          return search(deep.title).then(function(rows){
+            return {kind:"results",rows:rows,parsed:deep,caption:deep.caption,
+                    embedUrl:embedUrl,embedTall:tt};});
+        });
       })
     : search(raw).then(function(rows){
         return {kind:"results",rows:rows,parsed:{title:raw,chapter:null,confidence:"medium"}};});
@@ -1887,10 +1966,12 @@ function render(r){
                 : code==="notfound" ? "Video not found"
                 : code==="embeddisabled" ? "Embedding turned off for this video"
                 : "Couldn't read that video";
+    // Every code but "notfound" already went through deepenTitle() before
+    // landing here — the description and (for short clips) the audio
+    // track were checked server-side and neither turned up a name either.
     out.innerHTML='<div class="note bad"><p><strong>'+heading+'</strong>'+esc(msg)+
-      (code==="cors"
-        ? ' This is exactly the job the Python backend does — it fetches the caption '+
-          'server-side where CORS doesn\'t apply.'
+      (code!=="notfound"
+        ? " Checked its description and audio too, but couldn't find a name there either."
         : "")+'</p></div>'+
       // The embed player enforces the exact same restriction as oEmbed —
       // offering it here would just be a second, slower way to fail.
@@ -1932,7 +2013,8 @@ function render(r){
   }
   if(r.kind==="noTitle"){
     out.innerHTML='<div class="cap">'+esc(r.caption)+'</div>'+watchHtml(r)+'<div class="note"><p>'+
-      '<strong>No manga name in that caption</strong>Type it instead — guessing wrong is '+
+      '<strong>No manga name found</strong>Checked the caption, description, and (for short '+
+      'clips) the audio — none of them named it. Type it instead, guessing wrong is '+
       'worse than asking.</p></div>'; return;}
   var rows=r.rows||[];
   var head=r.caption

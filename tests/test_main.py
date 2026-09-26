@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -45,6 +46,40 @@ class ProxyTests(MainTestCase):
             "/", params={"url": "https://evil.example.com/steal"}, json={}
         )
         self.assertEqual(r.status_code, 403)
+
+
+class VideoLookupApiTests(MainTestCase):
+    def test_disallowed_host_is_rejected(self):
+        r = self.client.get(
+            "/api/video-lookup", params={"url": "https://evil.example.com/video"}
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_malformed_url_is_rejected(self):
+        r = self.client.get("/api/video-lookup", params={"url": "not-a-url"})
+        self.assertEqual(r.status_code, 400)
+
+    def test_youtube_url_is_looked_up(self):
+        import main
+
+        payload = {"title": "Someone Stop Her! ep 12", "description": "Sauce: Someone Stop Her!", "transcript": ""}
+        with patch.object(main, "lookup_video", return_value=payload):
+            r = self.client.get(
+                "/api/video-lookup",
+                params={"url": "https://www.youtube.com/watch?v=abc123"},
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), payload)
+
+    def test_lookup_failure_returns_502(self):
+        import main
+
+        with patch.object(main, "lookup_video", side_effect=RuntimeError("boom")):
+            r = self.client.get(
+                "/api/video-lookup",
+                params={"url": "https://www.youtube.com/watch?v=abc123"},
+            )
+        self.assertEqual(r.status_code, 502)
 
 
 class CommentsApiTests(MainTestCase):

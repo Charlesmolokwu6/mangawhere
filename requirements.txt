@@ -5,3 +5,5 @@ beautifulsoup4==4.12.3
 playwright==1.47.0
 pywebpush==2.5.0
 python-multipart==0.0.9
+yt-dlp==2026.8.19
+faster-whisper==1.2.1
