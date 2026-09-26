@@ -37,6 +37,10 @@ Optional environment variables (see `render.yaml`):
   — enable profile picture uploads (see below). Everyone gets a default
   initials avatar with none of these set; uploading a custom photo just
   returns a clear error until all three are present.
+- `YOUTUBE_COOKIES` — makes the video-link search flow's audio
+  transcription reliable (see below). Left unset, that step still runs but
+  frequently gets refused by YouTube's bot-check, and the app falls back to
+  the paste-caption box.
 
 ## Profile pictures
 
@@ -57,6 +61,39 @@ To turn it on:
 Only the URL Cloudinary returns is stored in the app's own database
 (`users.avatar_url`) — the image bytes themselves never touch the
 ephemeral disk.
+
+## Video-link audio transcription
+
+When someone pastes a TikTok/YouTube link and the caption alone doesn't
+name the manga, the backend also tries the upload description and (for
+clips under 3 minutes) a speech-to-text transcript of the audio, via
+yt-dlp and faster-whisper (`scrapers/video.py`). The description fetch
+works without any setup. The audio *download* step, though, is what
+YouTube's "Sign in to confirm you're not a bot" anti-bot check targets —
+without a real signed-in session it fails intermittently, and the lookup
+just falls back to the paste-caption box when that happens.
+
+`YOUTUBE_COOKIES` fixes that: with a real account's session attached, the
+request looks like a signed-in browser instead of a bare script, and
+mostly avoids the challenge.
+
+To set it up:
+1. **Use a secondary/throwaway Google account for this, not your main
+   one.** This exports that account's live session — automated use of it
+   isn't something to risk a personal account over, and it's what YouTube's
+   Terms of Service actually intend this check to discourage.
+2. Sign into YouTube with that account in a normal browser, then export
+   its cookies in Netscape format — e.g. the
+   [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+   extension, from a youtube.com tab.
+3. Paste the exported file's full contents as `YOUTUBE_COOKIES` in
+   Render's environment variables for this service, then redeploy.
+
+The cookie file is only ever read from that environment variable, written
+to a private temp file at runtime, and handed straight to yt-dlp — it's
+never logged, and never appears in any API response. It'll need
+re-exporting occasionally once the session it holds expires or is signed
+out.
 
 ## Tests
 
