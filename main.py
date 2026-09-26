@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from scrapers import find_best_source, scrape_chapter, scrape_series
+from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
 from server import auth, captcha, comments, db, media, poller, push, watch
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -44,6 +44,19 @@ PROXY_ALLOWED_HOSTS = {
     "manga.bilibili.com",
 }
 PROXY_UA = "MangaWhere/1.0 (+https://mangawhere.example)"
+
+# Hosts /api/video-lookup will run yt-dlp against — same allowlist idea as
+# the proxy above, just narrower: this one downloads audio, so it's worth
+# being stricter about what it'll fetch from.
+VIDEO_LOOKUP_HOSTS = {
+    "www.youtube.com",
+    "youtube.com",
+    "m.youtube.com",
+    "youtu.be",
+    "www.tiktok.com",
+    "vm.tiktok.com",
+    "m.tiktok.com",
+}
 
 # No cookies are used (auth is a bearer token the client stores itself), so
 # a wildcard origin doesn't expose this to CSRF — it only lets a
@@ -169,6 +182,30 @@ async def api_find(title: str = Query(..., description="Manga title to find a re
         raise HTTPException(
             status_code=404, detail="Couldn't find this title on ToonGod or Asura Scans."
         )
+
+    response = JSONResponse(content=result)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.get("/api/video-lookup")
+async def api_video_lookup(
+    url: str = Query(..., description="TikTok/YouTube video URL to extract a manga title from")
+):
+    """Fallback for when a video's caption alone doesn't name the manga
+    (or oEmbed refuses it outright, e.g. embedding disabled): pulls the
+    upload description and, for short clips, a speech-to-text transcript
+    of the audio — either of which can carry the title even when the
+    caption doesn't."""
+    _require_absolute_url(url)
+    host = urlparse(url).hostname or ""
+    if host not in VIDEO_LOOKUP_HOSTS:
+        raise HTTPException(status_code=400, detail="Only TikTok and YouTube links are supported")
+
+    try:
+        result = await lookup_video(url)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Couldn't read that video right now.")
 
     response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
