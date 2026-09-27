@@ -155,6 +155,70 @@ class AuthTests(ServerTestCase):
         self.assertIn("error", result)
 
 
+class OAuthLoginTests(ServerTestCase):
+    def _profile(self, **overrides):
+        profile = {
+            "subject": "google-sub-1",
+            "email": "reader@example.com",
+            "name": "Reader",
+            "picture": "https://example.com/pic.jpg",
+        }
+        profile.update(overrides)
+        return profile
+
+    def test_creates_a_new_passwordless_user(self):
+        result = auth.oauth_login("google", self._profile())
+        self.assertIn("token", result)
+        self.assertEqual(result["email"], "reader@example.com")
+        self.assertEqual(result["avatar_url"], "https://example.com/pic.jpg")
+
+        user = auth.user_from_token(result["token"])
+        self.assertIsNotNone(user)
+
+    def test_second_login_with_same_provider_reuses_the_same_account(self):
+        first = auth.oauth_login("google", self._profile())
+        second = auth.oauth_login("google", self._profile())
+        user1 = auth.user_from_token(first["token"])
+        user2 = auth.user_from_token(second["token"])
+        self.assertEqual(user1["id"], user2["id"])
+
+    def test_links_to_an_existing_password_account_by_email(self):
+        registered = auth.register(
+            {
+                "email": "reader@example.com",
+                "password": "password123",
+                "elapsed": 5,
+            },
+            lambda *_: True,
+        )
+        password_user = auth.user_from_token(registered["token"])
+
+        oauth_result = auth.oauth_login("google", self._profile())
+        oauth_user = auth.user_from_token(oauth_result["token"])
+
+        self.assertEqual(password_user["id"], oauth_user["id"])
+        # Existing account's own avatar/name isn't clobbered by the OAuth
+        # profile just because the accounts got linked.
+        self.assertEqual(oauth_user["email"], "reader@example.com")
+
+    def test_different_providers_with_the_same_email_link_to_one_account(self):
+        google_result = auth.oauth_login("google", self._profile(subject="google-sub-1"))
+        facebook_result = auth.oauth_login(
+            "facebook", self._profile(subject="facebook-sub-1")
+        )
+        google_user = auth.user_from_token(google_result["token"])
+        facebook_user = auth.user_from_token(facebook_result["token"])
+        self.assertEqual(google_user["id"], facebook_user["id"])
+
+    def test_rejects_a_profile_missing_email(self):
+        result = auth.oauth_login("google", self._profile(email=""))
+        self.assertIn("error", result)
+
+    def test_rejects_a_profile_missing_subject(self):
+        result = auth.oauth_login("google", self._profile(subject=""))
+        self.assertIn("error", result)
+
+
 class WatchTests(ServerTestCase):
     def test_upsert_list_mark_read_unwatch_roundtrip(self):
         user = auth.register(

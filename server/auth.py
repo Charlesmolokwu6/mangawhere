@@ -87,6 +87,65 @@ def register(
     return {"token": token, "email": email, "name": name, "avatar_url": None}
 
 
+def oauth_login(provider: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    """profile is already-verified {"subject", "email", "name", "picture"}
+    from server/oauth.py -- this only ever gets called with a token that's
+    already been checked against the provider itself.
+
+    Accounts are linked by email: signing in with Google using the same
+    email an existing password account (or a different OAuth provider)
+    already uses attaches this provider to that same account rather than
+    creating a duplicate — the email came from a provider that verified it,
+    same trust level the honeypot/captcha path never needed to establish
+    for itself since it owns the address by typing it in directly."""
+    subject = profile.get("subject")
+    email = (profile.get("email") or "").strip().lower()
+    if not subject or not EMAIL_RE.match(email):
+        return {"error": GENERIC_ERROR}
+
+    name = profile.get("name") or email.split("@", 1)[0]
+    picture = profile.get("picture") or None
+    now = time.time()
+
+    conn = db.get_connection()
+    try:
+        linked = conn.execute(
+            "SELECT user_id FROM oauth_accounts WHERE provider = ? AND subject = ?",
+            (provider, subject),
+        ).fetchone()
+
+        if linked:
+            user_id = linked["user_id"]
+        else:
+            existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+            if existing:
+                user_id = existing["id"]
+            else:
+                cur = conn.execute(
+                    "INSERT INTO users (email, name, password_hash, salt, avatar_url, created_at) "
+                    "VALUES (?, ?, NULL, NULL, ?, ?)",
+                    (email, name, picture, now),
+                )
+                user_id = cur.lastrowid
+            conn.execute(
+                "INSERT INTO oauth_accounts (provider, subject, user_id, email, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (provider, subject, user_id, email, now),
+            )
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    finally:
+        conn.close()
+
+    token = create_session(user_id)
+    return {
+        "token": token,
+        "email": row["email"],
+        "name": row["name"],
+        "avatar_url": row["avatar_url"],
+    }
+
+
 def login(payload: Dict[str, Any]) -> Dict[str, Any]:
     email = (payload.get("email") or "").strip().lower()
     password = payload.get("password") or ""

@@ -79,6 +79,16 @@ CREATE TABLE IF NOT EXISTS comments (
 );
 CREATE INDEX IF NOT EXISTS idx_comments_lookup
     ON comments (title_key, chapter_key, created_at);
+
+CREATE TABLE IF NOT EXISTS oauth_accounts (
+    provider TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    email TEXT,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (provider, subject)
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_accounts_user ON oauth_accounts (user_id);
 """
 
 
@@ -168,13 +178,40 @@ def _migrate(conn) -> None:
     """Add columns introduced after a table already existed. CREATE TABLE
     IF NOT EXISTS only helps on a fresh database — an upgrade needs its
     own ALTER TABLE, guarded so re-running it is a no-op."""
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
-    if "avatar_url" not in cols:
+    user_cols = {row["name"]: row for row in conn.execute("PRAGMA table_info(users)")}
+    if "avatar_url" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT")
+        user_cols = {row["name"]: row for row in conn.execute("PRAGMA table_info(users)")}
 
     comment_cols = {row["name"] for row in conn.execute("PRAGMA table_info(comments)")}
     if "avatar_url" not in comment_cols:
         conn.execute("ALTER TABLE comments ADD COLUMN avatar_url TEXT")
+
+    # OAuth sign-in (Google/Facebook/Apple) never sets a password, but the
+    # original schema required password_hash/salt on every user. SQLite has
+    # no ALTER COLUMN to drop a NOT NULL constraint, so this rebuilds the
+    # table instead — guarded by the column's own notnull flag, so it's a
+    # no-op once already migrated. No declared foreign keys reference
+    # users.id (sessions/watches/comments/push_subscriptions all just store
+    # a plain matching integer), so nothing else needs touching.
+    if user_cols.get("password_hash") and user_cols["password_hash"]["notnull"]:
+        conn.executescript(
+            """
+            CREATE TABLE users_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                password_hash TEXT,
+                salt TEXT,
+                avatar_url TEXT,
+                created_at REAL NOT NULL
+            );
+            INSERT INTO users_new (id, email, name, password_hash, salt, avatar_url, created_at)
+                SELECT id, email, name, password_hash, salt, avatar_url, created_at FROM users;
+            DROP TABLE users;
+            ALTER TABLE users_new RENAME TO users;
+            """
+        )
 
 
 def init_db() -> None:
