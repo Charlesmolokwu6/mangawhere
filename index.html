@@ -91,6 +91,12 @@ border-radius:10px;overflow:hidden}
 .caprefresh{background:var(--surf);border:1px solid var(--line);color:var(--dim);
 border-radius:9px;width:40px;height:40px;font-size:17px;cursor:pointer;flex-shrink:0}
 .caprefresh:hover{border-color:var(--mint);color:var(--mint)}
+.pwwrap{position:relative;display:flex}
+.pwwrap input{flex:1;padding-right:60px}
+.pwtoggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+background:none;border:none;color:var(--dim);font-size:12px;font-weight:700;
+padding:6px 8px;cursor:pointer}
+.pwtoggle:hover{color:var(--mint)}
 #au-cap{text-transform:uppercase;letter-spacing:.22em;font-family:ui-monospace,Consolas,monospace}
 .who{display:flex;align-items:center;gap:12px;margin-bottom:6px}
 .avatar{width:44px;height:44px;border-radius:50%;background:var(--mintd);
@@ -3246,11 +3252,15 @@ function authView(mode, thenTrack){
     '<div class="form">'+
       '<label>Email<input id="au-email" type="email" autocomplete="email" '+
         'inputmode="email" placeholder="you@example.com"></label>'+
-      '<label>Password<input id="au-pass" type="password" '+
+      '<label>Password<div class="pwwrap"><input id="au-pass" type="password" '+
         'autocomplete="'+(login?"current-password":"new-password")+'" '+
-        'placeholder="'+(login?"Your password":"At least 8 characters")+'"></label>'+
-      (login?"":'<label>Confirm password<input id="au-pass2" type="password" '+
-        'autocomplete="new-password" placeholder="Type it again"></label>')+
+        'placeholder="'+(login?"Your password":"At least 8 characters")+'">'+
+        '<button type="button" class="pwtoggle" id="au-pass-toggle" '+
+        'aria-label="Show password">Show</button></div></label>'+
+      (login?"":'<label>Confirm password<div class="pwwrap"><input id="au-pass2" type="password" '+
+        'autocomplete="new-password" placeholder="Type it again">'+
+        '<button type="button" class="pwtoggle" id="au-pass2-toggle" '+
+        'aria-label="Show password">Show</button></div></label>')+
       // Honeypot. Hidden from people, filled in by scripts that fill
       // every field they find. Not display:none — some bots skip those.
       '<div class="hp" aria-hidden="true">'+
@@ -3277,6 +3287,21 @@ function authView(mode, thenTrack){
   document.getElementById("au-swap").onclick=function(){
     authView(login?"signup":"login", thenTrack);
   };
+
+  /* Lets someone check what they actually typed before submitting, same
+     as every password manager and modern sign-up form does. */
+  function wirePasswordToggle(inputId, buttonId){
+    var input=document.getElementById(inputId), btn=document.getElementById(buttonId);
+    if(!input||!btn) return;
+    btn.onclick=function(){
+      var showing=input.type==="text";
+      input.type=showing?"password":"text";
+      btn.textContent=showing?"Show":"Hide";
+      btn.setAttribute("aria-label",showing?"Show password":"Hide password");
+    };
+  }
+  wirePasswordToggle("au-pass","au-pass-toggle");
+  if(!login) wirePasswordToggle("au-pass2","au-pass2-toggle");
 
   var go=document.getElementById("au-go");
   var err=document.getElementById("au-err");
