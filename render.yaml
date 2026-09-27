@@ -49,3 +49,17 @@ services:
       # are set. Leaving it unset keeps the custom captcha exactly as it is.
       - key: TURNSTILE_SECRET_KEY
         sync: false
+      # Optional (see README.md) — "Sign in with Google" / "Sign in with
+      # Facebook". GOOGLE_CLIENT_ID and FACEBOOK_APP_ID are public (they
+      # also live in index.html, hardcoded, same as the Turnstile site
+      # key) — set here too because the backend needs the same values to
+      # verify a sign-in actually belongs to this app. FACEBOOK_APP_SECRET
+      # is the one that's private. Leaving any of these unset just leaves
+      # that provider's button not rendering — email/password and whatever
+      # other providers are configured are unaffected.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false

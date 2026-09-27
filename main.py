@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from server import auth, captcha, comments, db, media, poller, push, turnstile, watch
+from server import auth, captcha, comments, db, media, oauth, poller, push, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -239,6 +239,32 @@ async def api_register(request: Request):
 async def api_login(request: Request):
     payload = await request.json()
     result = auth.login(payload)
+    _attach_endpoint_from_payload(result, payload)
+    return JSONResponse(result)
+
+
+@app.post("/api/oauth/google")
+async def api_oauth_google(request: Request):
+    payload = await request.json()
+    if not oauth.google_configured():
+        raise HTTPException(status_code=503, detail="Google sign-in isn't set up on this server.")
+    profile = await oauth.verify_google(payload.get("id_token") or "")
+    if not profile:
+        return JSONResponse({"error": "Couldn't verify that with Google. Try again."})
+    result = auth.oauth_login("google", profile)
+    _attach_endpoint_from_payload(result, payload)
+    return JSONResponse(result)
+
+
+@app.post("/api/oauth/facebook")
+async def api_oauth_facebook(request: Request):
+    payload = await request.json()
+    if not oauth.facebook_configured():
+        raise HTTPException(status_code=503, detail="Facebook sign-in isn't set up on this server.")
+    profile = await oauth.verify_facebook(payload.get("access_token") or "")
+    if not profile:
+        return JSONResponse({"error": "Couldn't verify that with Facebook. Try again."})
+    result = auth.oauth_login("facebook", profile)
     _attach_endpoint_from_payload(result, payload)
     return JSONResponse(result)
 

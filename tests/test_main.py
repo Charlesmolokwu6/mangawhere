@@ -103,6 +103,68 @@ class RegisterApiTests(MainTestCase):
         self.assertIn("token", r.json())
 
 
+class OAuthApiTests(MainTestCase):
+    def test_google_returns_503_when_not_configured(self):
+        import main
+
+        with patch.object(main.oauth, "google_configured", return_value=False):
+            r = self.client.post("/api/oauth/google", json={"id_token": "whatever"})
+        self.assertEqual(r.status_code, 503)
+
+    def test_google_returns_error_on_failed_verification(self):
+        import main
+
+        db.init_db()
+        with patch.object(main.oauth, "google_configured", return_value=True), \
+             patch.object(main.oauth, "verify_google", return_value=None):
+            r = self.client.post("/api/oauth/google", json={"id_token": "bad-token"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("error", r.json())
+
+    def test_google_creates_a_session_on_successful_verification(self):
+        import main
+
+        db.init_db()
+        profile = {
+            "subject": "google-sub-1",
+            "email": "reader@example.com",
+            "name": "Reader",
+            "picture": "",
+        }
+        with patch.object(main.oauth, "google_configured", return_value=True), \
+             patch.object(main.oauth, "verify_google", return_value=profile):
+            r = self.client.post("/api/oauth/google", json={"id_token": "good-token"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("token", body)
+        self.assertEqual(body["email"], "reader@example.com")
+
+    def test_facebook_returns_503_when_not_configured(self):
+        import main
+
+        with patch.object(main.oauth, "facebook_configured", return_value=False):
+            r = self.client.post("/api/oauth/facebook", json={"access_token": "whatever"})
+        self.assertEqual(r.status_code, 503)
+
+    def test_facebook_creates_a_session_on_successful_verification(self):
+        import main
+
+        db.init_db()
+        profile = {
+            "subject": "fb-sub-1",
+            "email": "fbreader@example.com",
+            "name": "FB Reader",
+            "picture": "",
+        }
+        with patch.object(main.oauth, "facebook_configured", return_value=True), \
+             patch.object(main.oauth, "verify_facebook", return_value=profile):
+            r = self.client.post("/api/oauth/facebook", json={"access_token": "good-token"})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("token", body)
+        self.assertEqual(body["email"], "fbreader@example.com")
+
+
 class VideoLookupApiTests(MainTestCase):
     def test_disallowed_host_is_rejected(self):
         r = self.client.get(

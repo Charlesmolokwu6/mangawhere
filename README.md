@@ -45,6 +45,12 @@ Optional environment variables (see `render.yaml`):
   always has.
 - `TURNSTILE_SECRET_KEY` — verifies Cloudflare Turnstile on sign-up (see
   below). Left unset, sign-up keeps using the custom SVG captcha.
+- `GOOGLE_CLIENT_ID` — enables "Continue with Google" (see below). Also
+  needed in `index.html` (it's public). Left unset, that button just
+  doesn't render.
+- `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` — enables "Continue with
+  Facebook" (see below). The app ID is also needed in `index.html` (public);
+  the secret stays here only. Left unset, that button just doesn't render.
 
 ## Persistent storage (Turso)
 
@@ -156,6 +162,50 @@ domain's root confirming you authorize them to sell your inventory (an
 anti-fraud measure) — they'll give you the exact line to put in it once
 you're signed up; it just needs to land in this repo as `ads.txt` (served
 alongside `index.html`) once there's a domain for it to live on.
+
+## Sign in with Google / Facebook
+
+`server/oauth.py` verifies whichever token the provider's own JS SDK hands
+the frontend — no server-side redirect flow, which fits this app's
+static-frontend-plus-API split far better than the authorization-code
+dance. Accounts link by email: signing in with Google using the same
+address an existing password (or Facebook) account already uses attaches
+that provider to the same account instead of creating a duplicate. Both
+providers are entirely independent — set up one, both, or neither.
+
+**Google** (free):
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) →
+   **APIs & Services** → **Credentials** → **Create Credentials** →
+   **OAuth client ID** → type **Web application**.
+2. Under **Authorized JavaScript origins**, add every origin the frontend
+   is actually served from (e.g. `https://charlesmolokwu6.github.io` and,
+   once it exists, your custom domain).
+3. Copy the **Client ID** it gives you (no secret needed — this flow never
+   uses one). Paste it as `index.html`'s `GOOGLE_CLIENT_ID`, and set the
+   same value as `GOOGLE_CLIENT_ID` in Render's environment variables,
+   then redeploy both.
+
+**Facebook** (free):
+1. Go to [developers.facebook.com](https://developers.facebook.com) →
+   **Create App** → choose **Consumer** → add the **Facebook Login**
+   product.
+2. In **App Settings** → **Basic**, add your site's domain(s) under
+   **App Domains**.
+3. Copy the **App ID** and **App Secret**. The App ID is public — paste it
+   as both `index.html`'s `FACEBOOK_APP_ID` and Render's `FACEBOOK_APP_ID`.
+   The App Secret is private — set it only as Render's
+   `FACEBOOK_APP_SECRET`. Redeploy both.
+4. While the app is in **Development mode**, only accounts added as
+   testers/admins under **Roles** can actually sign in with it. Facebook's
+   **App Review** is what lifts that restriction for real users — plan for
+   that step before expecting it to work for the public.
+
+**Apple ("Sign in with Apple") isn't implemented yet.** Verifying its
+identity token needs real JWT/JWKS handling — a different shape of problem
+from the HTTP-based checks Google and Facebook use here — and it requires
+a **paid Apple Developer Program membership ($99/year)** to even get the
+credentials it needs, so there was no point building it ahead of that
+being confirmed as a cost worth taking on.
 
 ## Bot detection
 
