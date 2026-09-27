@@ -124,6 +124,39 @@ never logged, and never appears in any API response. It'll need
 re-exporting occasionally once the session it holds expires or is signed
 out.
 
+## Advertising
+
+`index.html`'s `AD_SLOT_HTML` (near `TURNSTILE_SITE_KEY`, `AMAZON_TAG`)
+takes any ad network's raw ad-unit HTML/script snippet and renders it in
+one place: below a title's read-here links, after the reader has already
+been given what they came for — never above it (`adSlot()`). Empty by
+default, so nothing renders until it's set.
+
+**Google AdSense won't work here.** MangaWhere shows 18+ titles
+(`HIDE_ADULT` is off), and AdSense's policies prohibit monetizing adult
+content — using it risks the whole account, not just this site. Adult-
+tolerant networks built for exactly this kind of mixed-content site exist
+instead: [ExoClick](https://www.exoclick.com) is a solid default (one of
+the largest, no minimum-traffic requirement to sign up, works fine for a
+mostly-general site with some mature titles rather than only explicit
+content). JuicyAds and TrafficJunky are alternatives geared more toward
+explicit-only sites.
+
+To turn it on (using ExoClick as the example):
+1. Sign up at [exoclick.com](https://www.exoclick.com) and add your site
+   — this needs a live domain (a bare `github.io` subdomain is unlikely to
+   pass review), so this comes after domain setup.
+2. Create an ad zone (a banner or native placement is the natural fit for
+   the slot here) and copy the snippet it gives you.
+3. Paste that snippet as the value of `AD_SLOT_HTML` in `index.html`,
+   push, and it starts rendering in that one spot.
+
+Most networks, ExoClick included, also want an **ads.txt** file at your
+domain's root confirming you authorize them to sell your inventory (an
+anti-fraud measure) — they'll give you the exact line to put in it once
+you're signed up; it just needs to land in this repo as `ads.txt` (served
+alongside `index.html`) once there's a domain for it to live on.
+
 ## Bot detection
 
 Sign-up already has three layers: a honeypot field, a too-fast-to-be-human
