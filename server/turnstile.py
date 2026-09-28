@@ -12,7 +12,7 @@ import os
 import httpx
 
 SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "").strip()
-VERIFY_URL = "https://challenge.cloudflare.com/turnstile/v0/siteverify"
+VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
 
 def is_configured() -> bool:
