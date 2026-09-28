@@ -2313,25 +2313,7 @@ function showPushNote(btn, state){
   p.id="pushnote"; p.className="fresh";
   if(state==="on"){
     p.className="fresh authoritative";
-    p.innerHTML="You'll get a notification when a new chapter is out. "+
-      '<button class="testpush" id="testpush">Send a test</button>';
-    setTimeout(function(){
-      var t=document.getElementById("testpush");
-      if(!t) return;
-      t.onclick=function(){
-        t.disabled=true; t.textContent="sending…";
-        fetch(API_BASE+"/api/test-push",{
-          method:"POST", headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({endpoint:pushState.endpoint, key:""})
-        }).then(function(r){ return r.json(); })
-          .then(function(d){
-            t.textContent = d.ok ? "sent — check your notifications"
-                                 : "failed: "+(d.error||"see console");
-            if(!d.ok) console.log("[mangawhere] test push:", d);
-          })
-          .catch(function(e){ t.textContent="failed: "+e.message; });
-      };
-    },0);
+    p.textContent="You'll get a notification when a new chapter is out.";
   }else if(state==="ios:add-to-home-screen"){
     p.textContent="For alerts on iPhone, tap Share then \"Add to Home Screen\" and "+
       "open it from there.";
@@ -2491,31 +2473,6 @@ function applyChapter(m, videoCh, hitPromise){
     var old=document.querySelector(".card .fresh");
     if(old && /last checked/i.test(old.textContent)) old.remove();
 
-    if(hit.updated && !outclassed){
-      var upd=document.createElement("p");
-      upd.className="behind";
-      upd.textContent=(hit.season&&hit.season>1?"Season "+hit.season+" chapter ":"Chapter ")+
-        hit.chapter+" released "+ago(hit.updated)+(hit.publisher?" on "+hit.publisher:"");
-      var c0=slot.closest(".card");
-      if(c0 && !c0.querySelector(".mu-upd")){ upd.classList.add("mu-upd"); c0.appendChild(upd); }
-    }
-
-    if(!outclassed){
-      var note=document.createElement("p");
-      note.className="fresh";
-      // A licensed series is precisely where this number goes stale: fan
-      // translation stops, the official platform carries on. Say so, and
-      // point them at the publisher, who always has the true count.
-      if(hit.publisher){
-        note.textContent="Source: "+hit.publisher;
-        note.classList.add("authoritative");
-      } else {
-        note.textContent="";
-      }
-      var card2=slot.closest(".card");
-      if(card2 && !card2.querySelector(".mu-note")){ note.classList.add("mu-note");
-        card2.appendChild(note); }
-    }
   });
 }
 
