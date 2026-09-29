@@ -1,7 +1,8 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from scrapers import clean_image_urls, extract_chapter_list, extract_image_urls_from_html
-from scrapers.core import _best_match
+from scrapers.core import _best_match, _detect_domain, scrape_mangadex, scrape_mangadex_chapter_list, search_mangadex
 
 
 class ScraperParsingTests(unittest.IsolatedAsyncioTestCase):
@@ -171,6 +172,105 @@ class SourceMatchingTests(unittest.TestCase):
             "Shadow Slave", use_alt=True,
         )
         self.assertIsNone(url)
+
+
+def _mock_json_response(payload):
+    response = AsyncMock()
+    response.raise_for_status = lambda: None
+    response.json = lambda: payload
+    return response
+
+
+class MangaDexTests(unittest.IsolatedAsyncioTestCase):
+    def test_detect_domain_recognizes_mangadex(self):
+        self.assertEqual(_detect_domain("https://mangadex.org/title/abc-123"), "mangadex")
+
+    async def test_search_picks_the_manga_whose_alt_title_matches_best(self):
+        payload = {
+            "data": [
+                {
+                    "id": "wrong-series",
+                    "attributes": {"title": {"en": "Totally Unrelated Manga"}, "altTitles": []},
+                },
+                {
+                    "id": "right-series",
+                    "attributes": {
+                        "title": {"ko-ro": "Na Honjaman Level-Up"},
+                        "altTitles": [{"ko": "나 혼자만 레벨업"}, {"en": "Solo Leveling"}],
+                    },
+                },
+            ]
+        }
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            url = await search_mangadex("Solo Leveling")
+        self.assertEqual(url, "https://mangadex.org/title/right-series")
+
+    async def test_search_returns_none_below_threshold(self):
+        payload = {"data": [{"id": "x", "attributes": {"title": {"en": "Nothing Alike"}, "altTitles": []}}]}
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            url = await search_mangadex("Shadow Slave")
+        self.assertIsNone(url)
+
+    async def test_search_returns_none_on_network_failure(self):
+        with patch("httpx.AsyncClient.get", side_effect=RuntimeError("network down")):
+            url = await search_mangadex("Solo Leveling")
+        self.assertIsNone(url)
+
+    async def test_chapter_list_skips_licensed_out_and_pageless_entries(self):
+        payload = {
+            "data": [
+                {
+                    "id": "ch-external",
+                    "attributes": {"chapter": "5", "pages": 0, "externalUrl": "https://example.com/read/5"},
+                },
+                {
+                    "id": "ch-empty",
+                    "attributes": {"chapter": "4", "pages": 0, "externalUrl": None},
+                },
+                {
+                    "id": "ch-3",
+                    "attributes": {"chapter": "3", "pages": 20, "externalUrl": None, "title": "Chapter 3"},
+                },
+                {
+                    "id": "ch-1",
+                    "attributes": {"chapter": "1", "pages": 18, "externalUrl": None, "title": None},
+                },
+            ]
+        }
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            chapters = await scrape_mangadex_chapter_list("https://mangadex.org/title/abcd1234-ef56-7890-abcd-ef1234567890")
+        self.assertEqual(
+            chapters,
+            [
+                {"number": 1.0, "url": "https://mangadex.org/chapter/ch-1", "title": "Chapter 1"},
+                {"number": 3.0, "url": "https://mangadex.org/chapter/ch-3", "title": "Chapter 3"},
+            ],
+        )
+
+    async def test_chapter_list_returns_empty_without_a_valid_id_in_the_url(self):
+        chapters = await scrape_mangadex_chapter_list("https://mangadex.org/title/not-a-uuid")
+        self.assertEqual(chapters, [])
+
+    async def test_scrape_builds_image_urls_from_base_url_hash_and_filenames(self):
+        payload = {
+            "baseUrl": "https://cdn.example.mangadex.network",
+            "chapter": {"hash": "deadbeef", "data": ["1-aaa.jpg", "2-bbb.png"]},
+        }
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            images = await scrape_mangadex("https://mangadex.org/chapter/abcd1234-ef56-7890-abcd-ef1234567890")
+        self.assertEqual(
+            images,
+            [
+                "https://cdn.example.mangadex.network/data/deadbeef/1-aaa.jpg",
+                "https://cdn.example.mangadex.network/data/deadbeef/2-bbb.png",
+            ],
+        )
+
+    async def test_scrape_returns_empty_when_response_is_missing_hash(self):
+        payload = {"baseUrl": "https://cdn.example.mangadex.network", "chapter": {}}
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            images = await scrape_mangadex("https://mangadex.org/chapter/abcd1234-ef56-7890-abcd-ef1234567890")
+        self.assertEqual(images, [])
 
 
 if __name__ == "__main__":

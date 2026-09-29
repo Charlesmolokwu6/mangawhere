@@ -179,6 +179,36 @@ async def scrape_mangafreak(url: str) -> List[str]:
     return extract_image_urls_from_html(html or "", ['img[id="gohere"]'])
 
 
+MANGADEX_API = "https://api.mangadex.org"
+MANGADEX_CONTENT_RATING = ["safe", "suggestive"]
+MANGADEX_ID_IN_URL = re.compile(r"/(?:title|chapter)/([0-9a-f-]{36})", re.I)
+
+
+async def scrape_mangadex(url: str) -> List[str]:
+    """List a MangaDex chapter's page images via the official public API —
+    no HTML scraping or anti-bot handling needed, this site has a real API."""
+    match = MANGADEX_ID_IN_URL.search(url)
+    if not match:
+        return []
+    chapter_id = match.group(1)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{MANGADEX_API}/at-home/server/{chapter_id}")
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        print(f"[mangadex] image list fetch failed ({e})")
+        return []
+
+    chapter = data.get("chapter") or {}
+    base_url = data.get("baseUrl")
+    file_hash = chapter.get("hash")
+    filenames = chapter.get("data") or []
+    if not base_url or not file_hash:
+        return []
+    return [f"{base_url}/data/{file_hash}/{name}" for name in filenames]
+
+
 CHAPTER_NUMBER_IN_HREF = re.compile(r"chapter[-/](\d+(?:\.\d+)?)", re.I)
 # MangaFreak's chapter URLs don't contain the word "chapter" at all —
 # /Read1_One_Piece_1 — just a number at the very end of the path.
@@ -253,6 +283,52 @@ async def scrape_mangafreak_chapter_list(url: str) -> List[Dict[str, Any]]:
     return extract_chapter_list(html or "", "a.chapter-link", url)
 
 
+async def scrape_mangadex_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List a MangaDex series' chapters via its feed API. Chapters whose
+    `externalUrl` is set are licensed out to another platform — MangaDex
+    itself hosts no pages for those, so they're skipped rather than
+    included as dead links."""
+    match = MANGADEX_ID_IN_URL.search(url)
+    if not match:
+        return []
+    manga_id = match.group(1)
+    params = {
+        "translatedLanguage[]": "en",
+        "order[chapter]": "desc",
+        "limit": 100,
+        "contentRating[]": MANGADEX_CONTENT_RATING,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{MANGADEX_API}/manga/{manga_id}/feed", params=params)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        print(f"[mangadex] chapter list fetch failed ({e})")
+        return []
+
+    chapters: Dict[float, Dict[str, Any]] = {}
+    for chapter in data.get("data", []):
+        attrs = chapter.get("attributes", {})
+        if attrs.get("externalUrl") or not attrs.get("pages"):
+            continue
+        raw_number = attrs.get("chapter")
+        if raw_number is None:
+            continue
+        try:
+            number = float(raw_number)
+        except ValueError:
+            continue
+        if number in chapters:
+            continue
+        chapters[number] = {
+            "number": number,
+            "url": f"https://mangadex.org/chapter/{chapter['id']}",
+            "title": attrs.get("title") or f"Chapter {number:g}",
+        }
+    return sorted(chapters.values(), key=lambda c: c["number"])
+
+
 def _detect_domain(url: str) -> str:
     lowered = (url or "").lower()
     if "toongod" in lowered:
@@ -261,6 +337,8 @@ def _detect_domain(url: str) -> str:
         return "asurascans"
     if "mangafreak" in lowered:
         return "mangafreak"
+    if "mangadex" in lowered:
+        return "mangadex"
     return "unknown"
 
 
@@ -274,6 +352,8 @@ async def scrape_series(url: str) -> Dict[str, Any]:
         chapters = await scrape_asurascans_chapter_list(url)
     elif domain == "mangafreak":
         chapters = await scrape_mangafreak_chapter_list(url)
+    elif domain == "mangadex":
+        chapters = await scrape_mangadex_chapter_list(url)
     else:
         chapters = []
 
@@ -394,10 +474,42 @@ async def search_mangafreak(title: str) -> Optional[str]:
     )
 
 
+async def search_mangadex(title: str) -> Optional[str]:
+    """Find the best-matching series on MangaDex via its official public
+    API. Titles are stored per-language plus a list of alt titles, so every
+    name a manga is known by is scored and the best across all of them wins."""
+    params = {"title": title, "limit": 10, "contentRating[]": MANGADEX_CONTENT_RATING}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{MANGADEX_API}/manga", params=params)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        print(f"[mangadex] search failed ({e})")
+        return None
+
+    best_id, best_score = None, 0.0
+    for manga in data.get("data", []):
+        attrs = manga.get("attributes", {})
+        names = list(attrs.get("title", {}).values())
+        for alt in attrs.get("altTitles", []):
+            names.extend(alt.values())
+        for name in names:
+            score = similar(title, name)
+            if score > best_score:
+                best_score, best_id = score, manga.get("id")
+
+    if best_id and best_score >= MATCH_THRESHOLD:
+        return f"https://mangadex.org/title/{best_id}"
+    print(f"[mangadex] no match for \"{title}\" cleared threshold (best score {best_score:.2f})")
+    return None
+
+
 SOURCES = {
     "toongod": (search_toongod, scrape_toongod_chapter_list),
     "asurascans": (search_asurascans, scrape_asurascans_chapter_list),
     "mangafreak": (search_mangafreak, scrape_mangafreak_chapter_list),
+    "mangadex": (search_mangadex, scrape_mangadex_chapter_list),
 }
 
 
@@ -432,6 +544,8 @@ async def scrape_chapter(url: str) -> Dict[str, Any]:
         images = await scrape_asurascans(url)
     elif domain == "mangafreak":
         images = await scrape_mangafreak(url)
+    elif domain == "mangadex":
+        images = await scrape_mangadex(url)
     else:
         images = []
 
