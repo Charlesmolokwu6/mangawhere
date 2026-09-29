@@ -2,7 +2,16 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from scrapers import clean_image_urls, extract_chapter_list, extract_image_urls_from_html
-from scrapers.core import _best_match, _detect_domain, scrape_mangadex, scrape_mangadex_chapter_list, search_mangadex
+from scrapers.core import (
+    _best_match,
+    _detect_domain,
+    scrape_comizy,
+    scrape_comizy_chapter_list,
+    scrape_mangadex,
+    scrape_mangadex_chapter_list,
+    search_comizy,
+    search_mangadex,
+)
 
 
 class ScraperParsingTests(unittest.IsolatedAsyncioTestCase):
@@ -270,6 +279,89 @@ class MangaDexTests(unittest.IsolatedAsyncioTestCase):
         payload = {"baseUrl": "https://cdn.example.mangadex.network", "chapter": {}}
         with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
             images = await scrape_mangadex("https://mangadex.org/chapter/abcd1234-ef56-7890-abcd-ef1234567890")
+        self.assertEqual(images, [])
+
+
+class ComizyTests(unittest.IsolatedAsyncioTestCase):
+    def test_detect_domain_recognizes_comizy_and_its_old_domain(self):
+        self.assertEqual(_detect_domain("https://comizy.io/solo-leveling"), "comizy")
+        self.assertEqual(_detect_domain("https://mangabuddy.com/solo-leveling"), "comizy")
+
+    async def test_search_skips_adult_and_dmca_titles(self):
+        payload = {
+            "data": {
+                "items": [
+                    {"url": "/solo-leveling-adult-edit", "name": "Solo Leveling", "alt_names": [], "is_adult": True},
+                    {"url": "/solo-leveling-dmca", "name": "Solo Leveling", "alt_names": [], "has_dmca": True},
+                    {"url": "/solo-leveling", "name": "Solo Leveling", "alt_names": [{"name": "Na Honjaman Level-Up"}]},
+                ]
+            }
+        }
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            url = await search_comizy("Solo Leveling")
+        self.assertEqual(url, "https://comizy.io/solo-leveling")
+
+    async def test_search_returns_none_below_threshold(self):
+        payload = {"data": {"items": [{"url": "/x", "name": "Nothing Alike", "alt_names": []}]}}
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            url = await search_comizy("Shadow Slave")
+        self.assertIsNone(url)
+
+    async def test_search_returns_none_on_network_failure(self):
+        with patch("httpx.AsyncClient.get", side_effect=RuntimeError("network down")):
+            url = await search_comizy("Solo Leveling")
+        self.assertIsNone(url)
+
+    async def test_chapter_list_reads_title_id_from_the_page_and_dedupes_by_number(self):
+        page_html = '<script>{"id":"4N90moOv","is_adult":false}</script>'
+        payload = {
+            "data": {
+                "chapters": [
+                    {"id": "b", "url": "/solo-leveling/chapter-2", "name": "Chapter 2", "number": 2},
+                    {"id": "a", "url": "/solo-leveling/chapter-1", "name": "Chapter 1", "number": 1},
+                    {"id": "a-dup", "url": "/solo-leveling/chapter-1-again", "name": "Chapter 1 (dup)", "number": 1},
+                ]
+            }
+        }
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html), \
+             patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            chapters = await scrape_comizy_chapter_list("https://comizy.io/solo-leveling")
+        self.assertEqual(
+            chapters,
+            [
+                {"number": 1.0, "url": "https://comizy.io/solo-leveling/chapter-1", "title": "Chapter 1"},
+                {"number": 2.0, "url": "https://comizy.io/solo-leveling/chapter-2", "title": "Chapter 2"},
+            ],
+        )
+
+    async def test_chapter_list_blocks_adult_titles_reached_by_direct_url(self):
+        page_html = '<script>{"id":"4N90moOv","is_adult":true}</script>'
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html), \
+             patch("httpx.AsyncClient.get", return_value=_mock_json_response({"data": {"chapters": []}})) as mock_get:
+            chapters = await scrape_comizy_chapter_list("https://comizy.io/some-adult-title")
+        self.assertEqual(chapters, [])
+        mock_get.assert_not_called()
+
+    async def test_scrape_extracts_page_images_in_reader_order(self):
+        page_html = (
+            '<script>{"id":"4N90moOv","is_adult":false}</script>'
+            '<div data-page-idx="0"><img src="https://x7.cmzcdn.org/e/aaa.webp"></div>'
+            '<div data-page-idx="1"><img src="https://x8.cmzcdn.org/e/bbb.webp"></div>'
+        )
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html):
+            images = await scrape_comizy("https://comizy.io/solo-leveling/chapter-1")
+        self.assertEqual(
+            images,
+            ["https://x7.cmzcdn.org/e/aaa.webp", "https://x8.cmzcdn.org/e/bbb.webp"],
+        )
+
+    async def test_scrape_blocks_adult_chapters_reached_by_direct_url(self):
+        page_html = (
+            '<script>{"id":"4N90moOv","is_adult":true}</script>'
+            '<div data-page-idx="0"><img src="https://x7.cmzcdn.org/e/aaa.webp"></div>'
+        )
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html):
+            images = await scrape_comizy("https://comizy.io/some-adult-title/chapter-1")
         self.assertEqual(images, [])
 
 

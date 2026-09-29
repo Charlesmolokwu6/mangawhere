@@ -179,6 +179,28 @@ async def scrape_mangafreak(url: str) -> List[str]:
     return extract_image_urls_from_html(html or "", ['img[id="gohere"]'])
 
 
+COMIZY_API = "https://api.comizy.io"
+COMIZY_ID_IN_HTML = re.compile(r'"id":"([A-Za-z0-9]+)"')
+COMIZY_IS_ADULT_IN_HTML = re.compile(r'"is_adult":(true|false)')
+
+
+async def scrape_comizy(url: str) -> List[str]:
+    """Scrape a comizy.io chapter's page images. Server-rendered, no
+    Cloudflare challenge in practice, so a plain fetch is enough — no
+    Playwright needed. Checked for is_adult here too (not just in search)
+    since a chapter URL can be reached directly, bypassing search."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        return []
+
+    is_adult_match = COMIZY_IS_ADULT_IN_HTML.search(html)
+    if is_adult_match and is_adult_match.group(1) == "true":
+        return []
+
+    return extract_image_urls_from_html(html, ["div[data-page-idx] img"])
+
+
 MANGADEX_API = "https://api.mangadex.org"
 MANGADEX_CONTENT_RATING = ["safe", "suggestive"]
 MANGADEX_ID_IN_URL = re.compile(r"/(?:title|chapter)/([0-9a-f-]{36})", re.I)
@@ -283,6 +305,53 @@ async def scrape_mangafreak_chapter_list(url: str) -> List[Dict[str, Any]]:
     return extract_chapter_list(html or "", "a.chapter-link", url)
 
 
+async def scrape_comizy_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List a comizy.io series' chapters. The title id isn't in the URL
+    (comizy.io addresses series by slug, e.g. /solo-leveling), so this
+    reads it out of the series page's own server-rendered JSON — which
+    also carries is_adult, checked here for the same direct-URL reason
+    as scrape_comizy above."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        return []
+
+    id_match = COMIZY_ID_IN_HTML.search(html)
+    is_adult_match = COMIZY_IS_ADULT_IN_HTML.search(html)
+    if not id_match or (is_adult_match and is_adult_match.group(1) == "true"):
+        return []
+    title_id = id_match.group(1)
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(
+                f"{COMIZY_API}/titles/{title_id}/chapters", params={"page": 1, "limit": 500}
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        print(f"[comizy] chapter list fetch failed ({e})")
+        return []
+
+    chapters: Dict[float, Dict[str, Any]] = {}
+    for chapter in data.get("data", {}).get("chapters", []):
+        raw_number = chapter.get("number")
+        if raw_number is None:
+            continue
+        try:
+            number = float(raw_number)
+        except (TypeError, ValueError):
+            continue
+        if number in chapters:
+            continue
+        chapters[number] = {
+            "number": number,
+            "url": f"https://comizy.io{chapter['url']}",
+            "title": chapter.get("name") or f"Chapter {number:g}",
+        }
+    return sorted(chapters.values(), key=lambda c: c["number"])
+
+
 async def scrape_mangadex_chapter_list(url: str) -> List[Dict[str, Any]]:
     """List a MangaDex series' chapters via its feed API. Chapters whose
     `externalUrl` is set are licensed out to another platform — MangaDex
@@ -339,6 +408,8 @@ def _detect_domain(url: str) -> str:
         return "mangafreak"
     if "mangadex" in lowered:
         return "mangadex"
+    if "comizy" in lowered or "mangabuddy" in lowered:
+        return "comizy"
     return "unknown"
 
 
@@ -354,6 +425,8 @@ async def scrape_series(url: str) -> Dict[str, Any]:
         chapters = await scrape_mangafreak_chapter_list(url)
     elif domain == "mangadex":
         chapters = await scrape_mangadex_chapter_list(url)
+    elif domain == "comizy":
+        chapters = await scrape_comizy_chapter_list(url)
     else:
         chapters = []
 
@@ -505,11 +578,42 @@ async def search_mangadex(title: str) -> Optional[str]:
     return None
 
 
+async def search_comizy(title: str) -> Optional[str]:
+    """Find the best-matching series on comizy.io via its internal search
+    API. Titles flagged is_adult or has_dmca are skipped — mangawhere has
+    no age-gating, and DMCA'd titles aren't comizy's to serve either."""
+    params = {"page": 1, "limit": 10, "q": title}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.get(f"{COMIZY_API}/titles/search", params=params)
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        print(f"[comizy] search failed ({e})")
+        return None
+
+    best_url, best_score = None, 0.0
+    for item in data.get("data", {}).get("items", []):
+        if item.get("is_adult") or item.get("has_dmca"):
+            continue
+        names = [item.get("name", "")] + [alt.get("name", "") for alt in item.get("alt_names", [])]
+        for name in names:
+            score = similar(title, name)
+            if score > best_score:
+                best_score, best_url = score, item.get("url")
+
+    if best_url and best_score >= MATCH_THRESHOLD:
+        return f"https://comizy.io{best_url}"
+    print(f"[comizy] no match for \"{title}\" cleared threshold (best score {best_score:.2f})")
+    return None
+
+
 SOURCES = {
     "toongod": (search_toongod, scrape_toongod_chapter_list),
     "asurascans": (search_asurascans, scrape_asurascans_chapter_list),
     "mangafreak": (search_mangafreak, scrape_mangafreak_chapter_list),
     "mangadex": (search_mangadex, scrape_mangadex_chapter_list),
+    "comizy": (search_comizy, scrape_comizy_chapter_list),
 }
 
 
@@ -546,6 +650,8 @@ async def scrape_chapter(url: str) -> Dict[str, Any]:
         images = await scrape_mangafreak(url)
     elif domain == "mangadex":
         images = await scrape_mangadex(url)
+    elif domain == "comizy":
+        images = await scrape_comizy(url)
     else:
         images = []
 
