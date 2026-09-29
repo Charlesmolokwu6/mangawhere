@@ -180,7 +180,7 @@ async def api_find(title: str = Query(..., description="Manga title to find a re
 
     if not result:
         raise HTTPException(
-            status_code=404, detail="Couldn't find this title on ToonGod or Asura Scans."
+            status_code=404, detail="Couldn't find this title on any of our sources."
         )
 
     response = JSONResponse(content=result)
