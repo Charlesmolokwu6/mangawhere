@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import quote, urljoin
@@ -179,6 +180,166 @@ async def scrape_mangafreak(url: str) -> List[str]:
     return extract_image_urls_from_html(html or "", ['img[id="gohere"]'])
 
 
+async def scrape_mangaread(url: str) -> List[str]:
+    """Scrape mangaread.org chapter pages — a self-hosted Madara-theme
+    WordPress site, fully server-rendered, no Cloudflare challenge."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    return extract_image_urls_from_html(html or "", ["div.reading-content img.wp-manga-chapter-img"])
+
+
+FLAMECOMICS_NEXT_DATA = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+
+
+def _flamecomics_page_props(html: str) -> Dict[str, Any]:
+    """flamecomics.xyz is a Next.js app that ships its whole page's data as
+    one JSON blob (the __NEXT_DATA__ SSR payload) — reading that directly
+    is more stable than CSS selectors here, since Next.js's own CSS-module
+    class names carry a build-specific hash that rotates across deploys."""
+    match = FLAMECOMICS_NEXT_DATA.search(html or "")
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(1))
+    except Exception:
+        return {}
+    return data.get("props", {}).get("pageProps", {})
+
+
+async def scrape_flamecomics(url: str) -> List[str]:
+    """Scrape a flamecomics.xyz chapter's page images. The DOM also ships
+    decoy "read on Flame" promo images with misleadingly page-like alt
+    text; filtering to the real upload path (as opposed to the promo
+    images' /assets/read/ path) excludes them cleanly."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        return []
+    return extract_image_urls_from_html(
+        html, ['img[src*="cdn.flamecomics.xyz/uploads/images/series/"]']
+    )
+
+
+async def _fetch_html_playwright_scrolled(url: str) -> str:
+    """Like fetch_html_playwright, but scrolls incrementally to the very
+    bottom rather than jumping halfway once — needed for manhuaplus.org,
+    whose page images are lazy-loaded and a long chapter can run well past
+    the halfway point the shared helper stops at."""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+        page = await context.new_page()
+        await page.goto(url, wait_until="networkidle", timeout=30000)
+        previous_height = 0
+        for _ in range(20):
+            height = await page.evaluate("document.body.scrollHeight")
+            if height == previous_height:
+                break
+            previous_height = height
+            await page.evaluate(f"window.scrollTo(0, {height})")
+            await page.wait_for_timeout(400)
+        await page.wait_for_timeout(3000)
+        content = await page.content()
+        await browser.close()
+        return content
+
+
+async def scrape_manhuaplus(url: str) -> List[str]:
+    """Scrape a manhuaplus.org chapter's page images. The static HTML only
+    ships loading-spinner placeholders — real image URLs land in the <img>
+    `src` attribute only after the page's own lazy-load JS runs, so this
+    needs a real browser render, not a plain fetch. Read `src` directly
+    rather than through extract_image_urls_from_html's usual data-src-first
+    attribute order: this theme's lazy-load library leaves `data-src`
+    permanently pointing at the loading-spinner placeholder even once
+    `src` holds the real, fully-loaded URL — the reverse of the usual
+    lazy-loading convention that helper is built around."""
+    try:
+        html = await _fetch_html_playwright_scrolled(url)
+    except Exception:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    urls = [img.get("src") for img in soup.select("#chapterContent img.lazy") if img.get("src")]
+    return clean_image_urls(urls)
+
+
+KALISCAN_IMAGES_IN_HTML = re.compile(r'var chapImages = "([^"]+)";')
+
+
+async def scrape_kaliscan(url: str) -> List[str]:
+    """Scrape a kaliscan.io chapter's page images. The DOM's own <img> tags
+    are populated by client-side JS, but the real URLs are already sitting
+    in the server-rendered HTML as a JS string — no Playwright needed. Note:
+    these URLs carry a short-lived signed token (~11h TTL via an `expires`
+    query param), so they're only ever used fresh, right after this fetch —
+    never cached or re-served later."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    match = KALISCAN_IMAGES_IN_HTML.search(html or "")
+    if not match:
+        return []
+    return clean_image_urls(match.group(1).split(","))
+
+
+MANGAKATANA_IMAGES_IN_HTML = re.compile(r"var thzq\s*=\s*\[(.*?)\];")
+
+
+async def scrape_mangakatana(url: str) -> List[str]:
+    """Scrape a mangakatana.com chapter's page images. Same deal as
+    kaliscan.io — the DOM's <img src> is a "#" placeholder, but the real
+    per-page URLs are already embedded server-side as a JS array."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    match = MANGAKATANA_IMAGES_IN_HTML.search(html or "")
+    if not match:
+        return []
+    urls = re.findall(r"'([^']+)'", match.group(1))
+    return clean_image_urls(urls)
+
+
+WEEBCENTRAL_API = "https://weebcentral.com"
+WEEBCENTRAL_SERIES_ID = re.compile(r"/series/([A-Za-z0-9]+)")
+WEEBCENTRAL_CHAPTER_ID = re.compile(r"/chapters/([A-Za-z0-9]+)")
+
+
+async def scrape_weebcentral(url: str) -> List[str]:
+    """Scrape a weebcentral.com chapter's page images. The reading page
+    itself ships with zero <img> tags — the real page list is loaded by a
+    second HTMX fragment call the browser fires after load. That fragment
+    endpoint is plain HTTP, so it's called directly rather than driving a
+    browser through the HTMX swap."""
+    match = WEEBCENTRAL_CHAPTER_ID.search(url)
+    if not match:
+        return []
+    chapter_id = match.group(1)
+    try:
+        async with httpx.AsyncClient(headers=HEADERS, timeout=15.0) as client:
+            response = await client.get(
+                f"{WEEBCENTRAL_API}/chapters/{chapter_id}/images", params={"is_prev": "False"}
+            )
+            response.raise_for_status()
+            html = response.text
+    except Exception as e:
+        print(f"[weebcentral] image fetch failed ({e})")
+        return []
+    return extract_image_urls_from_html(html, ["section#chapter-images img"])
+
+
 COMIZY_API = "https://api.comizy.io"
 COMIZY_ID_IN_HTML = re.compile(r'"id":"([A-Za-z0-9]+)"')
 COMIZY_IS_ADULT_IN_HTML = re.compile(r'"is_adult":(true|false)')
@@ -305,6 +466,179 @@ async def scrape_mangafreak_chapter_list(url: str) -> List[Dict[str, Any]]:
     return extract_chapter_list(html or "", "a.chapter-link", url)
 
 
+async def scrape_mangaread_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a mangaread.org series page (Madara theme)."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    return extract_chapter_list(html or "", "li.wp-manga-chapter a", url)
+
+
+FLAMECOMICS_SERIES_ID = re.compile(r"/series/(\d+)")
+
+
+async def scrape_flamecomics_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a flamecomics.xyz series page, straight from its
+    Next.js SSR JSON payload rather than parsing the rendered DOM."""
+    match = FLAMECOMICS_SERIES_ID.search(url)
+    if not match:
+        return []
+    series_id = match.group(1)
+    try:
+        html = await fetch_html_httpx(f"https://flamecomics.xyz/series/{series_id}")
+    except Exception:
+        return []
+    props = _flamecomics_page_props(html)
+
+    chapters: Dict[float, Dict[str, Any]] = {}
+    for chapter in props.get("chapters", []):
+        raw_number = chapter.get("chapter")
+        if raw_number is None:
+            continue
+        try:
+            number = float(raw_number)
+        except (TypeError, ValueError):
+            continue
+        token = chapter.get("token")
+        if not token or number in chapters:
+            continue
+        chapters[number] = {
+            "number": number,
+            "url": f"https://flamecomics.xyz/series/{series_id}/{token}",
+            "title": chapter.get("title") or f"Chapter {number:g}",
+        }
+    return sorted(chapters.values(), key=lambda c: c["number"])
+
+
+async def scrape_manhuaplus_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a manhuaplus.org series page."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    return extract_chapter_list(html or "", "ul#myUL li.chapter a", url)
+
+
+async def scrape_kaliscan_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a kaliscan.io series page. Each row's <a> wraps
+    both the chapter name and a "3 years ago"-style timestamp in the same
+    element, so this reads the name from its own inner element rather than
+    the anchor's full text (which would drag the timestamp in too)."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+
+    soup = BeautifulSoup(html or "", "html.parser")
+    chapters: Dict[float, Dict[str, Any]] = {}
+    for a in soup.select("#chapter-list > li > a"):
+        href = a.get("href")
+        if not href:
+            continue
+        match = CHAPTER_NUMBER_IN_HREF.search(href)
+        if not match:
+            continue
+        number = float(match.group(1))
+        if number in chapters:
+            continue
+        name_el = a.select_one("strong.chapter-title")
+        title = (name_el.get_text(" ", strip=True) if name_el else "") or f"Chapter {number:g}"
+        chapters[number] = {"number": number, "url": urljoin(url, href), "title": title}
+    return sorted(chapters.values(), key=lambda c: c["number"])
+
+
+# MangaKatana addresses chapters as a bare "/c<N>" URL suffix — no word
+# "chapter" in the href at all, so the shared CHAPTER_NUMBER_IN_HREF regex
+# (which requires that word) doesn't match. This is site-specific enough
+# that it stays local rather than joining the shared regex list, where a
+# bare "/c123" pattern would be too easy to false-positive on elsewhere.
+MANGAKATANA_CHAPTER_NUMBER_IN_HREF = re.compile(r"/c(\d+(?:\.\d+)?)(?:[/?#]|$)")
+
+
+async def scrape_mangakatana_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a mangakatana.com series page."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    soup = BeautifulSoup(html or "", "html.parser")
+    chapters: Dict[float, Dict[str, Any]] = {}
+    for a in soup.select("div.chapters table.uk-table tr div.chapter a"):
+        href = a.get("href")
+        if not href:
+            continue
+        match = MANGAKATANA_CHAPTER_NUMBER_IN_HREF.search(href)
+        if not match:
+            continue
+        number = float(match.group(1))
+        if number in chapters:
+            continue
+        text = a.get_text(" ", strip=True)
+        chapters[number] = {
+            "number": number,
+            "url": urljoin(url, href),
+            "title": text or f"Chapter {number:g}",
+        }
+    return sorted(chapters.values(), key=lambda c: c["number"])
+
+
+WEEBCENTRAL_CHAPTER_NUMBER_IN_TEXT = re.compile(r"(\d+(?:\.\d+)?)")
+
+
+async def scrape_weebcentral_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a weebcentral.com series page. weebcentral
+    addresses chapters by an opaque ID (/chapters/<ulid>), not a number, so
+    the chapter number has to come from the link's own visible text rather
+    than its URL. The series page itself only shows a partial/recent list;
+    the full one is a separate HTMX fragment endpoint (plain HTTP)."""
+    match = WEEBCENTRAL_SERIES_ID.search(url)
+    if not match:
+        return []
+    series_id = match.group(1)
+    try:
+        async with httpx.AsyncClient(headers=HEADERS, timeout=15.0) as client:
+            response = await client.get(f"{WEEBCENTRAL_API}/series/{series_id}/full-chapter-list")
+            response.raise_for_status()
+            html = response.text
+    except Exception as e:
+        print(f"[weebcentral] chapter list fetch failed ({e})")
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    chapters: Dict[float, Dict[str, Any]] = {}
+    for a in soup.select('a[href^="/chapters/"]'):
+        href = a.get("href")
+        if not href:
+            continue
+        label_el = a.select_one("span.grow > span:first-child")
+        label = (label_el.get_text(" ", strip=True) if label_el else "") or a.get_text(" ", strip=True)
+        number_match = WEEBCENTRAL_CHAPTER_NUMBER_IN_TEXT.search(label)
+        if not number_match:
+            continue
+        number = float(number_match.group(1))
+        if number in chapters:
+            continue
+        chapters[number] = {
+            "number": number,
+            "url": urljoin(WEEBCENTRAL_API, href),
+            "title": label or f"Chapter {number:g}",
+        }
+    return sorted(chapters.values(), key=lambda c: c["number"])
+
+
 async def scrape_comizy_chapter_list(url: str) -> List[Dict[str, Any]]:
     """List a comizy.io series' chapters. The title id isn't in the URL
     (comizy.io addresses series by slug, e.g. /solo-leveling), so this
@@ -410,6 +744,18 @@ def _detect_domain(url: str) -> str:
         return "mangadex"
     if "comizy" in lowered or "mangabuddy" in lowered:
         return "comizy"
+    if "mangaread" in lowered:
+        return "mangaread"
+    if "flamecomics" in lowered:
+        return "flamecomics"
+    if "manhuaplus" in lowered:
+        return "manhuaplus"
+    if "kaliscan" in lowered:
+        return "kaliscan"
+    if "mangakatana" in lowered:
+        return "mangakatana"
+    if "weebcentral" in lowered:
+        return "weebcentral"
     return "unknown"
 
 
@@ -427,6 +773,18 @@ async def scrape_series(url: str) -> Dict[str, Any]:
         chapters = await scrape_mangadex_chapter_list(url)
     elif domain == "comizy":
         chapters = await scrape_comizy_chapter_list(url)
+    elif domain == "mangaread":
+        chapters = await scrape_mangaread_chapter_list(url)
+    elif domain == "flamecomics":
+        chapters = await scrape_flamecomics_chapter_list(url)
+    elif domain == "manhuaplus":
+        chapters = await scrape_manhuaplus_chapter_list(url)
+    elif domain == "kaliscan":
+        chapters = await scrape_kaliscan_chapter_list(url)
+    elif domain == "mangakatana":
+        chapters = await scrape_mangakatana_chapter_list(url)
+    elif domain == "weebcentral":
+        chapters = await scrape_weebcentral_chapter_list(url)
     else:
         chapters = []
 
@@ -454,6 +812,10 @@ def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt:
             img = a.select_one("img[alt]")
             name = (img.get("alt") if img else "") or ""
         name = name or a.get_text(" ", strip=True)
+        # manhuaplus.org's search cards are a bare linked cover image with
+        # no visible text at all — the title only exists as the anchor's
+        # own `title` attribute.
+        name = name or (a.get("title") or "")
         if not name:
             # Some cards wrap two anchors around one href — a bare cover
             # image first, the titled link second. Skip a nameless one
@@ -547,6 +909,123 @@ async def search_mangafreak(title: str) -> Optional[str]:
     )
 
 
+async def search_mangaread(title: str) -> Optional[str]:
+    """Find the best-matching series URL on mangaread.org for a title. The
+    theme's search form carries a hidden post_type field — a bare "?s="
+    with no post_type silently returns a "no results" page even for
+    titles that exist, so it has to be included explicitly."""
+    search_url = f"https://www.mangaread.org/?s={quote(title)}&post_type=wp-manga"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception as e:
+        print(f"[mangaread] plain fetch failed ({e}), falling back to Playwright")
+        try:
+            html = await fetch_html_playwright(search_url)
+        except Exception as e2:
+            print(f"[mangaread] Playwright fallback also failed: {e2}")
+            return None
+    return _best_match(
+        html, "div.c-tabs-item__content .post-title a", search_url, title, use_alt=False
+    )
+
+
+async def search_flamecomics(title: str) -> Optional[str]:
+    """Find the best-matching series on flamecomics.xyz. There's no search
+    endpoint at all — /browse ships its entire ~170-series catalog as one
+    JSON payload, so "search" is just scoring every title in that list."""
+    try:
+        html = await fetch_html_httpx("https://flamecomics.xyz/browse")
+    except Exception as e:
+        print(f"[flamecomics] catalog fetch failed ({e})")
+        return None
+    props = _flamecomics_page_props(html)
+
+    best_id, best_score = None, 0.0
+    for series in props.get("series", []):
+        score = similar(title, series.get("title", ""))
+        if score > best_score:
+            best_score, best_id = score, series.get("series_id")
+
+    if best_id is not None and best_score >= MATCH_THRESHOLD:
+        return f"https://flamecomics.xyz/series/{best_id}"
+    print(f"[flamecomics] no match for \"{title}\" cleared threshold (best score {best_score:.2f})")
+    return None
+
+
+async def search_manhuaplus(title: str) -> Optional[str]:
+    """Find the best-matching series URL on manhuaplus.org for a title. The
+    detail page's sidebar shows a fixed "Trending" list regardless of
+    query, so the selector is scoped to the actual results section only —
+    a looser selector would score that static sidebar every time."""
+    search_url = f"https://manhuaplus.org/search?keyword={quote(title)}"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception as e:
+        print(f"[manhuaplus] plain fetch failed ({e}), falling back to Playwright")
+        try:
+            html = await fetch_html_playwright(search_url)
+        except Exception as e2:
+            print(f"[manhuaplus] Playwright fallback also failed: {e2}")
+            return None
+    return _best_match(
+        html, "section.r2.s1 div.b-img a[title]", search_url, title, use_alt=False
+    )
+
+
+async def search_kaliscan(title: str) -> Optional[str]:
+    """Find the best-matching series URL on kaliscan.io for a title."""
+    search_url = f"https://kaliscan.io/search?q={quote(title)}"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception as e:
+        print(f"[kaliscan] plain fetch failed ({e}), falling back to Playwright")
+        try:
+            html = await fetch_html_playwright(search_url)
+        except Exception as e2:
+            print(f"[kaliscan] Playwright fallback also failed: {e2}")
+            return None
+    return _best_match(
+        html, "div.manga-list div.book-item div.title h3 a", search_url, title, use_alt=False
+    )
+
+
+async def search_mangakatana(title: str) -> Optional[str]:
+    """Find the best-matching series URL on mangakatana.com for a title."""
+    search_url = f"https://mangakatana.com/?search={quote(title)}&search_by=book_name"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception as e:
+        print(f"[mangakatana] plain fetch failed ({e}), falling back to Playwright")
+        try:
+            html = await fetch_html_playwright(search_url)
+        except Exception as e2:
+            print(f"[mangakatana] Playwright fallback also failed: {e2}")
+            return None
+    return _best_match(
+        html, "#book_list > div.item h3.title a", search_url, title, use_alt=False
+    )
+
+
+async def search_weebcentral(title: str) -> Optional[str]:
+    """Find the best-matching series URL on weebcentral.com for a title,
+    via the same HTMX search endpoint the site's own search box posts to."""
+    try:
+        async with httpx.AsyncClient(headers=HEADERS, timeout=15.0) as client:
+            response = await client.post(
+                f"{WEEBCENTRAL_API}/search/simple",
+                params={"location": "main"},
+                data={"text": title},
+            )
+            response.raise_for_status()
+            html = response.text
+    except Exception as e:
+        print(f"[weebcentral] search failed ({e})")
+        return None
+    return _best_match(
+        html, "section#quick-search-result a", WEEBCENTRAL_API, title, use_alt=False
+    )
+
+
 async def search_mangadex(title: str) -> Optional[str]:
     """Find the best-matching series on MangaDex via its official public
     API. Titles are stored per-language plus a list of alt titles, so every
@@ -614,6 +1093,12 @@ SOURCES = {
     "mangafreak": (search_mangafreak, scrape_mangafreak_chapter_list),
     "mangadex": (search_mangadex, scrape_mangadex_chapter_list),
     "comizy": (search_comizy, scrape_comizy_chapter_list),
+    "mangaread": (search_mangaread, scrape_mangaread_chapter_list),
+    "flamecomics": (search_flamecomics, scrape_flamecomics_chapter_list),
+    "manhuaplus": (search_manhuaplus, scrape_manhuaplus_chapter_list),
+    "kaliscan": (search_kaliscan, scrape_kaliscan_chapter_list),
+    "mangakatana": (search_mangakatana, scrape_mangakatana_chapter_list),
+    "weebcentral": (search_weebcentral, scrape_weebcentral_chapter_list),
 }
 
 
@@ -652,6 +1137,18 @@ async def scrape_chapter(url: str) -> Dict[str, Any]:
         images = await scrape_mangadex(url)
     elif domain == "comizy":
         images = await scrape_comizy(url)
+    elif domain == "mangaread":
+        images = await scrape_mangaread(url)
+    elif domain == "flamecomics":
+        images = await scrape_flamecomics(url)
+    elif domain == "manhuaplus":
+        images = await scrape_manhuaplus(url)
+    elif domain == "kaliscan":
+        images = await scrape_kaliscan(url)
+    elif domain == "mangakatana":
+        images = await scrape_mangakatana(url)
+    elif domain == "weebcentral":
+        images = await scrape_weebcentral(url)
     else:
         images = []
 
