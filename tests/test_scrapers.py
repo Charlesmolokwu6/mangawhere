@@ -7,9 +7,15 @@ from scrapers.core import (
     _detect_domain,
     scrape_comizy,
     scrape_comizy_chapter_list,
+    scrape_flamecomics,
+    scrape_flamecomics_chapter_list,
+    scrape_kaliscan_chapter_list,
     scrape_mangadex,
     scrape_mangadex_chapter_list,
+    scrape_mangakatana_chapter_list,
+    scrape_weebcentral,
     search_comizy,
+    search_flamecomics,
     search_mangadex,
 )
 
@@ -362,6 +368,153 @@ class ComizyTests(unittest.IsolatedAsyncioTestCase):
         )
         with patch("scrapers.core.fetch_html_httpx", return_value=page_html):
             images = await scrape_comizy("https://comizy.io/some-adult-title/chapter-1")
+        self.assertEqual(images, [])
+
+
+class NewDomainDetectionTests(unittest.TestCase):
+    def test_detect_domain_recognizes_each_new_source(self):
+        cases = {
+            "https://www.mangaread.org/manga/solo-leveling-manhwa/": "mangaread",
+            "https://flamecomics.xyz/series/1": "flamecomics",
+            "https://manhuaplus.org/manga/solo-leveling-ragnarok": "manhuaplus",
+            "https://kaliscan.io/manga/33304-leveling-up-alone": "kaliscan",
+            "https://mangakatana.com/manga/solo-leveling.21708": "mangakatana",
+            "https://weebcentral.com/series/01J76XYCPSY3C4BNPBRY8JMCBE/Solo-Leveling": "weebcentral",
+        }
+        for url, expected in cases.items():
+            self.assertEqual(_detect_domain(url), expected)
+
+
+FLAMECOMICS_NEXT_DATA_HTML = (
+    '<script id="__NEXT_DATA__" type="application/json">{}</script>'
+)
+
+
+def _flamecomics_html(page_props):
+    import json
+
+    return FLAMECOMICS_NEXT_DATA_HTML.format(
+        json.dumps({"props": {"pageProps": page_props}})
+    )
+
+
+class FlameComicsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_search_scores_the_whole_catalog_since_there_is_no_search_endpoint(self):
+        html = _flamecomics_html({
+            "series": [
+                {"series_id": 99, "title": "Totally Unrelated Manga"},
+                {"series_id": 1, "title": "Solo Leveling"},
+            ]
+        })
+        with patch("scrapers.core.fetch_html_httpx", return_value=html):
+            url = await search_flamecomics("Solo Leveling")
+        self.assertEqual(url, "https://flamecomics.xyz/series/1")
+
+    async def test_search_returns_none_below_threshold(self):
+        html = _flamecomics_html({"series": [{"series_id": 1, "title": "Nothing Alike"}]})
+        with patch("scrapers.core.fetch_html_httpx", return_value=html):
+            url = await search_flamecomics("Shadow Slave")
+        self.assertIsNone(url)
+
+    async def test_search_returns_none_on_network_failure(self):
+        with patch("scrapers.core.fetch_html_httpx", side_effect=RuntimeError("network down")):
+            url = await search_flamecomics("Solo Leveling")
+        self.assertIsNone(url)
+
+    async def test_chapter_list_reads_from_next_data_json_and_dedupes(self):
+        html = _flamecomics_html({
+            "chapters": [
+                {"chapter": "2.00", "token": "tok2", "title": "Chapter 2"},
+                {"chapter": "1.00", "token": "tok1", "title": "Chapter 1"},
+                {"chapter": "1.00", "token": "tok1-dup", "title": "Chapter 1 (dup)"},
+                {"chapter": "3.00", "token": None, "title": "Missing token, skipped"},
+            ]
+        })
+        with patch("scrapers.core.fetch_html_httpx", return_value=html):
+            chapters = await scrape_flamecomics_chapter_list("https://flamecomics.xyz/series/1")
+        self.assertEqual(
+            chapters,
+            [
+                {"number": 1.0, "url": "https://flamecomics.xyz/series/1/tok1", "title": "Chapter 1"},
+                {"number": 2.0, "url": "https://flamecomics.xyz/series/1/tok2", "title": "Chapter 2"},
+            ],
+        )
+
+    async def test_scrape_excludes_decoy_promo_images_by_path(self):
+        html = (
+            '<img src="https://cdn.flamecomics.xyz/uploads/images/series/1/tok/SL-1-0.jpg?123">'
+            '<img src="https://cdn.flamecomics.xyz/assets/read/read_on_flame_1.webp" style="display:none">'
+        )
+        with patch("scrapers.core.fetch_html_httpx", return_value=html):
+            images = await scrape_flamecomics("https://flamecomics.xyz/series/1/tok")
+        self.assertEqual(images, ["https://cdn.flamecomics.xyz/uploads/images/series/1/tok/SL-1-0.jpg?123"])
+
+
+class KaliscanChapterListTests(unittest.IsolatedAsyncioTestCase):
+    async def test_chapter_title_excludes_the_timestamp_sharing_its_anchor(self):
+        html = """
+        <ul id="chapter-list">
+          <li><a href="/manga/x/chapter-2" title="X - Chapter 2">
+            <div><strong class="chapter-title">Chapter 2</strong><time class="chapter-update">2 years ago</time></div>
+          </a></li>
+          <li><a href="/manga/x/chapter-1" title="X - Chapter 1">
+            <div><strong class="chapter-title">Chapter 1</strong><time class="chapter-update">3 years ago</time></div>
+          </a></li>
+        </ul>
+        """
+        with patch("scrapers.core.fetch_html_httpx", return_value=html):
+            chapters = await scrape_kaliscan_chapter_list("https://kaliscan.io/manga/x")
+        self.assertEqual(
+            chapters,
+            [
+                {"number": 1.0, "url": "https://kaliscan.io/manga/x/chapter-1", "title": "Chapter 1"},
+                {"number": 2.0, "url": "https://kaliscan.io/manga/x/chapter-2", "title": "Chapter 2"},
+            ],
+        )
+
+
+class MangaKatanaChapterListTests(unittest.IsolatedAsyncioTestCase):
+    async def test_chapter_number_is_read_from_the_bare_c_number_url_suffix(self):
+        html = """
+        <div class="chapters"><table class="uk-table">
+          <tr><div class="chapter"><a href="/manga/solo-leveling.21708/c2">Chapter 2</a></div></tr>
+          <tr><div class="chapter"><a href="/manga/solo-leveling.21708/c1">Chapter 1</a></div></tr>
+          <tr><div class="chapter"><a href="/manga/solo-leveling.21708/c0">Chapter 0</a></div></tr>
+        </table></div>
+        """
+        with patch("scrapers.core.fetch_html_httpx", return_value=html):
+            chapters = await scrape_mangakatana_chapter_list("https://mangakatana.com/manga/solo-leveling.21708")
+        self.assertEqual(
+            [c["number"] for c in chapters], [0.0, 1.0, 2.0]
+        )
+        self.assertEqual(
+            chapters[1]["url"], "https://mangakatana.com/manga/solo-leveling.21708/c1"
+        )
+
+
+class WeebCentralTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scrape_fetches_the_images_fragment_endpoint_and_parses_it(self):
+        fragment_html = (
+            '<section id="chapter-images">'
+            '<img src="https://hot.planeptune.us/manga/Solo-Leveling/0001-001.png">'
+            '<img src="https://hot.planeptune.us/manga/Solo-Leveling/0001-002.png">'
+            "</section>"
+        )
+        mock_response = AsyncMock()
+        mock_response.raise_for_status = lambda: None
+        mock_response.text = fragment_html
+        with patch("httpx.AsyncClient.get", return_value=mock_response):
+            images = await scrape_weebcentral("https://weebcentral.com/chapters/01J76XYXYZHAP5EMZ62S0G3WGA")
+        self.assertEqual(
+            images,
+            [
+                "https://hot.planeptune.us/manga/Solo-Leveling/0001-001.png",
+                "https://hot.planeptune.us/manga/Solo-Leveling/0001-002.png",
+            ],
+        )
+
+    async def test_scrape_returns_empty_without_a_chapter_id_in_the_url(self):
+        images = await scrape_weebcentral("https://weebcentral.com/not-a-chapter-url")
         self.assertEqual(images, [])
 
 
