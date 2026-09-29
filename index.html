@@ -2806,8 +2806,15 @@ function readerView(url){
     }
     status.textContent="";   // loaded fine — no page count to show
     document.getElementById("rpages").innerHTML=images.map(function(src){
+      // comizy.io's image CDN rejects any request whose Referer isn't
+      // comizy.io itself — a plain <img> load always sends *our* origin,
+      // so those need routing through our proxy, which sets the right
+      // Referer server-side. Every other source's CDN doesn't check this,
+      // so they stay direct to avoid needless bandwidth through our backend.
+      var needsProxy=false;
+      try{ needsProxy=/(^|\.)cmzcdn\.org$/i.test(new URL(src, location.href).hostname); }catch(e){}
       return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
-        'src="'+esc(src)+'" referrerpolicy="no-referrer" alt="">';
+        'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
     }).join("");
   });
 }

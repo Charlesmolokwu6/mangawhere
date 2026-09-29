@@ -43,7 +43,21 @@ PROXY_ALLOWED_HOSTS = {
     "global.mangaplus.shueisha.co.jp",
     "manga.bilibili.com",
 }
+# comizy.io's page-image CDN is sharded across numbered subdomains
+# (x1.cmzcdn.org, x7.cmzcdn.org, ...), so it needs a suffix match rather
+# than the exact-hostname set above. It also enforces a strict Referer
+# check (confirmed: only "https://comizy.io/" passes, not even our own
+# domain), which is why these images need proxying at all — see
+# PROXY_REFERER_OVERRIDES below.
+PROXY_ALLOWED_SUFFIXES = ("cmzcdn.org",)
+PROXY_REFERER_OVERRIDES = {"cmzcdn.org": "https://comizy.io/"}
 PROXY_UA = "MangaWhere/1.0 (+https://mangawhere.example)"
+
+
+def _proxy_host_allowed(hostname: str) -> bool:
+    return hostname in PROXY_ALLOWED_HOSTS or any(
+        hostname == suffix or hostname.endswith("." + suffix) for suffix in PROXY_ALLOWED_SUFFIXES
+    )
 
 # Hosts /api/video-lookup will run yt-dlp against — same allowlist idea as
 # the proxy above, just narrower: this one downloads audio, so it's worth
@@ -92,7 +106,7 @@ async def _proxy(request: Request, target: str) -> Response:
     parsed = urlparse(target)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return JSONResponse({"error": "malformed url"}, status_code=400)
-    if parsed.hostname not in PROXY_ALLOWED_HOSTS:
+    if not parsed.hostname or not _proxy_host_allowed(parsed.hostname):
         return JSONResponse(
             {"error": "host not allowed", "host": parsed.hostname}, status_code=403
         )
@@ -101,6 +115,10 @@ async def _proxy(request: Request, target: str) -> Response:
         "User-Agent": PROXY_UA,
         "Accept": "application/json, text/xml, application/xml, */*",
     }
+    for suffix, referer in PROXY_REFERER_OVERRIDES.items():
+        if parsed.hostname == suffix or parsed.hostname.endswith("." + suffix):
+            headers["Referer"] = referer
+            break
     body = None
     if request.method == "POST":
         body = await request.body()
