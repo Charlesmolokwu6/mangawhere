@@ -276,6 +276,23 @@ border-radius:5px;margin-right:6px;vertical-align:middle;font-family:ui-monospac
 border:1px solid var(--line);border-radius:11px;padding:12px;font-weight:600;
 font-size:14px;cursor:pointer}
 .sharebtn:hover{border-color:var(--mint);color:var(--mint)}
+/* Storyteller (chapter narration) — floats above the bottom tabs, reader only. */
+.narr{position:fixed;right:16px;bottom:76px;z-index:25;display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+max-width:calc(100vw - 32px)}
+.narr-fab{background:var(--mint);color:#0d2b26;border:none;border-radius:999px;padding:11px 16px;
+font:inherit;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.narr-panel{width:300px;max-width:100%;background:var(--surf2);border:1px solid var(--line);border-radius:14px;
+padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);font-size:14px}
+.narr-panel h4{margin:0 0 4px;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+.narr-panel h4 button{background:none;border:none;color:var(--dim);font-size:20px;line-height:1;cursor:pointer;padding:0 2px}
+.narr-panel .sub{margin:0 0 10px;color:var(--dim);font-size:12.5px}
+.narr-panel select,.narr-panel .go{width:100%;border-radius:10px;padding:10px;font:inherit;font-size:14px}
+.narr-panel select{background:var(--surf);color:var(--text);border:1px solid var(--line);margin-bottom:8px}
+.narr-panel .go{background:var(--mint);color:#0d2b26;border:none;font-weight:700;cursor:pointer}
+.narr-bar{height:6px;background:var(--surf);border-radius:3px;overflow:hidden;margin:8px 0 4px}
+.narr-bar i{display:block;height:100%;background:var(--mint);width:0;transition:width .4s}
+.narr-panel audio{width:100%;margin-top:8px}
+.narr-panel .err{color:var(--bad);margin:6px 0 0}
 .trackbtn{width:100%;margin-top:10px;background:var(--mint);color:#0d2b26;border:none;
 border-radius:11px;padding:13px;font-weight:700;font-size:15px}
 .trackbtn.on{background:var(--surf2);color:var(--mint);border:1px solid var(--mint)}
@@ -1940,6 +1957,7 @@ function enterReaderChrome(){
 }
 
 function exitReaderChrome(){
+  stopNarration();
   document.body.classList.remove("reading","chrome-hidden");
   if(readerChromeWired){
     window.removeEventListener("scroll", onReaderScroll);
@@ -2828,6 +2846,7 @@ var readerLoadToken=0;
 
 function readerView(url, exclude){
   var token=++readerLoadToken;
+  stopNarration();
   stopRail();
   enterReaderChrome();
   openChapterDropdown=null;
@@ -2885,7 +2904,109 @@ function readerView(url, exclude){
         'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
     }).join("");
     watchFirstPage(token, exclude);
+    var shown=readerState.chapters&&readerState.chapters[readerState.index];
+    mountNarration(shown?shown.url:url, token);
   });
+}
+
+/* ================= storyteller (chapter narration) =================
+   A floating "Listen" button in the reader. The backend (server/
+   storyteller.py) reads each page's speech bubbles with OCR, optionally
+   has a local AI model narrate them, and records an MP3 with a free
+   Edge voice. That takes minutes, so it runs as a job this polls. Only
+   shown when the backend says narration is set up (/api/config). */
+var narrationConfig=null;
+var narration={audio:null, timer:null};
+
+function getNarrationConfig(){
+  if(!narrationConfig){
+    narrationConfig=fetch(READER_BASE+"/api/config").then(function(r){ return r.json(); })
+      .then(function(cfg){ return cfg.narration||{available:false}; })
+      .catch(function(){ narrationConfig=null; return {available:false}; });
+  }
+  return narrationConfig;
+}
+
+function stopNarration(){
+  if(narration.timer){ clearTimeout(narration.timer); narration.timer=null; }
+  if(narration.audio){ narration.audio.pause(); narration.audio=null; }
+  var old=document.getElementById("narr");
+  if(old) old.remove();
+}
+
+var NARRATION_STAGE={queued:"Waiting in line…", reading:"Reading the pages", writing:"Writing the story",
+  speaking:"Recording the voice…", done:"Ready", error:"Failed"};
+
+function mountNarration(chapterUrl, token){
+  getNarrationConfig().then(function(cfg){
+    if(!cfg.available || token!==readerLoadToken || document.getElementById("narr")) return;
+    var box=document.createElement("div");
+    box.className="narr"; box.id="narr";
+    box.innerHTML='<div class="narr-panel" hidden></div>'+
+      '<button class="narr-fab" aria-label="Listen to this chapter">🎧 Listen</button>';
+    document.body.appendChild(box);
+    var panel=box.querySelector(".narr-panel"), fab=box.querySelector(".narr-fab");
+    var how=cfg.storyteller
+      ? "An AI storyteller narrates the dialogue, read by a free voice."
+      : "Reads the chapter’s dialogue aloud with a free voice.";
+    panel.innerHTML='<h4>Storyteller mode <button aria-label="Close">×</button></h4>'+
+      '<p class="sub">'+how+' Takes a few minutes the first time.</p>'+
+      '<select aria-label="Voice"><option value="christopher">Christopher (male)</option>'+
+        '<option value="aria">Aria (female)</option></select>'+
+      '<button class="go">Narrate this chapter</button>'+
+      '<div class="narr-status"></div>';
+    panel.querySelector("h4 button").onclick=function(){ panel.hidden=true; fab.hidden=false; };
+    fab.onclick=function(){ panel.hidden=false; fab.hidden=true; };
+    panel.querySelector(".go").onclick=function(){
+      var voice=panel.querySelector("select").value;
+      panel.querySelector("select").disabled=true;
+      this.hidden=true;
+      startNarration(chapterUrl, voice, panel.querySelector(".narr-status"), token);
+    };
+  });
+}
+
+function renderNarrationStatus(el, job){
+  if(job.state==="error"){
+    el.innerHTML='<p class="err">'+esc(job.error||"Narration failed.")+'</p>';
+    return;
+  }
+  var pct=job.total?Math.round(100*job.done/job.total):0;
+  var label=NARRATION_STAGE[job.state]||job.state;
+  if((job.state==="reading"||job.state==="writing") && job.total) label+=" — "+job.done+" of "+job.total+" pages";
+  el.innerHTML='<div class="narr-bar"><i style="width:'+(job.state==="speaking"?100:pct)+'%"></i></div>'+
+    '<p class="sub" style="margin:0">'+esc(label)+'</p>';
+}
+
+function startNarration(chapterUrl, voice, el, token){
+  el.innerHTML='<p class="sub" style="margin:0">Starting…</p>';
+  fetch(READER_BASE+"/api/narrate",{method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({chapter_url:chapterUrl, voice:voice})})
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+    .then(function(res){
+      if(token!==readerLoadToken) return;
+      if(!res.ok){ renderNarrationStatus(el, {state:"error", error:res.d.detail}); return; }
+      pollNarration(res.d, el, token);
+    })
+    .catch(function(){ renderNarrationStatus(el, {state:"error", error:"Couldn’t reach the server — try again."}); });
+}
+
+function pollNarration(job, el, token){
+  if(token!==readerLoadToken) return;
+  if(job.state==="done"){
+    el.innerHTML='<p class="sub" style="margin:0">'+(job.mode==="storyteller"?"AI storyteller":"Dialogue read-aloud")+'</p>'+
+      '<audio controls preload="auto" src="'+esc(READER_BASE+"/api/narrate/"+job.job+"/audio")+'"></audio>';
+    narration.audio=el.querySelector("audio");
+    narration.audio.play().catch(function(){});   // autoplay can be blocked; the controls are right there
+    return;
+  }
+  renderNarrationStatus(el, job);
+  if(job.state==="error") return;
+  narration.timer=setTimeout(function(){
+    fetch(READER_BASE+"/api/narrate/"+job.job).then(function(r){ return r.json(); })
+      .then(function(next){ pollNarration(next, el, token); })
+      .catch(function(){ pollNarration(job, el, token); });
+  }, 2500);
 }
 
 /* A site can hand back a full list of page URLs whose image server is

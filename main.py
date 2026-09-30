@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from server import auth, captcha, comments, db, media, oauth, poller, push, turnstile, watch
+from server import auth, captcha, comments, db, media, oauth, poller, push, storyteller, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -330,7 +330,49 @@ async def api_avatar(
 
 @app.get("/api/config")
 async def api_config():
-    return {"vapid_public_key": push.public_key_b64()}
+    return {
+        "vapid_public_key": push.public_key_b64(),
+        "narration": await storyteller.availability(),
+    }
+
+
+@app.post("/api/narrate")
+async def api_narrate(payload: dict):
+    """Start narrating a chapter (or return the job already narrating it).
+    Takes the chapter's URL rather than a list of image URLs, and scrapes
+    the images itself — so this can only ever fetch pages from the sites
+    the scrapers support, never an arbitrary URL someone posts."""
+    chapter_url = str(payload.get("chapter_url") or "")
+    _require_absolute_url(chapter_url)
+    if not (await storyteller.availability())["available"]:
+        raise HTTPException(status_code=503, detail="Narration isn't set up on this server.")
+
+    try:
+        chapter = await scrape_chapter(chapter_url)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Couldn't reach that chapter.")
+    images = [img for img in chapter.get("images", []) if img]
+    if not images:
+        raise HTTPException(status_code=404, detail="Couldn't find any pages in that chapter.")
+
+    return await storyteller.start(chapter_url, images, str(payload.get("voice") or ""))
+
+
+@app.get("/api/narrate/{job}")
+async def api_narrate_status(job: str):
+    state = storyteller.get_job(job)
+    if not state:
+        raise HTTPException(status_code=404, detail="No such narration.")
+    return state
+
+
+@app.get("/api/narrate/{job}/audio")
+async def api_narrate_audio(job: str):
+    state = storyteller.get_job(job)
+    path = storyteller.audio_path(job)
+    if not state or state.get("state") != "done" or not path.exists():
+        raise HTTPException(status_code=404, detail="That narration isn't ready.")
+    return FileResponse(path, media_type="audio/mpeg", filename=f"narration-{job}.mp3")
 
 
 @app.post("/api/subscribe")

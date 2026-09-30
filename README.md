@@ -3,7 +3,7 @@
 ## Running it
 
 Everything — the frontend (`index.html`), accounts, push notifications,
-the ToonGod/Asura Scans reader, and the CORS proxy the frontend's own
+the manga reader and its narration, and the CORS proxy the frontend's own
 client-side API calls go through — is served by one Python app,
 `main.py`.
 
@@ -48,6 +48,9 @@ Optional environment variables (see `render.yaml`):
 - `GOOGLE_CLIENT_ID` — enables "Continue with Google" (see below). Also
   needed in `index.html` (it's public). Left unset, that button just
   doesn't render.
+- `OLLAMA_HOST`, `NARRATION_MODEL` — the optional AI storyteller for
+  chapter narration (see below). Left unset, narration just reads the
+  dialogue aloud.
 - `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` — enables "Continue with
   Facebook" (see below). The app ID is also needed in `index.html` (public);
   the secret stays here only. Left unset, that button just doesn't render.
@@ -129,6 +132,53 @@ to a private temp file at runtime, and handed straight to yt-dlp — it's
 never logged, and never appears in any API response. It'll need
 re-exporting occasionally once the session it holds expires or is signed
 out.
+
+## Storyteller mode (chapter narration)
+
+The reader has a floating **🎧 Listen** button that turns the current
+chapter into an MP3 — entirely free, no paid API (`server/storyteller.py`):
+
+1. **OCR** ([RapidOCR](https://github.com/RapidAI/RapidOCR), runs locally on
+   the CPU) reads every speech bubble, in reading order. Sound effects
+   (KRR, WOO…) are recognised and left out of the dialogue.
+2. **Optional AI storyteller**: if an [Ollama](https://ollama.com) server is
+   reachable, a small local model rewrites the dialogue as audiobook
+   narration — every line kept word-for-word, sound effects described,
+   nothing invented. Without Ollama, the dialogue is simply read aloud.
+3. **Voice**: [edge-tts](https://github.com/rany2/edge-tts) (Microsoft
+   Edge's free online voices) records it — Christopher or Aria.
+
+A long chapter takes a few minutes the first time (it runs as a background
+job with a progress bar); after that the MP3 is cached in
+`data/narration/`.
+
+Why OCR rather than a vision model like moondream: moondream was tried
+first on real pages, and it paraphrased dialogue, invented lines that
+weren't on the page, and misdescribed scenes. OCR reads what's actually
+written, and the text model only ever works from that.
+
+**Running it locally, with the AI storyteller:**
+```
+pip install -r requirements.txt
+ollama pull llama3.2:3b      # ~2GB, one-time; needs Ollama installed and running
+uvicorn main:app --port 8000
+```
+
+**On Render's free plan**, only the plain dialogue read-aloud can work:
+Ollama needs several GB of RAM and the free plan has 512MB. Even OCR alone
+is tight there alongside everything else, so if Render runs out of
+memory, narration is the thing to turn off. To get the storyteller on a
+deployed site, run Ollama on a machine with more memory and point
+`OLLAMA_HOST` at it.
+
+Environment variables (all optional):
+- `OLLAMA_HOST` — where Ollama is. Defaults to `http://localhost:11434`.
+- `NARRATION_MODEL` — which Ollama model writes the narration. Defaults to
+  `llama3.2:3b`.
+
+The Listen button only appears when the server reports narration as
+available (`/api/config`), so a server without these dependencies just
+doesn't show it.
 
 ## Advertising
 
