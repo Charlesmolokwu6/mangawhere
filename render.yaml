@@ -63,10 +63,10 @@ services:
         sync: false
       - key: FACEBOOK_APP_SECRET
         sync: false
-      # Optional (see README.md) — the AI storyteller for chapter narration.
-      # Ollama can't run on the free plan itself (it needs GBs of RAM), so
-      # this points at one running elsewhere. Left unset, narration reads
-      # the dialogue aloud without the AI rewrite.
+      # Optional (see README.md) — the local AI that picks how each line of
+      # a narrated chapter is delivered. Ollama can't run on the free plan
+      # itself (it needs GBs of RAM), so this points at one running
+      # elsewhere. Left unset, punctuation decides instead.
       - key: OLLAMA_HOST
         sync: false
       - key: NARRATION_MODEL

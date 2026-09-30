@@ -141,10 +141,14 @@ chapter into an MP3 — entirely free, no paid API (`server/storyteller.py`):
 1. **OCR** ([RapidOCR](https://github.com/RapidAI/RapidOCR), runs locally on
    the CPU) reads every speech bubble, in reading order. Sound effects
    (KRR, WOO…) are recognised and left out of the dialogue.
-2. **Optional AI storyteller**: if an [Ollama](https://ollama.com) server is
-   reachable, a small local model rewrites the dialogue as audiobook
-   narration — every line kept word-for-word, sound effects described,
-   nothing invented. Without Ollama, the dialogue is simply read aloud.
+2. **The script** is built from that text alone — every line, in order,
+   word for word, with a short attribution ("someone whispers"). If an
+   [Ollama](https://ollama.com) server is reachable, a small local AI model
+   picks how each line is delivered (shouts, whispers, asks…) from a fixed
+   list; without it, punctuation decides. The model is never allowed to
+   write text itself: letting llama3.2:3b write the narration freely was
+   tried, and it invented dialogue, creatures and settings that weren't in
+   the chapter.
 3. **Voice**: [edge-tts](https://github.com/rany2/edge-tts) (Microsoft
    Edge's free online voices) records it — Christopher or Aria.
 
@@ -155,7 +159,7 @@ job with a progress bar); after that the MP3 is cached in
 Why OCR rather than a vision model like moondream: moondream was tried
 first on real pages, and it paraphrased dialogue, invented lines that
 weren't on the page, and misdescribed scenes. OCR reads what's actually
-written, and the text model only ever works from that.
+written.
 
 **Running it locally, with the AI storyteller:**
 ```
@@ -164,7 +168,7 @@ ollama pull llama3.2:3b      # ~2GB, one-time; needs Ollama installed and runnin
 uvicorn main:app --port 8000
 ```
 
-**On Render's free plan**, only the plain dialogue read-aloud can work:
+**On Render's free plan**, only the punctuation-based version can work:
 Ollama needs several GB of RAM and the free plan has 512MB. Even OCR alone
 is tight there alongside everything else, so if Render runs out of
 memory, narration is the thing to turn off. To get the storyteller on a
@@ -173,8 +177,8 @@ deployed site, run Ollama on a machine with more memory and point
 
 Environment variables (all optional):
 - `OLLAMA_HOST` — where Ollama is. Defaults to `http://localhost:11434`.
-- `NARRATION_MODEL` — which Ollama model writes the narration. Defaults to
-  `llama3.2:3b`.
+- `NARRATION_MODEL` — which Ollama model picks each line's delivery.
+  Defaults to `llama3.2:3b`.
 
 The Listen button only appears when the server reports narration as
 available (`/api/config`), so a server without these dependencies just

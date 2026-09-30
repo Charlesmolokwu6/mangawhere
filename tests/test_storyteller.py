@@ -52,38 +52,61 @@ class SoundEffectTests(unittest.TestCase):
 
 
 class ScriptTests(unittest.TestCase):
-    def test_dialogue_script_drops_effects_and_normalises_caps(self):
-        pages = [[], ["THAT'S...", "KRR WRR", "I CAN'T SEE. WE HAVE TO GO."], ["WOO"]]
-        self.assertEqual(storyteller.dialogue_script(pages), "That's... I can't see. We have to go.")
+    def test_noise_is_dropped_and_effects_are_flagged_not_quoted(self):
+        prepared = storyteller.prepare_pages([["53>>3", "KRR WOO", "WHAT THE HECK IS GOING ON OVER THERE?"]])
+        self.assertEqual(prepared, [{"lines": ["What the heck is going on over there?"], "effects": True}])
 
-    def test_llm_labels_and_stage_directions_are_stripped(self):
-        raw = (
-            "## Chapter\n(Deep, ominous music fades in)\n\n"
-            'Narrator: "That will get us too," they warn.\n\n[Sound effects: KRR]\n\nThe rumble grows.'
-        )
+    def test_script_is_every_line_verbatim_with_attributions_and_effect_cues(self):
+        pages = [
+            ["BLACK TORNADO SKILL!"],
+            ["KRR WOO"],
+            ["KRR"],  # consecutive effect-only pages get a single cue
+            ["THAT'S...", "THAT WILL GET US TOO IF WE STAY HERE.", "WE HAVE TO GO."],
+            ["WHAT IS THAT?"],
+        ]
         self.assertEqual(
-            storyteller.clean_llm_script(raw),
-            '"That will get us too," they warn.\n\nThe rumble grows.',
+            storyteller.dialogue_script(pages),
+            "\u201cBlack tornado skill!\u201d a voice shouts.\n\n"
+            "A sound rings out.\n\n"
+            "\u201cThat's...\u201d someone mutters. \u201cThat will get us too if we stay here. We have to go.\u201d\n\n"
+            "\u201cWhat is that?\u201d a voice asks.",
         )
 
-    def test_storyteller_prompt_sends_pages_in_chunks_with_prior_context(self):
-        pages = [["LINE %d." % i] for i in range(10)]
+    def test_the_model_only_picks_deliveries_and_bad_answers_fall_back(self):
+        pages = [["WE HAVE TO GO NOW."], ["WHO ARE YOU?"], ["RUN!"]]
         sent = []
 
         async def fake_post(self, url, json=None, **kwargs):
-            sent.append(json["messages"][1]["content"])
+            sent.append(json)
             response = AsyncMock()
             response.raise_for_status = lambda: None
-            response.json = lambda: {"message": {"content": "Narration %d." % len(sent)}}
+            # "whispers" is allowed; "explodes" isn't, so line 2 falls back
+            # to its punctuation ("asks"); line 3 is missing entirely.
+            response.json = lambda: {"message": {"content": '{"1": "whispers", "2": "explodes"}'}}
             return response
 
         with patch("httpx.AsyncClient.post", fake_post):
             script = asyncio.run(storyteller.storyteller_script(pages))
 
-        self.assertEqual(script, "Narration 1.\n\nNarration 2.")
-        self.assertIn("[Page 1] LINE 0.", sent[0])
-        self.assertIn("[Page 9] LINE 8.", sent[1])
-        self.assertIn("Narration 1.", sent[1])  # continuity from the previous chunk
+        self.assertEqual(
+            script,
+            "\u201cWe have to go now,\u201d a voice whispers.\n\n"
+            "\u201cWho are you?\u201d someone asks.\n\n"
+            "\u201cRun!\u201d a voice shouts.",
+        )
+        self.assertEqual(sent[0]["format"], "json")
+        self.assertIn('1. "We have to go now."', sent[0]["messages"][1]["content"])
+
+    def test_unparseable_model_output_still_produces_the_script(self):
+        async def fake_post(self, url, json=None, **kwargs):
+            response = AsyncMock()
+            response.raise_for_status = lambda: None
+            response.json = lambda: {"message": {"content": "Sure! Here you go: shouts"}}
+            return response
+
+        with patch("httpx.AsyncClient.post", fake_post):
+            script = asyncio.run(storyteller.storyteller_script([["HELLO THERE."]]))
+        self.assertEqual(script, "\u201cHello there,\u201d a voice says.")
 
 
 class JobTests(unittest.TestCase):
@@ -119,7 +142,7 @@ class JobTests(unittest.TestCase):
         self.assertEqual(state["state"], "done")
         self.assertEqual(state["mode"], "dialogue")
         self.assertEqual(state["voice"], "aria")
-        self.assertEqual((Path(self._dir.name) / f"{job}.txt").read_text(), "We have to go.")
+        self.assertEqual((Path(self._dir.name) / f"{job}.txt").read_text(), "\u201cWe have to go,\u201d a voice says.")
         self.assertTrue(storyteller.audio_path(job).exists())
 
         # Asking again reuses the finished audio instead of redoing it —

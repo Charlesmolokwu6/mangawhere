@@ -2934,7 +2934,7 @@ function stopNarration(){
   if(old) old.remove();
 }
 
-var NARRATION_STAGE={queued:"Waiting in line…", reading:"Reading the pages", writing:"Writing the story",
+var NARRATION_STAGE={queued:"Waiting in line…", reading:"Reading the pages", writing:"Choosing how each line is said",
   speaking:"Recording the voice…", done:"Ready", error:"Failed"};
 
 function mountNarration(chapterUrl, token){
@@ -2947,7 +2947,7 @@ function mountNarration(chapterUrl, token){
     document.body.appendChild(box);
     var panel=box.querySelector(".narr-panel"), fab=box.querySelector(".narr-fab");
     var how=cfg.storyteller
-      ? "An AI storyteller narrates the dialogue, read by a free voice."
+      ? "Reads the dialogue aloud, with a local AI choosing how each line is said."
       : "Reads the chapter’s dialogue aloud with a free voice.";
     panel.innerHTML='<h4>Storyteller mode <button aria-label="Close">×</button></h4>'+
       '<p class="sub">'+how+' Takes a few minutes the first time.</p>'+
@@ -2973,7 +2973,8 @@ function renderNarrationStatus(el, job){
   }
   var pct=job.total?Math.round(100*job.done/job.total):0;
   var label=NARRATION_STAGE[job.state]||job.state;
-  if((job.state==="reading"||job.state==="writing") && job.total) label+=" — "+job.done+" of "+job.total+" pages";
+  if(job.state==="reading" && job.total) label+=" — "+job.done+" of "+job.total+" pages";
+  if(job.state==="writing" && job.total) label+=" — "+job.done+" of "+job.total+" lines";
   el.innerHTML='<div class="narr-bar"><i style="width:'+(job.state==="speaking"?100:pct)+'%"></i></div>'+
     '<p class="sub" style="margin:0">'+esc(label)+'</p>';
 }

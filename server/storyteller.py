@@ -9,11 +9,14 @@ A chapter is only images, so it goes through three steps:
    is actually said — a small vision model like moondream was tried here
    first and it paraphrased dialogue, invented lines that weren't on the
    page, and misdescribed scenes, so it isn't used to read pages.
-2. If an Ollama server is reachable (OLLAMA_HOST, model NARRATION_MODEL),
-   a small local text model rewrites that dialogue as audiobook-style
-   narration — every line kept word-for-word, sound effects described,
-   nothing invented. Without Ollama, the dialogue is read out as-is
-   ("dialogue" mode), minus sound effects.
+2. The script is assembled from that text alone: every spoken line in
+   order, word for word, with a short attribution ("a voice shouts") and
+   a neutral cue where a page only has sound effects. If an Ollama server
+   is reachable (OLLAMA_HOST, model NARRATION_MODEL), a small local model
+   picks how each line is delivered (whispers, screams...) from a fixed
+   list; otherwise punctuation decides. The model never writes text:
+   given free rein, even a 3B model strictly told not to invented
+   dialogue and events that weren't in the chapter.
 3. edge-tts (Microsoft Edge's free online voices) speaks it to an MP3.
 
 Chapters take minutes on a CPU, so narration runs as a background job the
@@ -153,6 +156,12 @@ _SPOKEN_SHORT_WORDS = {
 _WORD = re.compile(r"[A-Z']+")
 
 
+def is_noise(text: str) -> bool:
+    """OCR garbage — stray symbols or a misread panel border ("53>>3")."""
+    letters = sum(c.isalpha() for c in text)
+    return letters < 2 or letters < 0.5 * len(text.replace(" ", ""))
+
+
 def is_sound_effect(text: str) -> bool:
     words = _WORD.findall(text.upper())
     if not words or len(words) > 6:
@@ -246,26 +255,18 @@ async def fetch_image(client: httpx.AsyncClient, url: str, chapter_url: str) -> 
 # Step 2: script
 # --------------------------------------------------------------------------
 
-STORYTELLER_SYSTEM_PROMPT = """You turn comic-page text into an audiobook narration that will be read aloud by a text-to-speech voice.
-Rules:
-- Include EVERY line of dialogue, in order, in quotation marks, with its spacing and capitalisation fixed (text is OCR output, so words may be run together; use normal sentence case).
-- Short all-caps words like KRR, WOO, WAA are sound effects: never quote them; describe the sound in a few words instead.
-- Between lines, add at most one short sentence of narration. Only describe what the dialogue and sounds imply. Never invent names, places, settings or events.
-- Write plain prose paragraphs only. No labels like "Narrator:", no stage directions in brackets or parentheses, no headings."""
+# How a line is delivered. The storyteller model only ever picks one of
+# these per line — it never writes text of its own. An earlier version let
+# it write narration freely around the dialogue, and even a strictly
+# prompted 3B model invented lines nobody says, creatures and settings
+# that aren't in the chapter. Assembling the script from the real OCR text
+# makes that impossible.
+DELIVERIES = ["says", "shouts", "asks", "whispers", "mutters", "gasps", "groans", "screams", "laughs", "sighs"]
 
-_LABEL = re.compile(r"^\s*(?:narrator|narration)\s*:\s*", re.I | re.M)
-_STAGE_DIRECTION = re.compile(r"^\s*[\(\[][^\)\]]*[\)\]]\s*$", re.M)
-_HEADING = re.compile(r"^\s*(?:#+|\*\*).*$", re.M)
-
-
-def clean_llm_script(text: str) -> str:
-    """Strip what a small model adds despite being told not to — speaker
-    labels, bracketed stage directions, markdown headings — since the TTS
-    voice would read them aloud."""
-    text = _STAGE_DIRECTION.sub("", text)
-    text = _HEADING.sub("", text)
-    text = _LABEL.sub("", text)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+DELIVERY_SYSTEM_PROMPT = """You label how each line of comic dialogue is spoken, for an audiobook.
+For each numbered line, choose exactly one word from this list: """ + ", ".join(DELIVERIES) + """.
+Judge only from the words and punctuation of the line and the lines around it.
+Reply with JSON only, mapping each line number to its word, e.g. {"1": "shouts", "2": "asks"}."""
 
 
 def _sentence_case(text: str) -> str:
@@ -278,60 +279,127 @@ def _sentence_case(text: str) -> str:
     return text
 
 
-def dialogue_script(pages: List[List[str]]) -> str:
-    """No-LLM fallback: the dialogue itself, in reading order, with sound
-    effects dropped and ALL-CAPS lettering normalised so the voice doesn't
-    shout or spell words out."""
-    paragraphs = []
+def prepare_pages(pages: List[List[str]]) -> List[Dict[str, Any]]:
+    """Each page's OCR bubbles split into spoken lines (sentence-cased, so
+    the voice doesn't shout or spell words out) and whether the page also
+    had sound effects. Noise is dropped. Doing this before the model sees
+    anything leaves it less to get wrong."""
+    prepared = []
     for bubbles in pages:
-        spoken = [_sentence_case(b) for b in bubbles if not is_sound_effect(b)]
-        if spoken:
-            paragraphs.append(" ".join(spoken))
+        lines, effects = [], False
+        for bubble in bubbles:
+            if is_noise(bubble):
+                continue
+            if is_sound_effect(bubble):
+                effects = True
+            else:
+                lines.append(_sentence_case(bubble))
+        prepared.append({"lines": lines, "effects": effects})
+    return prepared
+
+
+def delivery_by_punctuation(line: str) -> str:
+    if line.endswith("?") or line.endswith("?!") or line.endswith("!?"):
+        return "asks"
+    if line.endswith("!"):
+        return "shouts"
+    if line.endswith("...") or line.endswith("…"):
+        return "mutters"
+    return "says"
+
+
+def _quoted(line: str) -> str:
+    # Ends a quoted line so the attribution after it reads naturally:
+    # "We go." she says -> "We go," she says; "?" / "!" / "..." stay.
+    if line.endswith(".") and not line.endswith("..."):
+        line = line[:-1] + ","
+    elif not line.endswith((",", "?", "!", "...", "…")):
+        line = line + ","
+    return f"\u201c{line}\u201d"
+
+
+_SPEAKERS = ["a voice", "someone"]
+# Deliberately vague: OCR can tell a page has sound effects, not what made
+# them, so the cue can't claim anything more specific than a sound.
+_EFFECT_CUES = ["A sound rings out.", "Noise fills the air.", "There's a loud sound.", "The noise grows."]
+
+
+def assemble_script(prepared: List[Dict[str, Any]], deliveries: Optional[List[str]] = None) -> str:
+    """The narration itself: every spoken line, in order, word for word.
+    The first line on each page gets an attribution ("a voice shouts"),
+    since lines on the same page usually continue the same exchange; a
+    page with only sound effects gets a short, fixed cue. Nothing else is
+    added, so nothing can be made up."""
+    paragraphs = []
+    index = 0
+    speaker = 0
+    last_was_effect = False
+    effect = 0
+    for page in prepared:
+        lines = page["lines"]
+        if not lines:
+            if page["effects"] and paragraphs and not last_was_effect:
+                paragraphs.append(_EFFECT_CUES[effect % len(_EFFECT_CUES)])
+                effect += 1
+                last_was_effect = True
+            continue
+        last_was_effect = False
+        delivery = (deliveries[index] if deliveries else None) or delivery_by_punctuation(lines[0])
+        first = f"{_quoted(lines[0])} {_SPEAKERS[speaker % len(_SPEAKERS)]} {delivery}."
+        speaker += 1
+        rest = f" \u201c{' '.join(lines[1:])}\u201d" if len(lines) > 1 else ""
+        paragraphs.append(first + rest)
+        index += len(lines)
     return "\n\n".join(paragraphs)
 
 
-def _pages_prompt(pages: List[List[str]], first_page_number: int) -> str:
-    lines = []
-    for offset, bubbles in enumerate(pages):
-        text = " / ".join(bubbles) if bubbles else "(no text)"
-        lines.append(f"[Page {first_page_number + offset}] {text}")
-    return "\n".join(lines)
+def dialogue_script(pages: List[List[str]]) -> str:
+    """No-LLM script: the dialogue, attributed by punctuation alone."""
+    return assemble_script(prepare_pages(pages))
 
 
 async def storyteller_script(pages: List[List[str]], progress=None) -> str:
-    """Narration written by the local Ollama model, a few pages at a time
-    (a 3B model loses track of long inputs), with the end of the previous
-    chunk passed along so the story flows across chunks."""
-    chunks = []
-    previous = ""
+    """Same script as dialogue_script(), but with the local Ollama model
+    choosing how each line is delivered (whispered, screamed...) from the
+    fixed DELIVERIES list, a chunk of pages at a time. Anything it answers
+    that isn't on that list falls back to the punctuation rule."""
+    prepared = prepare_pages(pages)
+    all_lines = [line for page in prepared for line in page["lines"]]
+    deliveries: List[Optional[str]] = [None] * len(all_lines)
+    chunk_size = PAGES_PER_LLM_CHUNK * 2  # lines, not pages
     async with httpx.AsyncClient(timeout=600.0) as client:
-        for start in range(0, len(pages), PAGES_PER_LLM_CHUNK):
-            group = pages[start : start + PAGES_PER_LLM_CHUNK]
+        for start in range(0, len(all_lines), chunk_size):
             if progress:
-                progress(start, len(pages))
-            if not any(group):
-                continue
-            user = _pages_prompt(group, start + 1)
-            if previous:
-                user = f"(The narration so far ended with: \"{previous[-300:]}\")\n\n" + user
+                progress(start, len(all_lines))
+            chunk = all_lines[start : start + chunk_size]
+            numbered = "\n".join(f'{i + 1}. "{line}"' for i, line in enumerate(chunk))
             response = await client.post(
                 f"{OLLAMA_HOST}/api/chat",
                 json={
                     "model": NARRATION_MODEL,
                     "stream": False,
+                    "format": "json",
                     "messages": [
-                        {"role": "system", "content": STORYTELLER_SYSTEM_PROMPT},
-                        {"role": "user", "content": user},
+                        {"role": "system", "content": DELIVERY_SYSTEM_PROMPT},
+                        {"role": "user", "content": numbered},
                     ],
-                    "options": {"temperature": 0.2, "num_predict": 700},
+                    "options": {"temperature": 0.1, "num_predict": 20 + 12 * len(chunk)},
                 },
             )
             response.raise_for_status()
-            chunk = clean_llm_script(response.json().get("message", {}).get("content", ""))
-            if chunk:
-                chunks.append(chunk)
-                previous = chunk
-    return "\n\n".join(chunks)
+            try:
+                answer = json.loads(response.json().get("message", {}).get("content", "") or "{}")
+            except ValueError:
+                answer = {}
+            if not isinstance(answer, dict):
+                answer = {}
+            for i in range(len(chunk)):
+                word = str(answer.get(str(i + 1), "")).strip().lower()
+                if word in DELIVERIES:
+                    deliveries[start + i] = word
+    if progress:
+        progress(len(all_lines), len(all_lines))
+    return assemble_script(prepared, deliveries)
 
 
 # --------------------------------------------------------------------------
@@ -354,8 +422,14 @@ _jobs: Dict[str, Dict[str, Any]] = {}
 _run_lock = asyncio.Lock()  # one chapter at a time: OCR + LLM saturate the CPU
 
 
+# Part of every cached narration's key — bump it whenever the script a
+# chapter produces changes, so old cached MP3s aren't served again.
+SCRIPT_VERSION = 2
+
+
 def job_id(chapter_url: str, voice: str, mode: str) -> str:
-    return hashlib.sha1(f"{chapter_url}|{voice}|{mode}".encode()).hexdigest()[:20]
+    key = f"{chapter_url}|{voice}|{mode}|v{SCRIPT_VERSION}"
+    return hashlib.sha1(key.encode()).hexdigest()[:20]
 
 
 def audio_path(job: str) -> Path:
