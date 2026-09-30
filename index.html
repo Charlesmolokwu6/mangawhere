@@ -2476,7 +2476,9 @@ function applyChapter(m, videoCh, hitPromise){
   });
 }
 
-var READER_SITE_LABEL={toongod:"ToonGod", asurascans:"Asura Scans", mangafreak:"MangaFreak"};
+var READER_SITE_LABEL={toongod:"ToonGod", asurascans:"Asura Scans", mangafreak:"MangaFreak",
+  mangadex:"MangaDex", comizy:"Comizy", mangaread:"MangaRead", flamecomics:"Flame Comics",
+  manhuaplus:"ManhuaPlus", kaliscan:"KaliScan", mangakatana:"MangaKatana", weebcentral:"WeebCentral"};
 
 /* WEBTOON's RSS feed and MangaUpdates are both third-party guesses at
    how far a series has gotten, and both can lag behind: the RSS feed
@@ -2545,11 +2547,13 @@ function adSlot(){
 }
 
 /* ================= reader (scraper-backed) =================
-   No pasting: this searches ToonGod, Asura Scans and MangaFreak by the
-   manga's own title (server-side, via /api/find) and reads from whichever
-   currently has the newer chapter. Whichever one wins hands back its full
-   chapter list in the same response, so the chapter picker and Prev/Next
-   are free from there — no extra round trip.
+   No pasting: this searches every supported site by the manga's own
+   title (server-side, via /api/find) and reads from whichever currently
+   has the newer chapter. Whichever one wins hands back its full chapter
+   list in the same response, so the chapter picker and Prev/Next are
+   free from there — no extra round trip. Every other site that also has
+   the title comes back as "alternates", which the reader falls back to
+   when a chapter won't load from the winner (loadChapter()).
 
    Tapping into a title means reading it is the likely next step, so
    BOTH lookups this needs — which site (/api/find) and that site's
@@ -2562,7 +2566,7 @@ function adSlot(){
    lookup isn't cached, so retrying (tapping Read again, or opening the
    same title again) tries fresh instead of replaying a possibly-
    transient failure forever. */
-var readerState={chapters:null, index:-1, back:null, domain:null, manga:null};
+var readerState={chapters:null, index:-1, back:null, domain:null, manga:null, alternates:[]};
 var findCache={};
 var scrapeCache={};
 
@@ -2590,6 +2594,54 @@ function scrapeChapter(url){
   scrapeCache[url]=promise;
   promise.then(function(res){ if(!res.ok) delete scrapeCache[url]; });
   return promise;
+}
+
+function chapterLoaded(res){
+  return res.ok && res.d && (res.d.images||[]).length>0;
+}
+
+/* Loads a chapter's pages, and if the current site fails (blocked, down,
+   or just no pages for that chapter), tries the same chapter number on
+   each alternate site in turn. The first that works becomes the reader's
+   source from then on — its chapter list takes over the picker and
+   Prev/Next — and the site that failed drops to the back of the
+   alternates. Resolves with the working result plus `switchedTo` (the
+   new site's domain) when it had to fall back. `exclude` lists sites
+   already known not to work for this chapter (their images wouldn't
+   load) — those are skipped outright, current site included. */
+function loadChapter(url, exclude){
+  exclude=exclude||[];
+  var chapters=readerState.chapters, startIndex=readerState.index;
+  var current=chapters&&chapters[startIndex];
+  var first=exclude.indexOf(readerState.domain)>-1
+    ? Promise.resolve({ok:false, d:null})
+    : scrapeChapter(url);
+  return first.then(function(res){
+    if(chapterLoaded(res)) return res;
+    if(!current || !(readerState.alternates||[]).length) return res;
+
+    var alts=readerState.alternates.filter(function(a){ return exclude.indexOf(a.domain)<0; });
+    function tryNext(i){
+      if(i>=alts.length) return Promise.resolve(res);
+      var alt=alts[i];
+      var idx=(alt.chapters||[]).findIndex(function(c){ return c.number===current.number; });
+      if(idx<0) return tryNext(i+1);
+      return scrapeChapter(alt.chapters[idx].url).then(function(altRes){
+        if(!chapterLoaded(altRes)) return tryNext(i+1);
+        // They moved to another chapter while this was still trying —
+        // don't swap the source out from under whatever they're reading now.
+        if(readerState.chapters!==chapters || readerState.index!==startIndex) return altRes;
+        var failed={domain:readerState.domain, series_url:null, chapters:readerState.chapters};
+        readerState.alternates=readerState.alternates.filter(function(a){ return a!==alt; }).concat([failed]);
+        readerState.chapters=alt.chapters;
+        readerState.index=idx;
+        readerState.domain=alt.domain;
+        altRes.switchedTo=alt.domain;
+        return altRes;
+      });
+    }
+    return tryNext(0);
+  });
 }
 
 /* Each scraped chapter carries its own site-supplied title (a subtitle,
@@ -2643,7 +2695,8 @@ function renderDetailChapters(m, res){
     row.onclick=function(){
       var url=row.getAttribute("data-url");
       var idx=chapters.findIndex(function(c){ return c.url===url; });
-      readerState={chapters:chapters, index:idx, back:back, manga:m};
+      readerState={chapters:chapters, index:idx, back:back, manga:m,
+        domain:res.d.domain, alternates:res.d.alternates||[]};
       readerView(url);
     };
   });
@@ -2677,7 +2730,8 @@ function wireReader(m){
         err.textContent="Couldn't load this right now — try again.";
         return;
       }
-      readerState={chapters:chapters, index:chapters.length-1, back:back, manga:m};
+      readerState={chapters:chapters, index:chapters.length-1, back:back, manga:m,
+        domain:res.d.domain, alternates:res.d.alternates||[]};
       readerView(chapters[chapters.length-1].url);
     });
   };
@@ -2770,7 +2824,10 @@ function renderReaderNav(){
    server-side) and stacks them the way a webtoon reader would. The
    chapter picker and Prev/Next come from readerState, set by whoever
    found/navigated here. */
-function readerView(url){
+var readerLoadToken=0;
+
+function readerView(url, exclude){
+  var token=++readerLoadToken;
   stopRail();
   enterReaderChrome();
   openChapterDropdown=null;
@@ -2792,9 +2849,10 @@ function readerView(url){
   wireComments();
   loadRecommendations();
 
-  scrapeChapter(url).then(function(res){
+  loadChapter(url, exclude).then(function(res){
     var status=document.getElementById("rstatus");
-    if(!status) return;   // they navigated away before this resolved
+    // Navigated away, or on to another chapter, before this resolved.
+    if(!status || token!==readerLoadToken) return;
     if(!res.ok){
       status.textContent="Couldn't load this chapter — try again.";
       return;
@@ -2805,6 +2863,16 @@ function readerView(url){
       return;
     }
     status.textContent="";   // loaded fine — no page count to show
+    if(res.switchedTo){
+      // The picker and Prev/Next were drawn from the site that failed —
+      // redraw them from the one that actually worked.
+      status.textContent="Couldn’t load it from the first site, so this is from "+
+        (READER_SITE_LABEL[res.switchedTo]||res.switchedTo)+".";
+      var picker=document.getElementById("rchapbtn");
+      if(picker) picker.parentNode.outerHTML=chapterPickerHtml();
+      wireChapterPicker();
+      renderReaderNav();
+    }
     document.getElementById("rpages").innerHTML=images.map(function(src){
       // comizy.io's image CDN rejects any request whose Referer isn't
       // comizy.io itself — a plain <img> load always sends *our* origin,
@@ -2816,7 +2884,28 @@ function readerView(url){
       return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
         'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
     }).join("");
+    watchFirstPage(token, exclude);
   });
+}
+
+/* A site can hand back a full list of page URLs whose image server is
+   down (kaliscan's CDN answering 522, say) — the scrape "worked", but
+   every page is blank. If the very first page fails to load before any
+   page has, treat that site as failed for this chapter and fall through
+   to the next one, exactly as if the scrape itself had failed. */
+function watchFirstPage(token, exclude){
+  var imgs=document.querySelectorAll("#rpages img");
+  if(!imgs.length || !(readerState.alternates||[]).length) return;
+  var anyLoaded=false;
+  Array.prototype.forEach.call(imgs, function(img){
+    img.addEventListener("load", function(){ anyLoaded=true; }, {once:true});
+  });
+  imgs[0].addEventListener("error", function(){
+    if(anyLoaded || token!==readerLoadToken) return;
+    var current=readerState.chapters[readerState.index];
+    if(!current) return;
+    readerView(current.url, (exclude||[]).concat([readerState.domain]));
+  }, {once:true});
 }
 
 /* Comments, scoped to the exact title + chapter someone just read (not

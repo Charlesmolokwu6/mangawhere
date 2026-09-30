@@ -24,3 +24,30 @@ def similar(a: str, b: str) -> float:
             counts[g] -= 1
             hits += 1
     return 2 * hits / (len(A) + len(B))
+
+
+# "Solo Leveling: Ragnarok" is a separate series from "Solo Leveling", but
+# shares so much of its name that it clears the similarity bar on its own.
+# A candidate that is the searched title plus a ":"/"-" subtitle is treated
+# as a sequel/spin-off rather than the same series. A plain longer name
+# ("Omniscient Reader" -> "Omniscient Reader's Viewpoint") or a bracketed
+# alias ("Gosu (The Master)") has no such separator, so still matches.
+_SUBTITLE_SEPARATOR = re.compile(r"^\s*(?::|[-–—]\s)")
+
+
+def _plain(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").lower()).strip()
+
+
+def is_spinoff(query: str, candidate: str) -> bool:
+    q, c = _plain(query), _plain(candidate)
+    if not q or not c.startswith(q) or len(c) == len(q):
+        return False
+    return bool(_SUBTITLE_SEPARATOR.match(c[len(q):]))
+
+
+def title_score(query: str, candidate: str) -> float:
+    """similar(), except a sequel/spin-off of the searched title scores 0."""
+    if is_spinoff(query, candidate):
+        return 0.0
+    return similar(query, candidate)
