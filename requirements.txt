@@ -11,3 +11,4 @@ libsql==0.1.11
 edge-tts==7.2.8
 rapidocr-onnxruntime==1.4.4
 pillow==12.3.0
+wordninja==2.0.0

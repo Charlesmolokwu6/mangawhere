@@ -269,14 +269,125 @@ Judge only from the words and punctuation of the line and the lines around it.
 Reply with JSON only, mapping each line number to its word, e.g. {"1": "shouts", "2": "asks"}."""
 
 
-def _sentence_case(text: str) -> str:
+# --- OCR text repair -------------------------------------------------------
+# Comic fonts trip OCR in the same few ways on every series: words run
+# together when lettering is small ("HOWCOMESUNGJIN"), U read as L in some
+# fonts ("MLCH", "HLNTERS"), mixed-case output from all-caps lettering
+# ("ARen'T"), CJK symbols from system-window icons, and ".." endings. The
+# repairs below only ever swap in real dictionary words (wordninja's
+# 126k-word English list); anything they can't explain is left as it was.
+
+_word_cost: Optional[Dict[str, float]] = None
+
+
+def _words() -> Dict[str, float]:
+    global _word_cost
+    if _word_cost is None:
+        try:
+            import wordninja
+
+            _word_cost = dict(wordninja.DEFAULT_LANGUAGE_MODEL._wordcost)
+        except Exception:
+            _word_cost = {}
+    return _word_cost
+
+
+L_AS_U_PENALTY = 4.0  # an L->U reading must be worth it: real words always win
+_MAX_WORD = 20
+# When a token is split into several words, every piece of 3 letters or
+# less must be a common word. Without this, names get shredded into rare
+# dictionary fragments ("UREK MAZINO" -> "lr ek maz ino") instead of being
+# left alone.
+_SHORT_PIECE_MAX_COST = 12.5
+_CONTRACTION = re.compile(r"^(.+?)('(?:s|t|re|ll|m|ve|d))$")
+
+
+def _variants(chunk: str):
+    """The chunk as read, plus every reading with some L's taken as U's."""
+    yield chunk, 0.0
+    positions = [i for i, c in enumerate(chunk) if c == "l"][:3]
+    for mask in range(1, 1 << len(positions)):
+        chars = list(chunk)
+        swaps = 0
+        for bit, pos in enumerate(positions):
+            if mask >> bit & 1:
+                chars[pos] = "u"
+                swaps += 1
+        yield "".join(chars), swaps * L_AS_U_PENALTY
+
+
+def repair_word(token: str) -> str:
+    """Best reading of one OCR token (lowercase letters/apostrophes) as one
+    or more dictionary words, allowing L->U misreads. Single letters other
+    than "a"/"i" aren't allowed as words, and if no reading made only of
+    dictionary words exists, the token comes back unchanged."""
+    words = _words()
+    if not words or token in words:
+        return token
+    n = len(token)
+    best: List[Optional[tuple]] = [None] * (n + 1)  # (cost, words)
+    best[0] = (0.0, [])
+    for end in range(1, n + 1):
+        for start in range(max(0, end - _MAX_WORD), end):
+            if best[start] is None:
+                continue
+            for word, penalty in _variants(token[start:end]):
+                if word not in words or (len(word) == 1 and word not in ("a", "i")):
+                    continue
+                cost = best[start][0] + words[word] + penalty
+                if best[end] is None or cost < best[end][0]:
+                    best[end] = (cost, best[start][1] + [word])
+    pieces = best[n][1] if best[n] else None
+    if pieces and len(pieces) > 1 and any(
+        len(p) <= 3 and p not in ("a", "i") and "'" not in p and words[p] > _SHORT_PIECE_MAX_COST
+        for p in pieces
+    ):
+        pieces = None
+    if pieces:
+        return " ".join(pieces)
+    contraction = _CONTRACTION.match(token)
+    if contraction:  # "girl's": repair "girl", keep the "'s" attached
+        return repair_word(contraction.group(1)) + contraction.group(2)
+    return token
+
+
+# A run of non-Latin characters (system-window icons, stray CJK), along
+# with any letters glued to it — OCR reads the icon "区可" plus the start of
+# the next glyph as "区可B".
+_NON_LATIN = re.compile(r"\S*[^\x00-\u024f\u2018-\u201f\u2026\s]\S*")
+_CREDITS = re.compile(
+    r"\b(?:art by|story by|adapted by|original story|translat\w*|proofread\w*|typeset\w*|scanlat\w*"
+    r"|discord|patreon|read (?:it )?(?:at|on)|episode \d+|chapter \d+)\b",
+    re.I,
+)
+
+
+def _mostly_upper(text: str) -> bool:
+    letters = [c for c in text if c.isalpha()]
+    return bool(letters) and sum(c.isupper() for c in letters) >= 0.7 * len(letters)
+
+
+def _capitalise_sentences(text: str) -> str:
+    text = re.sub(r"(^|[.!?]\s+|[\"\u201c]\s*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
+    return re.sub(r"\bi(?=\b|')", "I", text)
+
+
+def normalise_line(text: str) -> str:
+    text = _NON_LATIN.sub(" ", text)
+    text = text.replace("[", " ").replace("]", " ").replace("|", " ")
+    text = re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", text)  # "JUST2YEARS"
+    text = text.replace("\u2026", "...")
+    text = re.sub(r"\.{2,}", "...", text)
     text = re.sub(r"\s+", " ", text).strip()
-    if text.isupper():
-        text = text.lower()
-        text = re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
-        text = re.sub(r"\bi\b", "I", text)
-        text = re.sub(r"\bi'", "I'", text)
-    return text
+    if not _mostly_upper(text):
+        return text  # already normal lettering — leave it alone
+    text = text.lower()
+    text = re.sub(r"[a-z']+", lambda m: repair_word(m.group(0)), text)
+    text = re.sub(r"(?<=[a-z]) '(s|t|re|ll|m|ve|d)\b", r"'\1", text)  # "girl 's" -> "girl's"
+    return _capitalise_sentences(text)
+
+
+_sentence_case = normalise_line  # kept for readability at call sites
 
 
 def prepare_pages(pages: List[List[str]]) -> List[Dict[str, Any]]:
@@ -288,12 +399,14 @@ def prepare_pages(pages: List[List[str]]) -> List[Dict[str, Any]]:
     for bubbles in pages:
         lines, effects = [], False
         for bubble in bubbles:
-            if is_noise(bubble):
+            if is_noise(bubble) or _CREDITS.search(bubble):
                 continue
             if is_sound_effect(bubble):
                 effects = True
-            else:
-                lines.append(_sentence_case(bubble))
+                continue
+            line = normalise_line(bubble)
+            if line and not is_noise(line):
+                lines.append(line)
         prepared.append({"lines": lines, "effects": effects})
     return prepared
 
@@ -424,7 +537,7 @@ _run_lock = asyncio.Lock()  # one chapter at a time: OCR + LLM saturate the CPU
 
 # Part of every cached narration's key — bump it whenever the script a
 # chapter produces changes, so old cached MP3s aren't served again.
-SCRIPT_VERSION = 2
+SCRIPT_VERSION = 3
 
 
 def job_id(chapter_url: str, voice: str, mode: str) -> str:

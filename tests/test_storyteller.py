@@ -109,6 +109,50 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(script, "\u201cHello there,\u201d a voice says.")
 
 
+class OcrRepairTests(unittest.TestCase):
+    # Real OCR output from Solo Leveling, Tower of God, Omniscient Reader
+    # and The Beginning After the End chapters.
+    def test_run_together_words_are_split(self):
+        self.assertEqual(
+            storyteller.normalise_line("THOSETHINGS ARECURRENTLY ABLETOFLY AROLNDINTHE SKY THEn?"),
+            "Those things are currently able to fly around in the sky then?",
+        )
+        self.assertEqual(
+            storyteller.normalise_line("THAT'S NOTHOWA S-RANK HUNTERSHOULDBEHAVE. I'MEMBARRASSEDFOROUR COUNTRY."),
+            "That's not how a s-rank hunter should behave. I'm embarrassed for our country.",
+        )
+
+    def test_u_misread_as_l_is_corrected_only_to_real_words(self):
+        self.assertEqual(
+            storyteller.normalise_line("I CAN LNDERSTANDWHY MOST HLNTERS WOLLD WANT TO RLN AWAY"),
+            "I can understand why most hunters would want to run away",
+        )
+
+    def test_names_are_left_alone_rather_than_shredded(self):
+        self.assertEqual(storyteller.normalise_line("LREK MAZINO!?"), "Lrek mazino!?")
+
+    def test_mixed_case_caps_contractions_and_possessives(self):
+        self.assertEqual(
+            storyteller.normalise_line("I'M DESTINED TO BE EVERY GIRL'S HERO, ARen'T I?"),
+            "I'm destined to be every girl's hero, aren't I?",
+        )
+
+    def test_system_window_symbols_digits_and_ellipses(self):
+        self.assertEqual(
+            storyteller.normalise_line("区可B [YOURBODYAWAKESDUETOGREATSHOCK.]"), "Your body awakes due to great shock."
+        )
+        self.assertEqual(
+            storyteller.normalise_line("WITHIN JUST2YEARS THEY CHANGED.."), "Within just 2 years they changed..."
+        )
+
+    def test_normal_lettering_is_left_as_is(self):
+        self.assertEqual(storyteller.normalise_line("Huh? Something's not right"), "Huh? Something's not right")
+
+    def test_credit_lines_are_not_read_out(self):
+        prepared = storyteller.prepare_pages([["Art by Sleepy-C I Adapted by UMI", "Episode 156 Chapter 27", "SANGHA..."]])
+        self.assertEqual(prepared[0]["lines"], ["Sangha..."])
+
+
 class JobTests(unittest.TestCase):
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()
