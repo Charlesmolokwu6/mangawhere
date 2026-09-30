@@ -344,7 +344,8 @@ async def api_narrate(payload: dict):
     the scrapers support, never an arbitrary URL someone posts."""
     chapter_url = str(payload.get("chapter_url") or "")
     _require_absolute_url(chapter_url)
-    if not (await storyteller.availability())["available"]:
+    available = await storyteller.availability()
+    if not available["available"] or available.get("base"):
         raise HTTPException(status_code=503, detail="Narration isn't set up on this server.")
 
     try:

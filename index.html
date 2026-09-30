@@ -2918,10 +2918,25 @@ function readerView(url, exclude){
 var narrationConfig=null;
 var narration={audio:null, timer:null};
 
+/* Narration may run on a different server from the reader (a machine
+   with more memory — see NARRATION_URL in README.md). When it does, this
+   server's config just points there ("base"), and that server is asked
+   what it can actually do. Every narration request then goes to `base`. */
+function readNarrationConfig(base){
+  return fetch(base+"/api/config").then(function(r){ return r.json(); })
+    .then(function(cfg){ return cfg.narration||{available:false}; });
+}
+
 function getNarrationConfig(){
   if(!narrationConfig){
-    narrationConfig=fetch(READER_BASE+"/api/config").then(function(r){ return r.json(); })
-      .then(function(cfg){ return cfg.narration||{available:false}; })
+    narrationConfig=readNarrationConfig(READER_BASE)
+      .then(function(n){
+        if(!n.available || !n.base) return Object.assign({}, n, {base:READER_BASE});
+        var remote=n.base.replace(/\/$/,"");
+        return readNarrationConfig(remote).then(function(r){
+          return r.base ? {available:false} : Object.assign({}, r, {base:remote});   // no chains
+        });
+      })
       .catch(function(){ narrationConfig=null; return {available:false}; });
   }
   return narrationConfig;
@@ -2961,7 +2976,7 @@ function mountNarration(chapterUrl, token){
       var voice=panel.querySelector("select").value;
       panel.querySelector("select").disabled=true;
       this.hidden=true;
-      startNarration(chapterUrl, voice, panel.querySelector(".narr-status"), token);
+      startNarration(cfg.base, chapterUrl, voice, panel.querySelector(".narr-status"), token);
     };
   });
 }
@@ -2979,24 +2994,24 @@ function renderNarrationStatus(el, job){
     '<p class="sub" style="margin:0">'+esc(label)+'</p>';
 }
 
-function startNarration(chapterUrl, voice, el, token){
+function startNarration(base, chapterUrl, voice, el, token){
   el.innerHTML='<p class="sub" style="margin:0">Starting…</p>';
-  fetch(READER_BASE+"/api/narrate",{method:"POST", headers:{"Content-Type":"application/json"},
+  fetch(base+"/api/narrate",{method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({chapter_url:chapterUrl, voice:voice})})
     .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
     .then(function(res){
       if(token!==readerLoadToken) return;
       if(!res.ok){ renderNarrationStatus(el, {state:"error", error:res.d.detail}); return; }
-      pollNarration(res.d, el, token);
+      pollNarration(base, res.d, el, token);
     })
     .catch(function(){ renderNarrationStatus(el, {state:"error", error:"Couldn’t reach the server — try again."}); });
 }
 
-function pollNarration(job, el, token){
+function pollNarration(base, job, el, token){
   if(token!==readerLoadToken) return;
   if(job.state==="done"){
     el.innerHTML='<p class="sub" style="margin:0">'+(job.mode==="storyteller"?"AI storyteller":"Dialogue read-aloud")+'</p>'+
-      '<audio controls preload="auto" src="'+esc(READER_BASE+"/api/narrate/"+job.job+"/audio")+'"></audio>';
+      '<audio controls preload="auto" src="'+esc(base+"/api/narrate/"+job.job+"/audio")+'"></audio>';
     narration.audio=el.querySelector("audio");
     narration.audio.play().catch(function(){});   // autoplay can be blocked; the controls are right there
     return;
@@ -3004,9 +3019,9 @@ function pollNarration(job, el, token){
   renderNarrationStatus(el, job);
   if(job.state==="error") return;
   narration.timer=setTimeout(function(){
-    fetch(READER_BASE+"/api/narrate/"+job.job).then(function(r){ return r.json(); })
-      .then(function(next){ pollNarration(next, el, token); })
-      .catch(function(){ pollNarration(job, el, token); });
+    fetch(base+"/api/narrate/"+job.job).then(function(r){ return r.json(); })
+      .then(function(next){ pollNarration(base, next, el, token); })
+      .catch(function(){ pollNarration(base, job, el, token); });
   }, 2500);
 }
 

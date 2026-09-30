@@ -71,3 +71,8 @@ services:
         sync: false
       - key: NARRATION_MODEL
         sync: false
+      # Optional (see README.md) — narration can't run on the free plan
+      # (it needs ~600MB), so it's off here. Set this to the address of a
+      # copy of this app on a bigger machine to turn the Listen button on.
+      - key: NARRATION_URL
+        sync: false

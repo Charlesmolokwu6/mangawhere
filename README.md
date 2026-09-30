@@ -168,14 +168,28 @@ ollama pull llama3.2:3b      # ~2GB, one-time; needs Ollama installed and runnin
 uvicorn main:app --port 8000
 ```
 
-**On Render's free plan**, only the punctuation-based version can work:
-Ollama needs several GB of RAM and the free plan has 512MB. Even OCR alone
-is tight there alongside everything else, so if Render runs out of
-memory, narration is the thing to turn off. To get the storyteller on a
-deployed site, run Ollama on a machine with more memory and point
-`OLLAMA_HOST` at it.
+**On Render's free plan, narration is off.** Reading a chapter's pages
+peaks at ~600MB of memory (measured), over the free plan's 512MB — running
+it there would crash the whole site, not just narration. So on Render
+(which sets `RENDER=true`) the Listen button doesn't appear unless
+narration is pointed somewhere else:
+
+1. Run a second copy of this app on a machine with at least ~2GB of RAM
+   (4GB+ with Ollama) — e.g. Oracle Cloud's Always Free VM, a small VPS,
+   or your own computer behind a Cloudflare Tunnel. Same
+   `pip install -r requirements.txt` and `uvicorn main:app`; add Ollama
+   there if you want it.
+2. Set `NARRATION_URL` on Render to that copy's public address (e.g.
+   `https://narrator.example.com`) and redeploy.
+
+The reader then sends narration requests straight to that machine;
+everything else keeps running on Render.
 
 Environment variables (all optional):
+- `NARRATION_URL` — address of another deployment of this app that does
+  the narrating (see above). Set this on Render.
+- `NARRATION_ENABLED` — `true`/`false` to force narration on or off on
+  this server. Unset, it's on everywhere except Render.
 - `OLLAMA_HOST` — where Ollama is. Defaults to `http://localhost:11434`.
 - `NARRATION_MODEL` — which Ollama model picks each line's delivery.
   Defaults to `llama3.2:3b`.

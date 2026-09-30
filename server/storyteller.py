@@ -128,7 +128,32 @@ async def storyteller_available() -> bool:
     return _ollama_ok
 
 
+# Narration needs ~600MB at peak (OCR), more than Render's free plan has —
+# running it there would crash the whole app, not just narration. So it is
+# off by default on Render (which sets RENDER=true) and on everywhere else;
+# NARRATION_ENABLED overrides either way.
+def enabled_here() -> bool:
+    setting = os.environ.get("NARRATION_ENABLED", "").strip().lower()
+    if setting in ("1", "true", "yes", "on"):
+        return True
+    if setting in ("0", "false", "no", "off"):
+        return False
+    return not os.environ.get("RENDER")
+
+
+# Where narration runs when it isn't here: another deployment of this same
+# app, on a machine with enough memory (see README.md). The reader then
+# sends its narration requests straight there.
+def remote_url() -> str:
+    return os.environ.get("NARRATION_URL", "").strip().rstrip("/")
+
+
 async def availability() -> Dict[str, Any]:
+    if remote_url():
+        # The reader asks that server itself what it can do.
+        return {"available": True, "base": remote_url()}
+    if not enabled_here():
+        return {"available": False}
     available = _tts_available() and _ocr_installed()
     return {
         "available": available,

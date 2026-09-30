@@ -1,4 +1,5 @@
 import asyncio
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -229,6 +230,29 @@ class JobTests(unittest.TestCase):
         self.assertEqual(state["mode"], "dialogue")
 
 
+class WhereNarrationRunsTests(unittest.TestCase):
+    def _availability(self, **env):
+        with patch.dict("os.environ", env, clear=False):
+            for key in ("RENDER", "NARRATION_ENABLED", "NARRATION_URL"):
+                if key not in env:
+                    os.environ.pop(key, None)
+            return asyncio.run(storyteller.availability())
+
+    def test_off_by_default_on_render_so_ocr_cant_crash_the_free_plan(self):
+        self.assertEqual(self._availability(RENDER="true"), {"available": False})
+
+    def test_can_be_forced_on_or_off(self):
+        with patch.object(storyteller, "storyteller_available", AsyncMock(return_value=False)):
+            self.assertTrue(self._availability(RENDER="true", NARRATION_ENABLED="1")["available"])
+        self.assertEqual(self._availability(NARRATION_ENABLED="false"), {"available": False})
+
+    def test_narration_url_points_the_reader_at_another_server(self):
+        self.assertEqual(
+            self._availability(RENDER="true", NARRATION_URL="https://narrator.example.com/"),
+            {"available": True, "base": "https://narrator.example.com"},
+        )
+
+
 class NarrateApiTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -267,6 +291,14 @@ class NarrateApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         scrape.assert_awaited_once_with("https://ww3.mangafreak.me/Read1_Gosu_1")
         start.assert_awaited_once_with("https://ww3.mangafreak.me/Read1_Gosu_1", chapter["images"], "aria")
+
+    def test_narrate_refuses_when_narration_lives_on_another_server(self):
+        remote = {"available": True, "base": "https://narrator.example.com"}
+        with patch.object(storyteller, "availability", AsyncMock(return_value=remote)), \
+             patch.object(self.main, "scrape_chapter", AsyncMock()) as scrape:
+            r = self.client.post("/api/narrate", json={"chapter_url": "https://ww3.mangafreak.me/Read1_Gosu_1"})
+        self.assertEqual(r.status_code, 503)
+        scrape.assert_not_awaited()
 
     def test_narrate_rejects_a_non_url(self):
         with patch.object(storyteller, "availability", AsyncMock(return_value={"available": True})):
