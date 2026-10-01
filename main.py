@@ -1,3 +1,4 @@
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from server import auth, cache, captcha, comments, db, media, oauth, poller, push, storyteller, turnstile, watch
+from server import auth, cache, captcha, comments, db, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -22,6 +23,25 @@ async def lifespan(app: FastAPI):
     poller.start()
     yield
     poller.stop()
+    if _proxy_client is not None:
+        await _proxy_client.aclose()
+
+
+# One long-lived client for the proxy, so its connections to an image CDN
+# stay open between requests. A chapter can be ~200 images; opening a
+# fresh TLS connection for every one made each image take 0.5-1.1s through
+# the proxy against ~0.3s direct.
+_proxy_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_proxy_client() -> httpx.AsyncClient:
+    global _proxy_client
+    if _proxy_client is None:
+        _proxy_client = httpx.AsyncClient(
+            timeout=20.0,
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+        )
+    return _proxy_client
 
 
 app = FastAPI(title="MangaWhere scraper API", lifespan=lifespan)
@@ -125,16 +145,21 @@ async def _proxy(request: Request, target: str) -> Response:
         headers["Content-Type"] = request.headers.get("content-type", "application/json")
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            upstream = await client.request(request.method, target, headers=headers, content=body)
+        upstream = await _get_proxy_client().request(
+            request.method, target, headers=headers, content=body
+        )
     except Exception as e:
         return JSONResponse({"error": "upstream failed", "detail": str(e)}, status_code=502)
 
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        media_type=upstream.headers.get("content-type", "application/json"),
-    )
+    media_type = upstream.headers.get("content-type", "application/json")
+    response = Response(content=upstream.content, status_code=upstream.status_code, media_type=media_type)
+    if upstream.status_code == 200 and media_type.startswith("image/"):
+        # Chapter images never change at a given URL, so the reader's
+        # browser (and any CDN in front of this server) can keep them —
+        # going back a chapter or re-opening one doesn't refetch every page
+        # through this server.
+        response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+    return response
 
 
 @app.get("/")
@@ -289,6 +314,20 @@ async def api_register(request: Request):
     return JSONResponse(result)
 
 
+@app.post("/api/forgot-password")
+async def api_forgot_password(payload: dict):
+    result = await asyncio.to_thread(
+        password_reset.request_reset, str(payload.get("email") or ""), str(payload.get("link") or "")
+    )
+    return JSONResponse(result, status_code=200 if "message" in result else 400)
+
+
+@app.post("/api/reset-password")
+async def api_reset_password(payload: dict):
+    result = password_reset.reset_password(str(payload.get("token") or ""), str(payload.get("password") or ""))
+    return JSONResponse(result, status_code=200 if "token" in result else 400)
+
+
 @app.post("/api/login")
 async def api_login(request: Request):
     payload = await request.json()
@@ -368,6 +407,7 @@ async def api_avatar(
 async def api_config():
     return {
         "vapid_public_key": push.public_key_b64(),
+        "password_reset": password_reset.available(),
         "narration": await storyteller.availability(),
     }
 

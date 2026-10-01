@@ -205,38 +205,63 @@ The Listen button only appears when the server reports narration as
 available (`/api/config`), so a server without these dependencies just
 doesn't show it.
 
+## Password reset (email)
+
+The sign-in page has a "Forgot password?" link that emails a one-time
+link (valid 1 hour) to choose a new password (`server/password_reset.py`).
+Saving it signs the reader in and signs them out on every other device.
+It also lets people who signed up with Google/Facebook add a password.
+The link only appears once email sending is set up.
+
+Any email provider that offers SMTP works. Free options include Brevo
+(a free plan with a daily sending limit), Gmail (with an "app password",
+fine for small volumes), Resend and Amazon SES; check each one's current
+free limits. For lots of users, use a provider with your own domain
+verified, so the emails don't land in spam.
+
+Set these in Render's environment variables, then redeploy:
+- `SMTP_HOST`, e.g. `smtp-relay.brevo.com` or `smtp.gmail.com`
+- `SMTP_PORT`, usually `587` (or `465`)
+- `SMTP_USERNAME`, `SMTP_PASSWORD`: from the provider (for Gmail, an app
+  password, never your normal one)
+- `MAIL_FROM`, e.g. `MangaWhere <no-reply@yourdomain.com>`; it must be a
+  sender the provider has verified
+- `RESET_LINK_ORIGINS` (optional): extra site addresses the reset link may
+  point to, comma-separated, e.g. a custom domain. GitHub Pages and the
+  Render address are allowed already.
+
 ## Advertising
 
-`index.html`'s `AD_SLOT_HTML` (near `TURNSTILE_SITE_KEY`, `AMAZON_TAG`)
-takes any ad network's raw ad-unit HTML/script snippet and renders it in
-one place: below a title's read-here links, after the reader has already
-been given what they came for — never above it (`adSlot()`). Empty by
-default, so nothing renders until it's set.
+Ads are set in `index.html`'s `ADS` block (near `AMAZON_TAG`): paste an
+ad network's code for each place you want ads, and leave the rest empty.
 
-**Google AdSense won't work here.** MangaWhere shows 18+ titles
-(`HIDE_ADULT` is off), and AdSense's policies prohibit monetizing adult
-content — using it risks the whole account, not just this site. Adult-
-tolerant networks built for exactly this kind of mixed-content site exist
-instead: [ExoClick](https://www.exoclick.com) is a solid default (one of
-the largest, no minimum-traffic requirement to sign up, works fine for a
-mostly-general site with some mature titles rather than only explicit
-content). JuicyAds and TrafficJunky are alternatives geared more toward
-explicit-only sites.
+| Place | Where it shows |
+|---|---|
+| `home` | Home page, below Trending |
+| `detail` | A title's page, below its chapter list |
+| `readerMid` | Halfway through a chapter (chapters of 20+ pages only) |
+| `readerEnd` | End of a chapter, just above Prev / Next |
 
-To turn it on (using ExoClick as the example):
-1. Sign up at [exoclick.com](https://www.exoclick.com) and add your site
-   — this needs a live domain (a bare `github.io` subdomain is unlikely to
-   pass review), so this comes after domain setup.
-2. Create an ad zone (a banner or native placement is the natural fit for
-   the slot here) and copy the snippet it gives you.
-3. Paste that snippet as the value of `AD_SLOT_HTML` in `index.html`,
-   push, and it starts rendering in that one spot.
+Every ad runs inside its own sandboxed frame (`adFrame()`), which matters
+for three reasons: network code that uses `document.write` (Adsterra's
+banners do) can't wipe the page; ad scripts can't read the page or the
+reader's sign-in token; and frames load only when scrolled near, so ads
+never slow down chapter pages.
 
-Most networks, ExoClick included, also want an **ads.txt** file at your
-domain's root confirming you authorize them to sell your inventory (an
-anti-fraud measure) — they'll give you the exact line to put in it once
-you're signed up; it just needs to land in this repo as `ads.txt` (served
-alongside `index.html`) once there's a domain for it to live on.
+**Adsterra** accepts sites with mature titles (Google AdSense doesn't,
+since `HIDE_ADULT` is off; it risks the whole AdSense account).
+1. Sign up as a publisher at [adsterra.com](https://adsterra.com) and add
+   your site.
+2. Create ad units. **Banner** units fit these places best: 300×250 for
+   `home`/`detail`/`readerMid`, 320×50 or 468×60 for `readerEnd`. Native
+   Banners work too (set `AD_NATIVE_HEIGHT` to their height).
+3. For each unit, copy its code ("Get code") and paste it between the
+   quotes for the place you want it, then push. The frame sizes itself
+   from the `width`/`height` in a banner's code.
+
+Popunder and Social Bar units aren't supported on purpose: they run
+across the whole page (not in a frame), cover content, and are the formats
+readers most dislike.
 
 ## Sign in with Google / Facebook
 

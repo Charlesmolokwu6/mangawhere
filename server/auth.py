@@ -160,6 +160,11 @@ def login(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if not row:
         return {"error": "Incorrect email or password."}
+    if not row["password_hash"] or not row["salt"]:
+        # Made with Google/Facebook, so there's no password to check —
+        # this used to crash on the missing salt instead of answering.
+        return {"error": "This account signs in with Google or Facebook. "
+                         "Use that button, or reset the password to add one."}
 
     candidate = _hash_password(password, row["salt"])
     if not hmac.compare_digest(candidate, row["password_hash"]):

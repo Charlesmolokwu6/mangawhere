@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS oauth_accounts (
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_accounts_user ON oauth_accounts (user_id);
 
+CREATE TABLE IF NOT EXISTS password_resets (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    expires_at REAL NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets (user_id, created_at);
+
 CREATE TABLE IF NOT EXISTS scrape_cache (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -245,6 +254,8 @@ def purge_expired() -> None:
         conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
         conn.execute("DELETE FROM captchas WHERE expires_at < ?", (now,))
         conn.execute("DELETE FROM scrape_cache WHERE expires_at < ?", (now,))
+        # Kept a day past expiry so the per-hour request limit can still see them.
+        conn.execute("DELETE FROM password_resets WHERE expires_at < ?", (now - 86400,))
         conn.commit()
     finally:
         conn.close()
