@@ -89,6 +89,12 @@ CREATE TABLE IF NOT EXISTS oauth_accounts (
     PRIMARY KEY (provider, subject)
 );
 CREATE INDEX IF NOT EXISTS idx_oauth_accounts_user ON oauth_accounts (user_id);
+
+CREATE TABLE IF NOT EXISTS scrape_cache (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    expires_at REAL NOT NULL
+);
 """
 
 
@@ -231,12 +237,14 @@ def init_db() -> None:
 
 
 def purge_expired() -> None:
-    """Drop expired sessions and captchas so the tables don't grow forever."""
+    """Drop expired sessions, captchas and cached scrapes so the tables
+    don't grow forever."""
     now = time.time()
     conn = get_connection()
     try:
         conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
         conn.execute("DELETE FROM captchas WHERE expires_at < ?", (now,))
+        conn.execute("DELETE FROM scrape_cache WHERE expires_at < ?", (now,))
         conn.commit()
     finally:
         conn.close()

@@ -259,6 +259,9 @@ class NarrateApiTests(unittest.TestCase):
         self._tmp.close()
         db.DB_PATH = Path(self._tmp.name)
         import main
+        from server import cache
+
+        cache.clear_memory()
 
         self.main = main
         self.client = TestClient(main.app)

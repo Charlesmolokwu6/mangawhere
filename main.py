@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from server import auth, captcha, comments, db, media, oauth, poller, push, storyteller, turnstile, watch
+from server import auth, cache, captcha, comments, db, media, oauth, poller, push, storyteller, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -151,22 +151,50 @@ async def proxy_post(request: Request, url: Optional[str] = Query(default=None))
     return await _proxy(request, url)
 
 
+# How long scraper results are reused before the source sites are asked
+# again (see server/cache.py). Chapter pages almost never change once
+# posted; chapter lists and title lookups change when a new chapter comes
+# out, so those are kept short enough that "latest chapter" stays current.
+# kaliscan's image URLs carry a signed token that expires (~11h), so its
+# chapters are kept well inside that.
+CHAPTER_TTL = 6 * 3600
+KALISCAN_CHAPTER_TTL = 30 * 60
+SERIES_TTL = 30 * 60
+FIND_TTL = 30 * 60
+FIND_MISS_TTL = 10 * 60  # "not found anywhere" — rechecked sooner
+
+
+def _cacheable(response: JSONResponse, seconds: int) -> JSONResponse:
+    # Lets the reader's browser (and any CDN in front of this server) reuse
+    # the answer too, instead of asking again on every page view.
+    response.headers["Cache-Control"] = f"public, max-age={seconds}"
+    return response
+
+
 @app.get("/api/scrape")
 async def api_scrape(url: str = Query(..., description="Chapter URL to scrape")):
     _require_absolute_url(url)
+    kaliscan = "kaliscan" in url.lower()
 
     try:
-        payload = await scrape_chapter(url)
+        payload = await cache.cached(
+            "chapter", url, KALISCAN_CHAPTER_TTL if kaliscan else CHAPTER_TTL,
+            lambda: scrape_chapter(url),
+            keep=lambda p: bool(p and p.get("images")),
+        )
     except Exception:
         raise HTTPException(
             status_code=502, detail="Couldn't reach that page — the site may be blocking us."
         )
 
+    payload = dict(payload)
     payload["chapter_url"] = url
     payload["images"] = [img for img in payload.get("images", []) if img]
 
     response = JSONResponse(content=payload)
     response.headers["Referrer-Policy"] = "no-referrer"
+    if payload["images"]:
+        _cacheable(response, 300 if kaliscan else 3600)
     return response
 
 
@@ -175,7 +203,10 @@ async def api_series(url: str = Query(..., description="Series page URL to list 
     _require_absolute_url(url)
 
     try:
-        payload = await scrape_series(url)
+        payload = await cache.cached(
+            "series", url, SERIES_TTL, lambda: scrape_series(url),
+            keep=lambda p: bool(p and p.get("chapters")),
+        )
     except Exception:
         raise HTTPException(
             status_code=502, detail="Couldn't reach that page — the site may be blocking us."
@@ -183,6 +214,8 @@ async def api_series(url: str = Query(..., description="Series page URL to list 
 
     response = JSONResponse(content=payload)
     response.headers["Referrer-Policy"] = "no-referrer"
+    if payload.get("chapters"):
+        _cacheable(response, 300)
     return response
 
 
@@ -192,7 +225,10 @@ async def api_find(title: str = Query(..., description="Manga title to find a re
         raise HTTPException(status_code=400, detail="Missing title query parameter")
 
     try:
-        result = await find_best_source(title.strip())
+        result = await cache.cached(
+            "find", title, FIND_TTL, lambda: find_best_source(title.strip()),
+            miss_ttl=FIND_MISS_TTL,
+        )
     except Exception:
         raise HTTPException(status_code=502, detail="Couldn't search for that title right now.")
 
@@ -203,7 +239,7 @@ async def api_find(title: str = Query(..., description="Manga title to find a re
 
     response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
-    return response
+    return _cacheable(response, 300)
 
 
 @app.get("/api/video-lookup")
