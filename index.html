@@ -293,6 +293,10 @@ padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);font-size:14px}
 .narr-bar i{display:block;height:100%;background:var(--mint);width:0;transition:width .4s}
 .narr-panel audio{width:100%;margin-top:8px}
 .narr-panel .err{color:var(--bad);margin:6px 0 0}
+/* Reader pages: placeholder height until loaded, so lazy loading can tell
+   which pages are actually near the screen. */
+.rpage{width:100%;display:block;margin:0 0 4px;min-height:30vh;background:var(--surf)}
+.rpage.loaded{min-height:0;background:none}
 .trackbtn{width:100%;margin-top:10px;background:var(--mint);color:#0d2b26;border:none;
 border-radius:11px;padding:13px;font-weight:700;font-size:15px}
 .trackbtn.on{background:var(--surf2);color:var(--mint);border:1px solid var(--mint)}
@@ -2892,7 +2896,7 @@ function readerView(url, exclude){
       wireChapterPicker();
       renderReaderNav();
     }
-    document.getElementById("rpages").innerHTML=images.map(function(src){
+    document.getElementById("rpages").innerHTML=images.map(function(src, i){
       // comizy.io's image CDN rejects any request whose Referer isn't
       // comizy.io itself — a plain <img> load always sends *our* origin,
       // so those need routing through our proxy, which sets the right
@@ -2900,9 +2904,21 @@ function readerView(url, exclude){
       // so they stay direct to avoid needless bandwidth through our backend.
       var needsProxy=false;
       try{ needsProxy=/(^|\.)cmzcdn\.org$/i.test(new URL(src, location.href).hostname); }catch(e){}
-      return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
+      // The first few pages load straight away, at high priority. The rest
+      // wait until the reader scrolls near them — they hold a placeholder
+      // height until loaded, since an image with no height yet counts as
+      // "in view", and a ~200-image chapter would otherwise request every
+      // page at once, with page 1 queued behind page 150.
+      var attrs=i<EAGER_PAGES ? 'fetchpriority="high"' : 'loading="lazy"';
+      return '<img '+attrs+' class="rpage" decoding="async" '+
         'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
     }).join("");
+    Array.prototype.forEach.call(document.querySelectorAll("#rpages .rpage"), function(img){
+      var done=function(){ img.classList.add("loaded"); };
+      if(img.complete && img.naturalWidth) done();
+      else img.addEventListener("load", done, {once:true});
+    });
+    prefetchNextChapter();
     watchFirstPage(token, exclude);
     var shown=readerState.chapters&&readerState.chapters[readerState.index];
     mountNarration(shown?shown.url:url, token);
@@ -3037,6 +3053,16 @@ function pollNarration(base, job, el, token){
       .then(function(next){ pollNarration(base, next, el, token); })
       .catch(function(){ pollNarration(base, job, el, token); });
   }, 2500);
+}
+
+var EAGER_PAGES=3;
+
+/* While someone reads, fetch the next chapter's page list in the
+   background, so tapping Next doesn't wait on the scrape. It also fills
+   the server's shared cache for everyone reading after them. */
+function prefetchNextChapter(){
+  var chapters=readerState.chapters, next=chapters&&chapters[readerState.index+1];
+  if(next) setTimeout(function(){ scrapeChapter(next.url); }, 1500);
 }
 
 /* A site can hand back a full list of page URLs whose image server is

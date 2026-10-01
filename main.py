@@ -22,6 +22,25 @@ async def lifespan(app: FastAPI):
     poller.start()
     yield
     poller.stop()
+    if _proxy_client is not None:
+        await _proxy_client.aclose()
+
+
+# One long-lived client for the proxy, so its connections to an image CDN
+# stay open between requests. A chapter can be ~200 images; opening a
+# fresh TLS connection for every one made each image take 0.5-1.1s through
+# the proxy against ~0.3s direct.
+_proxy_client: Optional[httpx.AsyncClient] = None
+
+
+def _get_proxy_client() -> httpx.AsyncClient:
+    global _proxy_client
+    if _proxy_client is None:
+        _proxy_client = httpx.AsyncClient(
+            timeout=20.0,
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+        )
+    return _proxy_client
 
 
 app = FastAPI(title="MangaWhere scraper API", lifespan=lifespan)
@@ -125,16 +144,21 @@ async def _proxy(request: Request, target: str) -> Response:
         headers["Content-Type"] = request.headers.get("content-type", "application/json")
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            upstream = await client.request(request.method, target, headers=headers, content=body)
+        upstream = await _get_proxy_client().request(
+            request.method, target, headers=headers, content=body
+        )
     except Exception as e:
         return JSONResponse({"error": "upstream failed", "detail": str(e)}, status_code=502)
 
-    return Response(
-        content=upstream.content,
-        status_code=upstream.status_code,
-        media_type=upstream.headers.get("content-type", "application/json"),
-    )
+    media_type = upstream.headers.get("content-type", "application/json")
+    response = Response(content=upstream.content, status_code=upstream.status_code, media_type=media_type)
+    if upstream.status_code == 200 and media_type.startswith("image/"):
+        # Chapter images never change at a given URL, so the reader's
+        # browser (and any CDN in front of this server) can keep them —
+        # going back a chapter or re-opening one doesn't refetch every page
+        # through this server.
+        response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+    return response
 
 
 @app.get("/")

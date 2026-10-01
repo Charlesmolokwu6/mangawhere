@@ -1218,6 +1218,9 @@ SOURCES = {
 SOURCE_TIME_BUDGET = 30.0
 
 
+PROXIED_IMAGE_SOURCES = {"comizy"}
+
+
 async def _source_for(domain: str, title: str) -> Optional[Dict[str, Any]]:
     search, chapter_list = SOURCES[domain]
 
@@ -1253,9 +1256,15 @@ async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
     if not candidates:
         return None
 
-    # Most chapters wins ties, since a longer list at the same latest
-    # chapter means fewer gaps to hit while reading.
-    candidates.sort(key=lambda c: (c["chapters"][-1]["number"], len(c["chapters"])), reverse=True)
+    # On a tie for the latest chapter, prefer a site whose images load
+    # straight from its own CDN: comizy's must go through this server's
+    # proxy (its CDN checks the Referer), which is slower for readers and
+    # costs this server bandwidth for every page. Then, most chapters wins,
+    # since a longer list means fewer gaps to hit while reading.
+    candidates.sort(
+        key=lambda c: (c["chapters"][-1]["number"], c["domain"] not in PROXIED_IMAGE_SOURCES, len(c["chapters"])),
+        reverse=True,
+    )
     best = dict(candidates[0])
     best["alternates"] = candidates[1:]
     return best

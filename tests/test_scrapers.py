@@ -678,6 +678,33 @@ class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["domain"], "mangafreak")
         self.assertEqual([a["domain"] for a in result["alternates"]], ["mangaread", "comizy"])
 
+    async def test_on_a_tie_a_site_with_direct_images_beats_comizy(self):
+        def chapters(*numbers):
+            return [{"number": float(n), "url": f"u{n}", "title": ""} for n in numbers]
+
+        # comizy has more entries, but the same latest chapter: its images
+        # need this server's proxy, so the direct-image site wins.
+        found = {"comizy": chapters(0, 1, 2, 3, 4), "mangaread": chapters(1, 2, 3, 4)}
+
+        def fake_source(domain):
+            async def search(title):
+                return f"https://{domain}/series" if domain in found else None
+
+            async def chapter_list(url):
+                return found[domain]
+
+            return (search, chapter_list)
+
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "mangaread")
+
+        # ...but a comizy that is genuinely ahead still wins.
+        found["comizy"] = chapters(1, 2, 3, 4, 5)
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "comizy")
+
     async def test_one_source_raising_does_not_sink_the_others(self):
         async def boom(title):
             raise RuntimeError("site changed")

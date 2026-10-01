@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -26,6 +26,33 @@ class MainTestCase(unittest.TestCase):
 
 
 class ProxyTests(MainTestCase):
+    def _upstream(self, content_type, status=200):
+        response = AsyncMock()
+        response.status_code = status
+        response.content = b"\xff\xd8image-bytes"
+        response.headers = {"content-type": content_type}
+        return response
+
+    def test_proxied_images_are_cacheable_and_sent_with_comizys_referer(self):
+        with patch("httpx.AsyncClient.request", return_value=self._upstream("image/webp")) as request:
+            r = self.client.get("/", params={"url": "https://x3.cmzcdn.org/e/abc.webp"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["cache-control"], "public, max-age=604800, immutable")
+        self.assertEqual(request.call_args.kwargs["headers"]["Referer"], "https://comizy.io/")
+
+    def test_failed_or_non_image_responses_are_not_marked_cacheable(self):
+        with patch("httpx.AsyncClient.request", return_value=self._upstream("image/webp", 404)):
+            r = self.client.get("/", params={"url": "https://x3.cmzcdn.org/e/missing.webp"})
+        self.assertNotIn("cache-control", r.headers)
+        with patch("httpx.AsyncClient.request", return_value=self._upstream("application/json")):
+            r = self.client.get("/", params={"url": "https://api.jikan.moe/v4/top/manga"})
+        self.assertNotIn("cache-control", r.headers)
+
+    def test_the_proxy_reuses_one_client_across_requests(self):
+        import main
+
+        self.assertIs(main._get_proxy_client(), main._get_proxy_client())
+
     def test_root_without_url_serves_index(self):
         r = self.client.get("/")
         self.assertEqual(r.status_code, 200)
