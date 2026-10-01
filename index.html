@@ -436,8 +436,10 @@ font-weight:500;margin:0}
 overflow:hidden}
 .read.buy{border-left-color:#ffa94d}
 .read.buy .n{color:#ffa94d}
-.adslot{margin:16px 0 0;min-height:0;text-align:center}
+.adslot{margin:16px 0 0;min-height:0;text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px}
 .adslot:empty{display:none}
+.adlabel{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.adframe{border:0;max-width:100%;display:block;background:transparent}
 .more{background:none;border:none;color:var(--mint);font-size:13px;font-weight:600;
 padding:6px 0 0;cursor:pointer}
 .adultflag{color:#ff8fa8}
@@ -506,10 +508,25 @@ var HIDE_ADULT = false;
    simply don't appear rather than sending untagged traffic. */
 var AMAZON_TAG = "";
 
-/* Ad slot. Paste your network's script tag here once approved. It renders
-   below the read-here links — after the reader has been given what they
-   came for, never above it. */
-var AD_SLOT_HTML = "";
+/* Ads (Adsterra, or any network that gives you an HTML/script snippet).
+   Paste each ad unit's full code, exactly as the network shows it, into
+   the place you want it. Leave a place "" and nothing shows there.
+     home      - home page, below Trending
+     detail    - a title's page, below its chapter list
+     readerMid - halfway through a chapter (chapters of 20+ pages only)
+     readerEnd - end of a chapter, just above Prev / Next
+   Each ad runs in its own sandboxed frame (adFrame), so the network's
+   scripts can't touch this page or read anyone's sign-in. For a banner the
+   frame takes its size from the code's own width/height; for a native
+   banner (no size in its code) it uses AD_NATIVE_HEIGHT. */
+var ADS = {
+  home: "",
+  detail: "",
+  readerMid: "",
+  readerEnd: ""
+};
+var AD_NATIVE_HEIGHT = 300;
+var AD_SLOT_HTML = "";  // older single slot; used for `detail` if that's empty
 
 /* Cloudflare Turnstile — a free, privacy-friendly CAPTCHA replacement for
    the sign-up form's bot check. This is the *site key*, which is public
@@ -1590,7 +1607,8 @@ function homeView(){
    // Personal rows sit above trending: what's new for you, then what you
    // were just looking at, then everyone else's trending.
    '<div id="personal">'+updatesStrip()+recentHtml()+'</div>'+
-   '<div id="trend"></div>';
+   '<div id="trend"></div>'+
+   adFrame(ADS.home);
   document.getElementById("go").onclick=run;
   wireSuggest(document.getElementById("q"));
   wireUpdates();
@@ -2565,8 +2583,26 @@ function buyRow(m){
     '<span class="go">Shop →</span></a>';
 }
 
-function adSlot(){
-  return AD_SLOT_HTML ? '<div class="adslot">'+AD_SLOT_HTML+'</div>' : "";
+function adSlot(){ return adFrame(ADS.detail || AD_SLOT_HTML); }
+
+/* One ad, sandboxed: allow-scripts without allow-same-origin gives the
+   frame an opaque origin, so ad code can't read this page, its storage
+   (where the sign-in token lives) or its cookies. Clicks still open the
+   advertiser in a new tab. loading=lazy holds it back until it's near the
+   screen, so ads never compete with chapter pages for bandwidth. */
+function adFrame(code){
+  if(!code) return "";
+  var w=/['"]?width['"]?\s*:\s*(\d+)/.exec(code), h=/['"]?height['"]?\s*:\s*(\d+)/.exec(code);
+  var width=w?parseInt(w[1],10):0, height=h?parseInt(h[1],10):AD_NATIVE_HEIGHT;
+  var doc='<!doctype html><html><head><meta charset="utf-8">'+
+    '<meta name="viewport" content="width=device-width,initial-scale=1">'+
+    '<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}'+
+    'body{display:flex;justify-content:center}</style></head><body>'+code+'</body></html>';
+  return '<div class="adslot"><span class="adlabel">Ad</span>'+
+    '<iframe class="adframe" title="Advertisement" loading="lazy" scrolling="no" '+
+      'sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" '+
+      'style="width:'+(width?Math.min(width, 2000)+'px':'100%')+';height:'+height+'px" '+
+      'srcdoc="'+esc(doc)+'"></iframe></div>';
 }
 
 /* ================= reader (scraper-backed) =================
@@ -2863,6 +2899,7 @@ function readerView(url, exclude){
     '</div>'+
     '<p class="sub" id="rstatus">Loading…</p>'+
     '<div id="rpages"></div>'+
+    '<div id="radend"></div>'+
     '<div class="readernavslot"></div>'+
     commentsHtml()+
     recommendationsHtml();
@@ -2911,9 +2948,13 @@ function readerView(url, exclude){
       // "in view", and a ~200-image chapter would otherwise request every
       // page at once, with page 1 queued behind page 150.
       var attrs=i<EAGER_PAGES ? 'fetchpriority="high"' : 'loading="lazy"';
-      return '<img '+attrs+' class="rpage" decoding="async" '+
+      var page='<img '+attrs+' class="rpage" decoding="async" '+
         'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
+      // One ad halfway through a long chapter, never in a short one.
+      if(images.length>=20 && i===Math.floor(images.length/2)) page+=adFrame(ADS.readerMid);
+      return page;
     }).join("");
+    document.getElementById("radend").innerHTML=adFrame(ADS.readerEnd);
     Array.prototype.forEach.call(document.querySelectorAll("#rpages .rpage"), function(img){
       var done=function(){ img.classList.add("loaded"); };
       if(img.complete && img.naturalWidth) done();
