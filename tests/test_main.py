@@ -15,6 +15,9 @@ class MainTestCase(unittest.TestCase):
         db.DB_PATH = Path(self._tmp.name)
 
         import main
+        from server import cache
+
+        cache.clear_memory()
 
         self.client = TestClient(main.app)
 

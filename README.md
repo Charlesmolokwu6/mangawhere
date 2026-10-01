@@ -3,7 +3,7 @@
 ## Running it
 
 Everything — the frontend (`index.html`), accounts, push notifications,
-the ToonGod/Asura Scans reader, and the CORS proxy the frontend's own
+the manga reader and its narration, and the CORS proxy the frontend's own
 client-side API calls go through — is served by one Python app,
 `main.py`.
 
@@ -48,6 +48,9 @@ Optional environment variables (see `render.yaml`):
 - `GOOGLE_CLIENT_ID` — enables "Continue with Google" (see below). Also
   needed in `index.html` (it's public). Left unset, that button just
   doesn't render.
+- `OLLAMA_HOST`, `NARRATION_MODEL` — the optional AI storyteller for
+  chapter narration (see below). Left unset, narration just reads the
+  dialogue aloud.
 - `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` — enables "Continue with
   Facebook" (see below). The app ID is also needed in `index.html` (public);
   the secret stays here only. Left unset, that button just doesn't render.
@@ -129,6 +132,78 @@ to a private temp file at runtime, and handed straight to yt-dlp — it's
 never logged, and never appears in any API response. It'll need
 re-exporting occasionally once the session it holds expires or is signed
 out.
+
+## Storyteller mode (chapter narration)
+
+The reader has a floating **🎧 Listen** button that turns the current
+chapter into an MP3 — entirely free, no paid API (`server/storyteller.py`):
+
+1. **OCR** ([RapidOCR](https://github.com/RapidAI/RapidOCR), runs locally on
+   the CPU) reads every speech bubble, in reading order. Sound effects
+   (KRR, WOO…) are recognised and left out of the dialogue.
+2. **The script** is built from that text alone — every line, in order,
+   word for word, with a short attribution ("someone whispers"). If an
+   [Ollama](https://ollama.com) server is reachable, a small local AI model
+   picks how each line is delivered (shouts, whispers, asks…) from a fixed
+   list; without it, punctuation decides. The model is never allowed to
+   write text itself: letting llama3.2:3b write the narration freely was
+   tried, and it invented dialogue, creatures and settings that weren't in
+   the chapter.
+3. **Voice**: [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an
+   open-source voice model (Apache 2.0: free, including commercial use, with
+   no per-use limits) records it on the narration machine itself.
+   Listeners pick the narrator: Fenrir, Echo or Eric (male), Emma or
+   Jessica (female); the reader remembers their choice. Each chapter's
+   script is shared, and a voice is only recorded for a chapter the first
+   time someone picks it. The model (~330MB, plus 28MB of voices) downloads
+   into `data/kokoro/` on first use; set `KOKORO_MODEL=kokoro-v1.0.int8.onnx`
+   for a smaller (~90MB) but slower version.
+
+A long chapter takes a few minutes the first time (it runs as a background
+job with a progress bar); after that the MP3 is cached in
+`data/narration/`.
+
+Why OCR rather than a vision model like moondream: moondream was tried
+first on real pages, and it paraphrased dialogue, invented lines that
+weren't on the page, and misdescribed scenes. OCR reads what's actually
+written.
+
+**Running it locally, with the AI storyteller:**
+```
+pip install -r requirements.txt
+ollama pull llama3.2:3b      # ~2GB, one-time; needs Ollama installed and running
+uvicorn main:app --port 8000
+```
+
+**On Render's free plan, narration is off.** Reading a chapter's pages
+peaks at ~600MB of memory (measured), over the free plan's 512MB — running
+it there would crash the whole site, not just narration. So on Render
+(which sets `RENDER=true`) the Listen button doesn't appear unless
+narration is pointed somewhere else:
+
+1. Run a second copy of this app on a machine with at least ~2GB of RAM
+   (4GB+ with Ollama) — e.g. Oracle Cloud's Always Free VM, a small VPS,
+   or your own computer behind a Cloudflare Tunnel. Same
+   `pip install -r requirements.txt` and `uvicorn main:app`; add Ollama
+   there if you want it.
+2. Set `NARRATION_URL` on Render to that copy's public address (e.g.
+   `https://narrator.example.com`) and redeploy.
+
+The reader then sends narration requests straight to that machine;
+everything else keeps running on Render.
+
+Environment variables (all optional):
+- `NARRATION_URL` — address of another deployment of this app that does
+  the narrating (see above). Set this on Render.
+- `NARRATION_ENABLED` — `true`/`false` to force narration on or off on
+  this server. Unset, it's on everywhere except Render.
+- `OLLAMA_HOST` — where Ollama is. Defaults to `http://localhost:11434`.
+- `NARRATION_MODEL` — which Ollama model picks each line's delivery.
+  Defaults to `llama3.2:3b`.
+
+The Listen button only appears when the server reports narration as
+available (`/api/config`), so a server without these dependencies just
+doesn't show it.
 
 ## Advertising
 
