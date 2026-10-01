@@ -1,3 +1,4 @@
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from server import auth, cache, captcha, comments, db, media, oauth, poller, push, storyteller, turnstile, watch
+from server import auth, cache, captcha, comments, db, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -313,6 +314,20 @@ async def api_register(request: Request):
     return JSONResponse(result)
 
 
+@app.post("/api/forgot-password")
+async def api_forgot_password(payload: dict):
+    result = await asyncio.to_thread(
+        password_reset.request_reset, str(payload.get("email") or ""), str(payload.get("link") or "")
+    )
+    return JSONResponse(result, status_code=200 if "message" in result else 400)
+
+
+@app.post("/api/reset-password")
+async def api_reset_password(payload: dict):
+    result = password_reset.reset_password(str(payload.get("token") or ""), str(payload.get("password") or ""))
+    return JSONResponse(result, status_code=200 if "token" in result else 400)
+
+
 @app.post("/api/login")
 async def api_login(request: Request):
     payload = await request.json()
@@ -392,6 +407,7 @@ async def api_avatar(
 async def api_config():
     return {
         "vapid_public_key": push.public_key_b64(),
+        "password_reset": password_reset.available(),
         "narration": await storyteller.availability(),
     }
 

@@ -205,6 +205,31 @@ The Listen button only appears when the server reports narration as
 available (`/api/config`), so a server without these dependencies just
 doesn't show it.
 
+## Password reset (email)
+
+The sign-in page has a "Forgot password?" link that emails a one-time
+link (valid 1 hour) to choose a new password (`server/password_reset.py`).
+Saving it signs the reader in and signs them out on every other device.
+It also lets people who signed up with Google/Facebook add a password.
+The link only appears once email sending is set up.
+
+Any email provider that offers SMTP works. Free options include Brevo
+(a free plan with a daily sending limit), Gmail (with an "app password",
+fine for small volumes), Resend and Amazon SES; check each one's current
+free limits. For lots of users, use a provider with your own domain
+verified, so the emails don't land in spam.
+
+Set these in Render's environment variables, then redeploy:
+- `SMTP_HOST`, e.g. `smtp-relay.brevo.com` or `smtp.gmail.com`
+- `SMTP_PORT`, usually `587` (or `465`)
+- `SMTP_USERNAME`, `SMTP_PASSWORD`: from the provider (for Gmail, an app
+  password, never your normal one)
+- `MAIL_FROM`, e.g. `MangaWhere <no-reply@yourdomain.com>`; it must be a
+  sender the provider has verified
+- `RESET_LINK_ORIGINS` (optional): extra site addresses the reset link may
+  point to, comma-separated, e.g. a custom domain. GitHub Pages and the
+  Render address are allowed already.
+
 ## Advertising
 
 `index.html`'s `AD_SLOT_HTML` (near `TURNSTILE_SITE_KEY`, `AMAZON_TAG`)

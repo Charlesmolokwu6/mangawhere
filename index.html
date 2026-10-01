@@ -75,6 +75,7 @@ padding:14px;font-weight:700;font-size:15px;margin-top:4px}
 .linkish{background:none;border:none;color:var(--mint);font-weight:600;
 font-size:inherit;padding:0;text-decoration:underline;cursor:pointer}
 .swap{margin-top:16px}
+.forgot{margin:2px 0 0;text-align:right;font-size:14px}
 .pitch{max-width:420px;margin:22px auto 0;text-align:center}
 .pitch h1{font-size:23px;margin:0 0 8px}
 .pitch .sub{margin:0 0 20px}
@@ -3579,6 +3580,8 @@ function authView(mode, thenTrack){
           '<input id="au-cap" type="text" autocomplete="off" autocapitalize="characters" '+
           'spellcheck="false" maxlength="5" placeholder="5 characters"></label>'))+
       '<button class="primary" id="au-go">'+(login?"Sign in":"Create account")+'</button>'+
+      (login?'<p class="forgot" id="au-forgot" hidden><button type="button" class="linkish" id="au-forgot-btn">'+
+        'Forgot password?</button></p>':"")+
       '<p class="err" id="au-err"></p>'+
     '</div>'+
     '<p class="hint swap">'+(login
@@ -3589,6 +3592,16 @@ function authView(mode, thenTrack){
   document.getElementById("au-swap").onclick=function(){
     authView(login?"signup":"login", thenTrack);
   };
+  if(login){
+    // Only offered once the server can actually send the email.
+    getServerConfig().then(function(cfg){
+      var row=document.getElementById("au-forgot");
+      if(row && cfg.password_reset) row.hidden=false;
+    });
+    document.getElementById("au-forgot-btn").onclick=function(){
+      forgotView(document.getElementById("au-email").value.trim());
+    };
+  }
 
   /* Lets someone check what they actually typed before submitting, same
      as every password manager and modern sign-up form does. */
@@ -3789,6 +3802,111 @@ function authView(mode, thenTrack){
     };
   });
   window.scrollTo(0,0);
+}
+
+/* ================= password reset =================
+   "Forgot password?" emails a one-time link (server/password_reset.py)
+   back to this same page with #reset=<token>; opening it shows the
+   choose-a-new-password screen. */
+var serverConfig=null;
+function getServerConfig(){
+  if(!serverConfig){
+    serverConfig=fetch(API_BASE+"/api/config").then(function(r){ return r.json(); })
+      .catch(function(){ serverConfig=null; return {}; });
+  }
+  return serverConfig;
+}
+
+function forgotView(prefill){
+  stopRail();
+  var view=document.getElementById("app");
+  view.innerHTML=
+    '<button class="back" id="fbk">← Back</button>'+
+    '<h1>Reset your password</h1>'+
+    '<p class="sub">Enter the email you signed up with and we\'ll send you a link to choose a new password.</p>'+
+    '<div class="form">'+
+      '<label>Email<input id="fp-email" type="email" autocomplete="email" inputmode="email" '+
+        'placeholder="you@example.com" value="'+esc(prefill||"")+'"></label>'+
+      '<button class="primary" id="fp-go">Send reset link</button>'+
+      '<p class="err" id="fp-err"></p>'+
+    '</div>'+
+    '<div class="note" id="fp-sent" hidden><p><strong>Check your email</strong><span id="fp-msg"></span></p></div>';
+  document.getElementById("fbk").onclick=function(){ authView("login"); };
+  var go=document.getElementById("fp-go"), err=document.getElementById("fp-err");
+  function submit(){
+    var email=document.getElementById("fp-email").value.trim();
+    if(!email){ err.textContent="Enter your email address."; return; }
+    err.textContent=""; go.disabled=true; go.textContent="Sending…";
+    api("/api/forgot-password",{method:"POST",body:JSON.stringify({
+      email:email, link:location.origin+location.pathname
+    })}).then(function(d){
+      go.disabled=false; go.textContent="Send reset link";
+      if(d.error){ err.textContent=d.error; return; }
+      document.getElementById("fp-msg").textContent=d.message;
+      document.getElementById("fp-sent").hidden=false;
+      go.textContent="Send again";
+    }).catch(function(){
+      go.disabled=false; go.textContent="Send reset link";
+      err.textContent="Couldn't reach the server. Check your connection and try again.";
+    });
+  }
+  go.onclick=submit;
+  document.getElementById("fp-email").onkeydown=function(e){ if(e.key==="Enter") submit(); };
+  window.scrollTo(0,0);
+}
+
+function resetView(token){
+  stopRail();
+  var view=document.getElementById("app");
+  view.innerHTML=
+    '<h1>Choose a new password</h1>'+
+    '<p class="sub">You\'ll be signed in afterwards, and signed out on every other device.</p>'+
+    '<div class="form">'+
+      '<label>New password<input id="rp-pass" type="password" autocomplete="new-password" '+
+        'placeholder="At least 8 characters"></label>'+
+      '<label>Confirm new password<input id="rp-pass2" type="password" autocomplete="new-password" '+
+        'placeholder="Type it again"></label>'+
+      '<button class="primary" id="rp-go">Save new password</button>'+
+      '<p class="err" id="rp-err"></p>'+
+    '</div>'+
+    '<p class="hint swap" id="rp-again" hidden><button class="linkish" id="rp-again-btn">Send a new link</button></p>';
+  var go=document.getElementById("rp-go"), err=document.getElementById("rp-err");
+  document.getElementById("rp-again-btn").onclick=function(){ forgotView(""); };
+  function submit(){
+    var p1=document.getElementById("rp-pass").value, p2=document.getElementById("rp-pass2").value;
+    if(p1.length<8){ err.textContent="Password must be at least 8 characters."; return; }
+    if(p1!==p2){ err.textContent="Passwords don't match."; return; }
+    err.textContent=""; go.disabled=true; go.textContent="Saving…";
+    api("/api/reset-password",{method:"POST",body:JSON.stringify({token:token, password:p1})})
+      .then(function(d){
+        if(d.error){
+          err.textContent=d.error; go.disabled=false; go.textContent="Save new password";
+          document.getElementById("rp-again").hidden=false;
+          return;
+        }
+        saveAuth({token:d.token, email:d.email, name:d.name, avatar_url:d.avatar_url||null});
+        return pullServerList().then(function(){ setTab("list"); });
+      }).catch(function(){
+        go.disabled=false; go.textContent="Save new password";
+        err.textContent="Couldn't reach the server. Check your connection and try again.";
+      });
+  }
+  go.onclick=submit;
+  ["rp-pass","rp-pass2"].forEach(function(id){
+    document.getElementById(id).onkeydown=function(e){ if(e.key==="Enter") submit(); };
+  });
+  window.scrollTo(0,0);
+}
+
+/* A reset link lands here as #reset=<token>. The token is taken out of the
+   address bar straight away, so it isn't left in history or shared by
+   accident. */
+function openResetFromUrl(){
+  var m=/^#reset=([A-Za-z0-9_-]{20,})$/.exec(location.hash||"");
+  if(!m) return false;
+  try{ history.replaceState(null, "", location.pathname+location.search); }catch(e){}
+  resetView(m[1]);
+  return true;
 }
 
 /* Speaks about this device only, and offers the fix when it can. */
@@ -4222,9 +4340,14 @@ if(isIOS() && !isStandalone() && !store.get("mw.noinstall")){
   setTimeout(function(){ showInstallBar(true); }, 3000);
 }
 document.getElementById("home").onclick=function(){homeView();};
+// A reset link opened in a tab that already has the site open only
+// changes the #fragment, which doesn't reload the page.
+window.addEventListener("hashchange", openResetFromUrl);
 loadAuth();
-homeView();
-openFromUrl();
+if(!openResetFromUrl()){
+  homeView();
+  openFromUrl();
+}
 updateBadge();
 </script>
 </body>

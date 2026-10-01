@@ -76,3 +76,15 @@ services:
       # copy of this app on a bigger machine to turn the Listen button on.
       - key: NARRATION_URL
         sync: false
+      # Optional (see README.md) — email for "Forgot password?". Leave unset
+      # and the link just doesn't show.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false
