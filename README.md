@@ -149,8 +149,15 @@ chapter into an MP3 — entirely free, no paid API (`server/storyteller.py`):
    write text itself: letting llama3.2:3b write the narration freely was
    tried, and it invented dialogue, creatures and settings that weren't in
    the chapter.
-3. **Voice**: [edge-tts](https://github.com/rany2/edge-tts) (Microsoft
-   Edge's free online voices) records it — Christopher or Aria.
+3. **Voice**: [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an
+   open-source voice model (Apache 2.0: free, including commercial use, with
+   no per-use limits) records it on the narration machine itself.
+   Listeners pick the narrator: Fenrir, Echo or Eric (male), Emma or
+   Jessica (female); the reader remembers their choice. Each chapter's
+   script is shared, and a voice is only recorded for a chapter the first
+   time someone picks it. The model (~330MB, plus 28MB of voices) downloads
+   into `data/kokoro/` on first use; set `KOKORO_MODEL=kokoro-v1.0.int8.onnx`
+   for a smaller (~90MB) but slower version.
 
 A long chapter takes a few minutes the first time (it runs as a background
 job with a progress bar); after that the MP3 is cached in

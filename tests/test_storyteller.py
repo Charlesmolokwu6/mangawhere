@@ -178,7 +178,7 @@ class JobTests(unittest.TestCase):
                  patch.object(storyteller, "fetch_image", AsyncMock(return_value=b"img")), \
                  patch.object(storyteller, "ocr_page", side_effect=[["KRR"], ["WE HAVE TO GO."]]), \
                  patch.object(storyteller, "synthesize", side_effect=fake_synth):
-                started = await storyteller.start("https://site/ch-1", ["a.jpg", "b.jpg"], "aria")
+                started = await storyteller.start("https://site/ch-1", ["a.jpg", "b.jpg"], "jessica")
                 await storyteller._jobs[started["job"]]["_task"]
                 return started["job"]
 
@@ -186,7 +186,7 @@ class JobTests(unittest.TestCase):
         state = storyteller.get_job(job)
         self.assertEqual(state["state"], "done")
         self.assertEqual(state["mode"], "dialogue")
-        self.assertEqual(state["voice"], "aria")
+        self.assertEqual(state["voice"], "jessica")
         self.assertEqual((Path(self._dir.name) / f"{job}.txt").read_text(), "\u201cWe have to go,\u201d a voice says.")
         self.assertTrue(storyteller.audio_path(job).exists())
 
@@ -194,7 +194,7 @@ class JobTests(unittest.TestCase):
         # even once the in-memory job is gone (e.g. after a restart).
         storyteller._jobs.clear()
         with patch.object(storyteller, "storyteller_available", AsyncMock(return_value=False)):
-            again = asyncio.run(storyteller.start("https://site/ch-1", ["a.jpg", "b.jpg"], "aria"))
+            again = asyncio.run(storyteller.start("https://site/ch-1", ["a.jpg", "b.jpg"], "jessica"))
         self.assertEqual(again["state"], "done")
         self.assertEqual(again["job"], job)
 
@@ -203,7 +203,7 @@ class JobTests(unittest.TestCase):
             with patch.object(storyteller, "storyteller_available", AsyncMock(return_value=False)), \
                  patch.object(storyteller, "fetch_image", AsyncMock(return_value=b"img")), \
                  patch.object(storyteller, "ocr_page", return_value=["KRR"]):
-                started = await storyteller.start("https://site/ch-2", ["a.jpg"], "christopher")
+                started = await storyteller.start("https://site/ch-2", ["a.jpg"], "fenrir")
                 await storyteller._jobs[started["job"]]["_task"]
                 return started["job"]
 
@@ -221,13 +221,57 @@ class JobTests(unittest.TestCase):
                  patch.object(storyteller, "ocr_page", return_value=["HELLO THERE."]), \
                  patch.object(storyteller, "storyteller_script", AsyncMock(side_effect=RuntimeError("ollama down"))), \
                  patch.object(storyteller, "synthesize", side_effect=fake_synth):
-                started = await storyteller.start("https://site/ch-3", ["a.jpg"], "christopher")
+                started = await storyteller.start("https://site/ch-3", ["a.jpg"], "fenrir")
                 await storyteller._jobs[started["job"]]["_task"]
                 return started["job"]
 
         state = storyteller.get_job(asyncio.run(run()))
         self.assertEqual(state["state"], "done")
         self.assertEqual(state["mode"], "dialogue")
+
+
+class VoiceTests(unittest.TestCase):
+    def test_listeners_choose_from_five_kokoro_voices(self):
+        self.assertEqual(list(storyteller.VOICES), ["fenrir", "echo", "eric", "emma", "jessica"])
+        self.assertEqual(storyteller.DEFAULT_VOICE, "fenrir")
+        self.assertEqual(storyteller.VOICES["emma"][0], "bf_emma")
+
+    def test_the_picker_gets_names_and_the_default(self):
+        with patch.dict("os.environ", {"NARRATION_ENABLED": "1"}), \
+             patch.object(storyteller, "storyteller_available", AsyncMock(return_value=False)), \
+             patch.object(storyteller, "_tts_available", return_value=True), \
+             patch.object(storyteller, "_ocr_installed", return_value=True):
+            os.environ.pop("NARRATION_URL", None)
+            info = asyncio.run(storyteller.availability())
+        self.assertIn({"id": "jessica", "name": "Jessica (female)"}, info["voices"])
+        self.assertEqual(info["default_voice"], "fenrir")
+
+    def test_an_unknown_voice_falls_back_to_the_default(self):
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(storyteller, "NARRATION_DIR", Path(d)), \
+             patch.object(storyteller, "storyteller_available", AsyncMock(return_value=False)), \
+             patch.object(storyteller, "_run", AsyncMock()):
+            storyteller._jobs.clear()
+            state = asyncio.run(storyteller.start("https://site/ch-9", ["a.jpg"], "christopher"))
+        self.assertEqual(state["voice"], "fenrir")
+
+    def test_paragraphs_are_spoken_separately_with_a_pause_and_encoded_as_mp3(self):
+        import numpy as np
+
+        class FakeKokoro:
+            def __init__(self):
+                self.calls = []
+
+            def create(self, text, voice, speed, lang):
+                self.calls.append((text, voice))
+                return np.full(24000, 0.1, dtype="float32"), 24000  # one second each
+
+        kokoro = FakeKokoro()
+        mp3 = storyteller._record(kokoro, "\u201cRun!\u201d a voice shouts.\n\nA sound rings out.", "am_fenrir")
+        self.assertEqual(kokoro.calls, [("\u201cRun!\u201d a voice shouts.", "am_fenrir"), ("A sound rings out.", "am_fenrir")])
+        self.assertTrue(mp3[:3] == b"ID3" or mp3[0] == 0xFF)  # an MP3 stream
+        # ~2.9s of audio (2 x 1s + 2 pauses) at 64kbps is roughly 23KB
+        self.assertGreater(len(mp3), 15000)
 
 
 class WhereNarrationRunsTests(unittest.TestCase):
@@ -270,7 +314,7 @@ class NarrateApiTests(unittest.TestCase):
         Path(self._tmp.name).unlink(missing_ok=True)
 
     def test_config_reports_narration_availability(self):
-        avail = {"available": True, "storyteller": False, "voices": ["christopher", "aria"]}
+        avail = {"available": True, "storyteller": False, "voices": [{"id": "fenrir", "name": "Fenrir (male)"}]}
         with patch.object(storyteller, "availability", AsyncMock(return_value=avail)):
             r = self.client.get("/api/config")
         self.assertEqual(r.json()["narration"], avail)
@@ -288,12 +332,12 @@ class NarrateApiTests(unittest.TestCase):
              patch.object(storyteller, "start", AsyncMock(return_value={"job": "a" * 20, "state": "queued"})) as start:
             r = self.client.post(
                 "/api/narrate",
-                json={"chapter_url": "https://ww3.mangafreak.me/Read1_Gosu_1", "voice": "aria",
+                json={"chapter_url": "https://ww3.mangafreak.me/Read1_Gosu_1", "voice": "jessica",
                       "images": ["http://169.254.169.254/latest/meta-data"]},
             )
         self.assertEqual(r.status_code, 200)
         scrape.assert_awaited_once_with("https://ww3.mangafreak.me/Read1_Gosu_1")
-        start.assert_awaited_once_with("https://ww3.mangafreak.me/Read1_Gosu_1", chapter["images"], "aria")
+        start.assert_awaited_once_with("https://ww3.mangafreak.me/Read1_Gosu_1", chapter["images"], "jessica")
 
     def test_narrate_refuses_when_narration_lives_on_another_server(self):
         remote = {"available": True, "base": "https://narrator.example.com"}

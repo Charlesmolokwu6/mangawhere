@@ -2913,7 +2913,8 @@ function readerView(url, exclude){
    A floating "Listen" button in the reader. The backend (server/
    storyteller.py) reads each page's speech bubbles with OCR, optionally
    has a local AI model narrate them, and records an MP3 with a free
-   Edge voice. That takes minutes, so it runs as a job this polls. Only
+   open-source Kokoro voice the listener picks. That takes minutes, so it
+   runs as a job this polls. Only
    shown when the backend says narration is set up (/api/config). */
 var narrationConfig=null;
 var narration={audio:null, timer:null};
@@ -2949,6 +2950,19 @@ function stopNarration(){
   if(old) old.remove();
 }
 
+/* Listeners pick their narrator; the choice is remembered on this device
+   for next time. Voices come from the narration server's own list. */
+var VOICE_KEY="mw-narration-voice";
+function rememberVoice(v){ try{ localStorage.setItem(VOICE_KEY, v); }catch(e){} }
+function voiceOptions(cfg){
+  var voices=cfg.voices||[], saved=null;
+  try{ saved=localStorage.getItem(VOICE_KEY); }catch(e){}
+  var chosen=voices.some(function(v){ return v.id===saved; }) ? saved : cfg.default_voice;
+  return voices.map(function(v){
+    return '<option value="'+esc(v.id)+'"'+(v.id===chosen?' selected':'')+'>'+esc(v.name)+'</option>';
+  }).join("");
+}
+
 var NARRATION_STAGE={queued:"Waiting in line…", reading:"Reading the pages", writing:"Choosing how each line is said",
   speaking:"Recording the voice…", done:"Ready", error:"Failed"};
 
@@ -2966,14 +2980,14 @@ function mountNarration(chapterUrl, token){
       : "Reads the chapter’s dialogue aloud with a free voice.";
     panel.innerHTML='<h4>Storyteller mode <button aria-label="Close">×</button></h4>'+
       '<p class="sub">'+how+' Takes a few minutes the first time.</p>'+
-      '<select aria-label="Voice"><option value="christopher">Christopher (male)</option>'+
-        '<option value="aria">Aria (female)</option></select>'+
+      '<select aria-label="Voice">'+voiceOptions(cfg)+'</select>'+
       '<button class="go">Narrate this chapter</button>'+
       '<div class="narr-status"></div>';
     panel.querySelector("h4 button").onclick=function(){ panel.hidden=true; fab.hidden=false; };
     fab.onclick=function(){ panel.hidden=false; fab.hidden=true; };
     panel.querySelector(".go").onclick=function(){
       var voice=panel.querySelector("select").value;
+      rememberVoice(voice);
       panel.querySelector("select").disabled=true;
       this.hidden=true;
       startNarration(cfg.base, chapterUrl, voice, panel.querySelector(".narr-status"), token);

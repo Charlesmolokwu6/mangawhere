@@ -17,7 +17,10 @@ A chapter is only images, so it goes through three steps:
    list; otherwise punctuation decides. The model never writes text:
    given free rein, even a 3B model strictly told not to invented
    dialogue and events that weren't in the chapter.
-3. edge-tts (Microsoft Edge's free online voices) speaks it to an MP3.
+3. Kokoro (open-source, Apache 2.0, runs locally) speaks it to an MP3, in
+   whichever of VOICES the listener picked. Microsoft Edge's online voices
+   were used first, but they're only reachable through an unofficial route
+   that heavy traffic would get blocked; Kokoro has no per-use limits.
 
 Chapters take minutes on a CPU, so narration runs as a background job the
 reader polls; finished audio is cached on disk by chapter + voice + mode.
@@ -42,11 +45,29 @@ if not OLLAMA_HOST.startswith("http"):
     OLLAMA_HOST = "http://" + OLLAMA_HOST
 NARRATION_MODEL = os.environ.get("NARRATION_MODEL", "llama3.2:3b")
 
+# Listener-facing voice id -> (Kokoro voice, label shown in the picker).
+# Each chapter's script is shared; only the recording is per voice, and a
+# voice is only recorded for a chapter once someone actually picks it.
 VOICES = {
-    "christopher": "en-US-ChristopherNeural",
-    "aria": "en-US-AriaNeural",
+    "fenrir": ("am_fenrir", "Fenrir (male)"),
+    "echo": ("am_echo", "Echo (male)"),
+    "eric": ("am_eric", "Eric (male)"),
+    "emma": ("bf_emma", "Emma (female, British)"),
+    "jessica": ("af_jessica", "Jessica (female)"),
 }
-DEFAULT_VOICE = "christopher"
+DEFAULT_VOICE = "fenrir"
+
+# Kokoro's model files (from the kokoro-onnx project's model release),
+# downloaded on first use into KOKORO_DIR. The full-precision model is the
+# default: on a 4-core CPU it records ~2.8x faster than real time using
+# ~1GB of RAM, where the int8 one (KOKORO_MODEL=kokoro-v1.0.int8.onnx) saves
+# memory but ran slower than real time on the same machine.
+KOKORO_DIR = Path(os.environ.get("KOKORO_DIR", str(DATA_DIR / "kokoro")))
+KOKORO_MODEL = os.environ.get("KOKORO_MODEL", "kokoro-v1.0.onnx")
+KOKORO_VOICES_FILE = "voices-v1.0.bin"
+KOKORO_RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
+MP3_BITRATE = 64  # kbps mono: speech stays clear, ~0.5MB per minute
+PARAGRAPH_PAUSE = 0.45  # seconds of silence between paragraphs
 
 MAX_PAGES = 150
 PAGES_PER_LLM_CHUNK = 8
@@ -86,10 +107,11 @@ def _get_ocr():
 
 def _tts_available() -> bool:
     try:
-        import edge_tts  # noqa: F401
-    except ImportError:
+        import importlib.util
+
+        return all(importlib.util.find_spec(m) is not None for m in ("kokoro_onnx", "lameenc"))
+    except Exception:
         return False
-    return True
 
 
 def _ocr_installed() -> bool:
@@ -158,7 +180,8 @@ async def availability() -> Dict[str, Any]:
     return {
         "available": available,
         "storyteller": available and await storyteller_available(),
-        "voices": list(VOICES),
+        "voices": [{"id": vid, "name": label} for vid, (_, label) in VOICES.items()],
+        "default_voice": DEFAULT_VOICE,
     }
 
 
@@ -544,11 +567,67 @@ async def storyteller_script(pages: List[List[str]], progress=None) -> str:
 # Step 3: speech
 # --------------------------------------------------------------------------
 
-async def synthesize(script: str, voice: str, output_file: Path) -> None:
-    import edge_tts
+_kokoro = None
+_kokoro_lock = asyncio.Lock()
 
+
+def _download(name: str) -> None:
+    target = KOKORO_DIR / name
+    if target.exists():
+        return
+    KOKORO_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".part")
+    with httpx.stream("GET", KOKORO_RELEASE + name, follow_redirects=True, timeout=600.0) as response:
+        response.raise_for_status()
+        with open(tmp, "wb") as out:
+            for block in response.iter_bytes(1 << 20):
+                out.write(block)
+    tmp.replace(target)
+
+
+def _load_kokoro():
+    from kokoro_onnx import Kokoro
+
+    _download(KOKORO_MODEL)
+    _download(KOKORO_VOICES_FILE)
+    return Kokoro(str(KOKORO_DIR / KOKORO_MODEL), str(KOKORO_DIR / KOKORO_VOICES_FILE))
+
+
+async def _get_kokoro():
+    global _kokoro
+    async with _kokoro_lock:
+        if _kokoro is None:
+            _kokoro = await asyncio.to_thread(_load_kokoro)
+    return _kokoro
+
+
+def _record(kokoro, script: str, kokoro_voice: str) -> bytes:
+    """Speak the script paragraph by paragraph (short inputs keep Kokoro's
+    pacing natural), with a short pause between them, then encode as MP3."""
+    import lameenc
+    import numpy as np
+
+    pieces, rate = [], 24000
+    for paragraph in [p.strip() for p in script.split("\n\n") if p.strip()]:
+        samples, rate = kokoro.create(paragraph, voice=kokoro_voice, speed=1.0, lang="en-us")
+        pieces.append(samples)
+        pieces.append(np.zeros(int(rate * PARAGRAPH_PAUSE), dtype=samples.dtype))
+    audio = np.concatenate(pieces) if pieces else np.zeros(0, dtype="float32")
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+
+    encoder = lameenc.Encoder()
+    encoder.set_bit_rate(MP3_BITRATE)
+    encoder.set_in_sample_rate(rate)
+    encoder.set_channels(1)
+    encoder.set_quality(2)
+    return encoder.encode(pcm) + encoder.flush()
+
+
+async def synthesize(script: str, voice: str, output_file: Path) -> None:
+    kokoro = await _get_kokoro()
+    mp3 = await asyncio.to_thread(_record, kokoro, script, VOICES[voice][0])
     tmp = output_file.with_suffix(".part")
-    await edge_tts.Communicate(script, VOICES[voice]).save(str(tmp))
+    tmp.write_bytes(mp3)
     tmp.replace(output_file)
 
 
@@ -562,7 +641,7 @@ _run_lock = asyncio.Lock()  # one chapter at a time: OCR + LLM saturate the CPU
 
 # Part of every cached narration's key — bump it whenever the script a
 # chapter produces changes, so old cached MP3s aren't served again.
-SCRIPT_VERSION = 3
+SCRIPT_VERSION = 4
 
 
 def job_id(chapter_url: str, voice: str, mode: str) -> str:
@@ -659,7 +738,10 @@ async def _run(state: Dict[str, Any], chapter_url: str, images: List[str]) -> No
             if not script:
                 raise RuntimeError("This chapter has no dialogue to read — only sound effects.")
 
-            state.update(state="speaking", message="Recording the voice…")
+            state.update(
+                state="speaking",
+                message="Recording the voice…" if _kokoro else "Loading the voice (first time only)…",
+            )
             await synthesize(script, state["voice"], audio_path(job))
             (NARRATION_DIR / f"{job}.txt").write_text(script)
 
