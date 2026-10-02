@@ -8,3 +8,8 @@ python-multipart==0.0.9
 yt-dlp==2026.8.19
 faster-whisper==1.2.1
 libsql==0.1.11
+kokoro-onnx==0.6.1
+lameenc==1.8.4
+rapidocr-onnxruntime==1.4.4
+pillow==12.3.0
+wordninja==2.0.0

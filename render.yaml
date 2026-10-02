@@ -63,3 +63,28 @@ services:
         sync: false
       - key: FACEBOOK_APP_SECRET
         sync: false
+      # Optional (see README.md) — the local AI that picks how each line of
+      # a narrated chapter is delivered. Ollama can't run on the free plan
+      # itself (it needs GBs of RAM), so this points at one running
+      # elsewhere. Left unset, punctuation decides instead.
+      - key: OLLAMA_HOST
+        sync: false
+      - key: NARRATION_MODEL
+        sync: false
+      # Optional (see README.md) — narration can't run on the free plan
+      # (it needs ~600MB), so it's off here. Set this to the address of a
+      # copy of this app on a bigger machine to turn the Listen button on.
+      - key: NARRATION_URL
+        sync: false
+      # Optional (see README.md) — email for "Forgot password?". Leave unset
+      # and the link just doesn't show.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false

@@ -1,7 +1,11 @@
+import asyncio
+import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from scrapers import clean_image_urls, extract_chapter_list, extract_image_urls_from_html
+from scrapers import core
+from scrapers.matching import title_score
 from scrapers.core import (
     _best_match,
     _detect_domain,
@@ -14,6 +18,7 @@ from scrapers.core import (
     scrape_mangadex_chapter_list,
     scrape_mangakatana_chapter_list,
     scrape_weebcentral,
+    scrape_weebcentral_chapter_list,
     search_comizy,
     search_flamecomics,
     search_mangadex,
@@ -323,9 +328,9 @@ class ComizyTests(unittest.IsolatedAsyncioTestCase):
         payload = {
             "data": {
                 "chapters": [
-                    {"id": "b", "url": "/solo-leveling/chapter-2", "name": "Chapter 2", "number": 2},
-                    {"id": "a", "url": "/solo-leveling/chapter-1", "name": "Chapter 1", "number": 1},
-                    {"id": "a-dup", "url": "/solo-leveling/chapter-1-again", "name": "Chapter 1 (dup)", "number": 1},
+                    {"id": "b", "url": "/solo-leveling/chapter-2", "name": "Chapter 2", "number": 5},
+                    {"id": "a", "url": "/solo-leveling/chapter-1", "name": "Chapter 1", "number": 4},
+                    {"id": "a-dup", "url": "/solo-leveling/chapter-1-again", "name": "Chapter 1 (dup)", "number": 3},
                 ]
             }
         }
@@ -339,6 +344,28 @@ class ComizyTests(unittest.IsolatedAsyncioTestCase):
                 {"number": 2.0, "url": "https://comizy.io/solo-leveling/chapter-2", "title": "Chapter 2"},
             ],
         )
+
+    async def test_chapter_list_numbers_come_from_the_name_not_comizys_list_position(self):
+        # comizy's own "number" is the entry's position in its list — real
+        # data has "Chapter 202" as number 270 — so it must be ignored.
+        page_html = '<script>{"id":"4N90moOv","is_adult":false}</script>'
+        payload = {
+            "data": {
+                "chapters": [
+                    {"url": "/x/chapter-202", "name": "Chapter 202", "slug": "chapter-202", "number": 270},
+                    {"url": "/x/chapter-notice-official-translation", "name": "Chapter : Notice",
+                     "slug": "chapter-notice-official-translation", "number": 268},
+                    {"url": "/x/chapter-1-one-year-later", "name": "", "slug": "chapter-1-one-year-later", "number": 3},
+                    {"url": "/x/chapter-0-1", "name": "Chapter 0.1", "slug": "chapter-0-1", "number": 1},
+                    {"url": "/x/chapter-2-5", "name": "", "slug": "chapter-2-5", "number": 6},
+                ]
+            }
+        }
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html), \
+             patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)):
+            chapters = await scrape_comizy_chapter_list("https://comizy.io/x")
+        self.assertEqual([c["number"] for c in chapters], [0.1, 1.0, 2.5, 202.0])
+        self.assertEqual(chapters[-1]["url"], "https://comizy.io/x/chapter-202")
 
     async def test_chapter_list_blocks_adult_titles_reached_by_direct_url(self):
         page_html = '<script>{"id":"4N90moOv","is_adult":true}</script>'
@@ -360,6 +387,20 @@ class ComizyTests(unittest.IsolatedAsyncioTestCase):
             images,
             ["https://x7.cmzcdn.org/e/aaa.webp", "https://x8.cmzcdn.org/e/bbb.webp"],
         )
+
+    async def test_scrape_reads_every_page_from_next_data_not_just_the_rendered_ones(self):
+        # Only the first pages are server-rendered <img>s; the full list is
+        # in __NEXT_DATA__.
+        all_pages = [f"https://x{i % 9 + 1}.cmzcdn.org/e/p{i}.webp" for i in range(15)]
+        next_data = {"props": {"pageProps": {"initialChapter": {"images": all_pages}}}}
+        page_html = (
+            '<script>{"id":"4N90moOv","is_adult":false}</script>'
+            + "".join(f'<div data-page-idx="{i}"><img src="{u}"></div>' for i, u in enumerate(all_pages[:10]))
+            + '<script id="__NEXT_DATA__" type="application/json">' + json.dumps(next_data) + "</script>"
+        )
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html):
+            images = await scrape_comizy("https://comizy.io/x/chapter-1")
+        self.assertEqual(images, all_pages)
 
     async def test_scrape_blocks_adult_chapters_reached_by_direct_url(self):
         page_html = (
@@ -516,6 +557,170 @@ class WeebCentralTests(unittest.IsolatedAsyncioTestCase):
     async def test_scrape_returns_empty_without_a_chapter_id_in_the_url(self):
         images = await scrape_weebcentral("https://weebcentral.com/not-a-chapter-url")
         self.assertEqual(images, [])
+
+    async def test_chapter_list_numbers_seasons_continuously(self):
+        # "S2 - Chapter 1" used to parse as chapter 2 (the season), which
+        # collapsed a whole series into one entry per season.
+        rows = ["S2 - Chapter 2", "S2 - Chapter 1", "S1 - Chapter 3", "S1 - Chapter 2", "S1 - Chapter 1"]
+        html = "".join(
+            f'<a href="/chapters/ID{i}"><span class="grow"><span>{label}</span></span></a>'
+            for i, label in enumerate(rows)
+        )
+        mock_response = AsyncMock()
+        mock_response.raise_for_status = lambda: None
+        mock_response.text = html
+        with patch("httpx.AsyncClient.get", return_value=mock_response):
+            chapters = await scrape_weebcentral_chapter_list("https://weebcentral.com/series/01ABC/X")
+        self.assertEqual([c["number"] for c in chapters], [1.0, 2.0, 3.0, 4.0, 5.0])
+        self.assertEqual(chapters[3]["title"], "S2 - Chapter 1")
+        self.assertEqual(chapters[3]["url"], "https://weebcentral.com/chapters/ID1")
+
+    async def test_chapter_list_without_seasons_is_unchanged(self):
+        html = (
+            '<a href="/chapters/B"><span class="grow"><span>Chapter 2</span></span></a>'
+            '<a href="/chapters/A"><span class="grow"><span>Chapter 1.5</span></span></a>'
+        )
+        mock_response = AsyncMock()
+        mock_response.raise_for_status = lambda: None
+        mock_response.text = html
+        with patch("httpx.AsyncClient.get", return_value=mock_response):
+            chapters = await scrape_weebcentral_chapter_list("https://weebcentral.com/series/01ABC/X")
+        self.assertEqual([c["number"] for c in chapters], [1.5, 2.0])
+
+
+class ManhuaPlusTests(unittest.IsolatedAsyncioTestCase):
+    async def test_scrape_reads_the_image_list_endpoint_and_unshuffles_it(self):
+        page_html = "<script>const CHAPTER_ID = 54975;</script>"
+        fragment = "".join(
+            f'<div class="separator" data-index="{i}"><a class="readImg">'
+            f'<img src="https://cdn.manhuaplus.cc/p{i}.webp" data-src="/loading.gif" class="lazy"></a></div>'
+            for i in (3, 0, 2, 1)
+        )
+        response = _mock_json_response({"status": True, "html": fragment})
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html), \
+             patch("httpx.AsyncClient.post", return_value=response) as mock_post, \
+             patch("scrapers.core._fetch_html_playwright_scrolled") as mock_browser:
+            images = await core.scrape_manhuaplus("https://manhuaplus.org/manga/x/chapter-1")
+        self.assertEqual(images, [f"https://cdn.manhuaplus.cc/p{i}.webp" for i in range(4)])
+        self.assertIn("/ajax/image/list/chap/54975", mock_post.call_args.args[0])
+        mock_browser.assert_not_called()
+
+    async def test_scrape_falls_back_to_the_browser_when_the_endpoint_fails(self):
+        rendered = '<div id="chapterContent"><img class="lazy" src="https://cdn.manhuaplus.cc/a.webp"></div>'
+        with patch("scrapers.core.fetch_html_httpx", return_value="<p>no chapter id</p>"), \
+             patch("scrapers.core._fetch_html_playwright_scrolled", return_value=rendered):
+            images = await core.scrape_manhuaplus("https://manhuaplus.org/manga/x/chapter-1")
+        self.assertEqual(images, ["https://cdn.manhuaplus.cc/a.webp"])
+
+
+class SpinoffMatchingTests(unittest.TestCase):
+    def test_a_sequel_with_a_subtitle_is_not_the_same_series(self):
+        self.assertEqual(title_score("Solo Leveling", "Solo Leveling: Ragnarok"), 0.0)
+        self.assertEqual(title_score("Solo Leveling", "Solo Leveling - Ragnarok"), 0.0)
+
+    def test_the_sequel_still_matches_itself(self):
+        self.assertEqual(title_score("Solo Leveling: Ragnarok", "Solo Leveling: Ragnarok"), 1.0)
+
+    def test_longer_names_without_a_subtitle_separator_still_match(self):
+        self.assertGreater(title_score("Omniscient Reader", "Omniscient Reader's Viewpoint"), 0.5)
+        self.assertEqual(title_score("Gosu", "Gosu"), 1.0)
+
+    def test_best_match_skips_the_spinoff_card(self):
+        html = '<div class="post-title"><a href="/manga/solo-leveling-ragnarok">Solo Leveling: Ragnarok</a></div>'
+        self.assertIsNone(_best_match(html, ".post-title a", "https://x.test/", "Solo Leveling", use_alt=False))
+
+
+class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_source_over_its_time_budget_is_left_out(self):
+        async def slow(title):
+            await asyncio.sleep(5)
+            return "https://slow/series"
+
+        async def fast(title):
+            return "https://fast/series"
+
+        async def chapter_list(url):
+            return [{"number": 1.0, "url": "u1", "title": ""}]
+
+        async def nothing(title):
+            return None
+
+        sources = {d: (nothing, chapter_list) for d in core.SOURCES}
+        sources["kaliscan"] = (slow, chapter_list)
+        sources["mangaread"] = (fast, chapter_list)
+        with patch.dict(core.SOURCES, sources), patch.object(core, "SOURCE_TIME_BUDGET", 0.05):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "mangaread")
+        self.assertEqual(result["alternates"], [])
+
+    async def test_picks_the_most_up_to_date_source_and_returns_the_rest_as_alternates(self):
+        def chapters(*numbers):
+            return [{"number": float(n), "url": f"u{n}", "title": ""} for n in numbers]
+
+        found = {
+            "comizy": chapters(1, 2, 3),
+            "mangafreak": chapters(1, 2, 3, 4),
+            "mangaread": chapters(2, 3, 4),
+        }
+
+        def fake_source(domain):
+            async def search(title):
+                return f"https://{domain}/series" if domain in found else None
+
+            async def chapter_list(url):
+                return found[domain]
+
+            return (search, chapter_list)
+
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            result = await core.find_best_source("X")
+
+        self.assertEqual(result["domain"], "mangafreak")
+        self.assertEqual([a["domain"] for a in result["alternates"]], ["mangaread", "comizy"])
+
+    async def test_on_a_tie_a_site_with_direct_images_beats_comizy(self):
+        def chapters(*numbers):
+            return [{"number": float(n), "url": f"u{n}", "title": ""} for n in numbers]
+
+        # comizy has more entries, but the same latest chapter: its images
+        # need this server's proxy, so the direct-image site wins.
+        found = {"comizy": chapters(0, 1, 2, 3, 4), "mangaread": chapters(1, 2, 3, 4)}
+
+        def fake_source(domain):
+            async def search(title):
+                return f"https://{domain}/series" if domain in found else None
+
+            async def chapter_list(url):
+                return found[domain]
+
+            return (search, chapter_list)
+
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "mangaread")
+
+        # ...but a comizy that is genuinely ahead still wins.
+        found["comizy"] = chapters(1, 2, 3, 4, 5)
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "comizy")
+
+    async def test_one_source_raising_does_not_sink_the_others(self):
+        async def boom(title):
+            raise RuntimeError("site changed")
+
+        async def found(title):
+            return "https://ok/series"
+
+        async def chapter_list(url):
+            return [{"number": 1.0, "url": "u1", "title": ""}]
+
+        sources = {d: (boom, chapter_list) for d in core.SOURCES}
+        sources["mangaread"] = (found, chapter_list)
+        with patch.dict(core.SOURCES, sources):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "mangaread")
+        self.assertEqual(result["alternates"], [])
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 ## Running it
 
 Everything — the frontend (`index.html`), accounts, push notifications,
-the ToonGod/Asura Scans reader, and the CORS proxy the frontend's own
+the manga reader and its narration, and the CORS proxy the frontend's own
 client-side API calls go through — is served by one Python app,
 `main.py`.
 
@@ -48,6 +48,9 @@ Optional environment variables (see `render.yaml`):
 - `GOOGLE_CLIENT_ID` — enables "Continue with Google" (see below). Also
   needed in `index.html` (it's public). Left unset, that button just
   doesn't render.
+- `OLLAMA_HOST`, `NARRATION_MODEL` — the optional AI storyteller for
+  chapter narration (see below). Left unset, narration just reads the
+  dialogue aloud.
 - `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` — enables "Continue with
   Facebook" (see below). The app ID is also needed in `index.html` (public);
   the secret stays here only. Left unset, that button just doesn't render.
@@ -130,38 +133,135 @@ never logged, and never appears in any API response. It'll need
 re-exporting occasionally once the session it holds expires or is signed
 out.
 
+## Storyteller mode (chapter narration)
+
+The reader has a floating **🎧 Listen** button that turns the current
+chapter into an MP3 — entirely free, no paid API (`server/storyteller.py`):
+
+1. **OCR** ([RapidOCR](https://github.com/RapidAI/RapidOCR), runs locally on
+   the CPU) reads every speech bubble, in reading order. Sound effects
+   (KRR, WOO…) are recognised and left out of the dialogue.
+2. **The script** is built from that text alone — every line, in order,
+   word for word, with a short attribution ("someone whispers"). If an
+   [Ollama](https://ollama.com) server is reachable, a small local AI model
+   picks how each line is delivered (shouts, whispers, asks…) from a fixed
+   list; without it, punctuation decides. The model is never allowed to
+   write text itself: letting llama3.2:3b write the narration freely was
+   tried, and it invented dialogue, creatures and settings that weren't in
+   the chapter.
+3. **Voice**: [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an
+   open-source voice model (Apache 2.0: free, including commercial use, with
+   no per-use limits) records it on the narration machine itself.
+   Listeners pick the narrator: Fenrir, Echo or Eric (male), Emma or
+   Jessica (female); the reader remembers their choice. Each chapter's
+   script is shared, and a voice is only recorded for a chapter the first
+   time someone picks it. The model (~330MB, plus 28MB of voices) downloads
+   into `data/kokoro/` on first use; set `KOKORO_MODEL=kokoro-v1.0.int8.onnx`
+   for a smaller (~90MB) but slower version.
+
+A long chapter takes a few minutes the first time (it runs as a background
+job with a progress bar); after that the MP3 is cached in
+`data/narration/`.
+
+Why OCR rather than a vision model like moondream: moondream was tried
+first on real pages, and it paraphrased dialogue, invented lines that
+weren't on the page, and misdescribed scenes. OCR reads what's actually
+written.
+
+**Running it locally, with the AI storyteller:**
+```
+pip install -r requirements.txt
+ollama pull llama3.2:3b      # ~2GB, one-time; needs Ollama installed and running
+uvicorn main:app --port 8000
+```
+
+**On Render's free plan, narration is off.** Reading a chapter's pages
+peaks at ~600MB of memory (measured), over the free plan's 512MB — running
+it there would crash the whole site, not just narration. So on Render
+(which sets `RENDER=true`) the Listen button doesn't appear unless
+narration is pointed somewhere else:
+
+1. Run a second copy of this app on a machine with at least ~2GB of RAM
+   (4GB+ with Ollama) — e.g. Oracle Cloud's Always Free VM, a small VPS,
+   or your own computer behind a Cloudflare Tunnel. Same
+   `pip install -r requirements.txt` and `uvicorn main:app`; add Ollama
+   there if you want it.
+2. Set `NARRATION_URL` on Render to that copy's public address (e.g.
+   `https://narrator.example.com`) and redeploy.
+
+The reader then sends narration requests straight to that machine;
+everything else keeps running on Render.
+
+Environment variables (all optional):
+- `NARRATION_URL` — address of another deployment of this app that does
+  the narrating (see above). Set this on Render.
+- `NARRATION_ENABLED` — `true`/`false` to force narration on or off on
+  this server. Unset, it's on everywhere except Render.
+- `OLLAMA_HOST` — where Ollama is. Defaults to `http://localhost:11434`.
+- `NARRATION_MODEL` — which Ollama model picks each line's delivery.
+  Defaults to `llama3.2:3b`.
+
+The Listen button only appears when the server reports narration as
+available (`/api/config`), so a server without these dependencies just
+doesn't show it.
+
+## Password reset (email)
+
+The sign-in page has a "Forgot password?" link that emails a one-time
+link (valid 1 hour) to choose a new password (`server/password_reset.py`).
+Saving it signs the reader in and signs them out on every other device.
+It also lets people who signed up with Google/Facebook add a password.
+The link only appears once email sending is set up.
+
+Any email provider that offers SMTP works. Free options include Brevo
+(a free plan with a daily sending limit), Gmail (with an "app password",
+fine for small volumes), Resend and Amazon SES; check each one's current
+free limits. For lots of users, use a provider with your own domain
+verified, so the emails don't land in spam.
+
+Set these in Render's environment variables, then redeploy:
+- `SMTP_HOST`, e.g. `smtp-relay.brevo.com` or `smtp.gmail.com`
+- `SMTP_PORT`, usually `587` (or `465`)
+- `SMTP_USERNAME`, `SMTP_PASSWORD`: from the provider (for Gmail, an app
+  password, never your normal one)
+- `MAIL_FROM`, e.g. `MangaWhere <no-reply@yourdomain.com>`; it must be a
+  sender the provider has verified
+- `RESET_LINK_ORIGINS` (optional): extra site addresses the reset link may
+  point to, comma-separated, e.g. a custom domain. GitHub Pages and the
+  Render address are allowed already.
+
 ## Advertising
 
-`index.html`'s `AD_SLOT_HTML` (near `TURNSTILE_SITE_KEY`, `AMAZON_TAG`)
-takes any ad network's raw ad-unit HTML/script snippet and renders it in
-one place: below a title's read-here links, after the reader has already
-been given what they came for — never above it (`adSlot()`). Empty by
-default, so nothing renders until it's set.
+Ads are set in `index.html`'s `ADS` block (near `AMAZON_TAG`): paste an
+ad network's code for each place you want ads, and leave the rest empty.
 
-**Google AdSense won't work here.** MangaWhere shows 18+ titles
-(`HIDE_ADULT` is off), and AdSense's policies prohibit monetizing adult
-content — using it risks the whole account, not just this site. Adult-
-tolerant networks built for exactly this kind of mixed-content site exist
-instead: [ExoClick](https://www.exoclick.com) is a solid default (one of
-the largest, no minimum-traffic requirement to sign up, works fine for a
-mostly-general site with some mature titles rather than only explicit
-content). JuicyAds and TrafficJunky are alternatives geared more toward
-explicit-only sites.
+| Place | Where it shows |
+|---|---|
+| `home` | Home page, below Trending |
+| `detail` | A title's page, below its chapter list |
+| `readerMid` | Halfway through a chapter (chapters of 20+ pages only) |
+| `readerEnd` | End of a chapter, just above Prev / Next |
 
-To turn it on (using ExoClick as the example):
-1. Sign up at [exoclick.com](https://www.exoclick.com) and add your site
-   — this needs a live domain (a bare `github.io` subdomain is unlikely to
-   pass review), so this comes after domain setup.
-2. Create an ad zone (a banner or native placement is the natural fit for
-   the slot here) and copy the snippet it gives you.
-3. Paste that snippet as the value of `AD_SLOT_HTML` in `index.html`,
-   push, and it starts rendering in that one spot.
+Every ad runs inside its own sandboxed frame (`adFrame()`), which matters
+for three reasons: network code that uses `document.write` (Adsterra's
+banners do) can't wipe the page; ad scripts can't read the page or the
+reader's sign-in token; and frames load only when scrolled near, so ads
+never slow down chapter pages.
 
-Most networks, ExoClick included, also want an **ads.txt** file at your
-domain's root confirming you authorize them to sell your inventory (an
-anti-fraud measure) — they'll give you the exact line to put in it once
-you're signed up; it just needs to land in this repo as `ads.txt` (served
-alongside `index.html`) once there's a domain for it to live on.
+**Adsterra** accepts sites with mature titles (Google AdSense doesn't,
+since `HIDE_ADULT` is off; it risks the whole AdSense account).
+1. Sign up as a publisher at [adsterra.com](https://adsterra.com) and add
+   your site.
+2. Create ad units. **Banner** units fit these places best: 300×250 for
+   `home`/`detail`/`readerMid`, 320×50 or 468×60 for `readerEnd`. Native
+   Banners work too (set `AD_NATIVE_HEIGHT` to their height).
+3. For each unit, copy its code ("Get code") and paste it between the
+   quotes for the place you want it, then push. The frame sizes itself
+   from the `width`/`height` in a banner's code.
+
+Popunder and Social Bar units aren't supported on purpose: they run
+across the whole page (not in a frame), cover content, and are the formats
+readers most dislike.
 
 ## Sign in with Google / Facebook
 

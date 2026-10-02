@@ -8,7 +8,7 @@ import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
-from .matching import similar
+from .matching import title_score
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -94,9 +94,9 @@ class CloudflareBlocked(PermissionError):
     a real one just gets the identical deny page a plain fetch did."""
 
 
-async def fetch_html_httpx(url: str) -> str:
+async def fetch_html_httpx(url: str, timeout: float = 15.0) -> str:
     """Fast standard fetch path for normal HTML pages."""
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=timeout) as client:
         response = await client.get(url)
         lowered = response.text.lower()
         if "used cloudflare to restrict access" in lowered:
@@ -250,15 +250,19 @@ async def _fetch_html_playwright_scrolled(url: str) -> str:
 
 
 async def scrape_manhuaplus(url: str) -> List[str]:
-    """Scrape a manhuaplus.org chapter's page images. The static HTML only
-    ships loading-spinner placeholders — real image URLs land in the <img>
-    `src` attribute only after the page's own lazy-load JS runs, so this
-    needs a real browser render, not a plain fetch. Read `src` directly
+    """Scrape a manhuaplus.org chapter's page images — via the page's own
+    image-list endpoint first (_manhuaplus_images_via_ajax), and only if
+    that fails, a real browser render. The static HTML only ships
+    loading-spinner placeholders — real image URLs land in the <img>
+    `src` attribute only after the page's own lazy-load JS runs. Read `src` directly
     rather than through extract_image_urls_from_html's usual data-src-first
     attribute order: this theme's lazy-load library leaves `data-src`
     permanently pointing at the loading-spinner placeholder even once
     `src` holds the real, fully-loaded URL — the reverse of the usual
     lazy-loading convention that helper is built around."""
+    images = await _manhuaplus_images_via_ajax(url)
+    if images:
+        return images
     try:
         html = await _fetch_html_playwright_scrolled(url)
     except Exception:
@@ -268,7 +272,49 @@ async def scrape_manhuaplus(url: str) -> List[str]:
     return clean_image_urls(urls)
 
 
+MANHUAPLUS_CHAPTER_ID_IN_HTML = re.compile(r"CHAPTER_ID\s*=\s*(\d+)")
+
+
+async def _manhuaplus_images_via_ajax(url: str) -> List[str]:
+    """The page's own JS fills #chapterContent from a plain JSON endpoint
+    keyed on the chapter's numeric id — calling that directly skips a whole
+    browser launch. The pages in its HTML come back deliberately shuffled,
+    each tagged with its real position as data-index, so they're sorted by
+    that. Any failure returns [] so the caller can fall back to Playwright."""
+    try:
+        html = await fetch_html_httpx(url)
+        match = MANHUAPLUS_CHAPTER_ID_IN_HTML.search(html)
+        if not match:
+            return []
+        async with httpx.AsyncClient(headers=HEADERS, timeout=15.0) as client:
+            response = await client.post(
+                f"https://manhuaplus.org/ajax/image/list/chap/{match.group(1)}",
+                headers={"X-Requested-With": "XMLHttpRequest", "Referer": url},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        print(f"[manhuaplus] image list fetch failed ({e}), falling back to Playwright")
+        return []
+    if not data.get("status"):
+        return []
+
+    pages = []
+    for block in BeautifulSoup(data.get("html") or "", "html.parser").select("[data-index]"):
+        img = block.select_one("img")
+        try:
+            index = int(block.get("data-index"))
+        except (TypeError, ValueError):
+            continue
+        if img and img.get("src"):
+            pages.append((index, img.get("src")))
+    return clean_image_urls(src for _, src in sorted(pages))
+
+
 KALISCAN_IMAGES_IN_HTML = re.compile(r'var chapImages = "([^"]+)";')
+# kaliscan.io routinely takes ~20s to answer (every page, not just some),
+# so the default 15s timeout meant it failed every single time.
+KALISCAN_TIMEOUT = 40.0
 
 
 async def scrape_kaliscan(url: str) -> List[str]:
@@ -279,7 +325,7 @@ async def scrape_kaliscan(url: str) -> List[str]:
     query param), so they're only ever used fresh, right after this fetch —
     never cached or re-served later."""
     try:
-        html = await fetch_html_httpx(url)
+        html = await fetch_html_httpx(url, timeout=KALISCAN_TIMEOUT)
     except Exception:
         try:
             html = await fetch_html_playwright(url)
@@ -359,7 +405,28 @@ async def scrape_comizy(url: str) -> List[str]:
     if is_adult_match and is_adult_match.group(1) == "true":
         return []
 
+    # Only the first ~10 pages are server-rendered as <img> tags — the rest
+    # are filled in client-side as the reader scrolls. The full, ordered
+    # list is already in the page's __NEXT_DATA__ JSON, so read that first
+    # and only fall back to the DOM if it's missing.
+    images = _comizy_images_from_next_data(html)
+    if images:
+        return images
     return extract_image_urls_from_html(html, ["div[data-page-idx] img"])
+
+
+def _comizy_images_from_next_data(html: str) -> List[str]:
+    match = FLAMECOMICS_NEXT_DATA.search(html)  # the generic Next.js payload tag, not flame-specific
+    if not match:
+        return []
+    try:
+        chapter = json.loads(match.group(1))["props"]["pageProps"]["initialChapter"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    images = chapter.get("images") or [
+        page.get("url") for page in chapter.get("pages") or [] if isinstance(page, dict)
+    ]
+    return clean_image_urls(images)
 
 
 MANGADEX_API = "https://api.mangadex.org"
@@ -532,7 +599,7 @@ async def scrape_kaliscan_chapter_list(url: str) -> List[Dict[str, Any]]:
     element, so this reads the name from its own inner element rather than
     the anchor's full text (which would drag the timestamp in too)."""
     try:
-        html = await fetch_html_httpx(url)
+        html = await fetch_html_httpx(url, timeout=KALISCAN_TIMEOUT)
     except Exception:
         try:
             html = await fetch_html_playwright(url)
@@ -596,6 +663,12 @@ async def scrape_mangakatana_chapter_list(url: str) -> List[Dict[str, Any]]:
 
 
 WEEBCENTRAL_CHAPTER_NUMBER_IN_TEXT = re.compile(r"(\d+(?:\.\d+)?)")
+# Some series are split into seasons whose numbering restarts ("S1 -
+# Chapter 86", "S2 - Chapter 1"). The first bare number there is the
+# season, not the chapter, so these are matched explicitly.
+WEEBCENTRAL_SEASON_CHAPTER_IN_TEXT = re.compile(
+    r"\bS(\d+)\b.*?\b(?:chapter|ch|episode|ep)\.?\s*(\d+(?:\.\d+)?)", re.I
+)
 
 
 async def scrape_weebcentral_chapter_list(url: str) -> List[Dict[str, Any]]:
@@ -618,25 +691,66 @@ async def scrape_weebcentral_chapter_list(url: str) -> List[Dict[str, Any]]:
         return []
 
     soup = BeautifulSoup(html, "html.parser")
-    chapters: Dict[float, Dict[str, Any]] = {}
+    # (season, chapter-within-season) -> entry; season is 0 when unlabelled.
+    parsed: Dict[tuple, Dict[str, Any]] = {}
     for a in soup.select('a[href^="/chapters/"]'):
         href = a.get("href")
         if not href:
             continue
         label_el = a.select_one("span.grow > span:first-child")
         label = (label_el.get_text(" ", strip=True) if label_el else "") or a.get_text(" ", strip=True)
-        number_match = WEEBCENTRAL_CHAPTER_NUMBER_IN_TEXT.search(label)
-        if not number_match:
+        season_match = WEEBCENTRAL_SEASON_CHAPTER_IN_TEXT.search(label)
+        if season_match:
+            key = (int(season_match.group(1)), float(season_match.group(2)))
+        else:
+            number_match = WEEBCENTRAL_CHAPTER_NUMBER_IN_TEXT.search(label)
+            if not number_match:
+                continue
+            key = (0, float(number_match.group(1)))
+        if key in parsed:
             continue
-        number = float(number_match.group(1))
-        if number in chapters:
-            continue
-        chapters[number] = {
+        parsed[key] = {"url": urljoin(WEEBCENTRAL_API, href), "title": label}
+
+    # Seasons restart their numbering, so each season's chapters are offset
+    # by the last chapter of every season before it — S2 Ch 1 after an
+    # 86-chapter S1 becomes 87 — which keeps numbers comparable with the
+    # other sources' continuous numbering.
+    chapters: List[Dict[str, Any]] = []
+    offset, season, season_top = 0.0, None, 0.0
+    for (this_season, within), entry in sorted(parsed.items()):
+        if this_season != season:
+            offset += season_top
+            season, season_top = this_season, 0.0
+        season_top = max(season_top, within)
+        number = offset + within
+        if chapters and number <= chapters[-1]["number"]:
+            continue  # e.g. a season's "Chapter 0" landing on the last one's number
+        chapters.append({
             "number": number,
-            "url": urljoin(WEEBCENTRAL_API, href),
-            "title": label or f"Chapter {number:g}",
-        }
-    return sorted(chapters.values(), key=lambda c: c["number"])
+            "url": entry["url"],
+            "title": entry["title"] or f"Chapter {number:g}",
+        })
+    return chapters
+
+
+# comizy's own "number" field is just the chapter's position in its list
+# (Solo Leveling's "Chapter 202" is number 270), not the chapter number, so
+# the real one is read from the chapter's name — or, failing that, its slug
+# ("chapter-0-1" is 0.1, "chapter-12-the-return" is 12).
+COMIZY_CHAPTER_NUMBER_IN_NAME = re.compile(r"chapter\s*(\d+(?:\.\d+)?)", re.I)
+COMIZY_CHAPTER_NUMBER_IN_SLUG = re.compile(r"^chapter-(\d+)(?:-(\d+))?(?=-|$)", re.I)
+
+
+def _comizy_chapter_number(chapter: Dict[str, Any]) -> Optional[float]:
+    match = COMIZY_CHAPTER_NUMBER_IN_NAME.search(chapter.get("name") or "")
+    if match:
+        return float(match.group(1))
+    slug = chapter.get("slug") or (chapter.get("url") or "").rstrip("/").rsplit("/", 1)[-1]
+    match = COMIZY_CHAPTER_NUMBER_IN_SLUG.search(slug)
+    if not match:
+        return None  # a "Notice"/announcement post, not a chapter
+    whole, fraction = match.groups()
+    return float(f"{whole}.{fraction}") if fraction else float(whole)
 
 
 async def scrape_comizy_chapter_list(url: str) -> List[Dict[str, Any]]:
@@ -669,12 +783,8 @@ async def scrape_comizy_chapter_list(url: str) -> List[Dict[str, Any]]:
 
     chapters: Dict[float, Dict[str, Any]] = {}
     for chapter in data.get("data", {}).get("chapters", []):
-        raw_number = chapter.get("number")
-        if raw_number is None:
-            continue
-        try:
-            number = float(raw_number)
-        except (TypeError, ValueError):
+        number = _comizy_chapter_number(chapter)
+        if number is None:
             continue
         if number in chapters:
             continue
@@ -827,7 +937,7 @@ def _best_match(html: str, selector: str, base_url: str, title: str, *, use_alt:
         seen.add(href)
         candidate_count += 1
 
-        score = similar(title, name)
+        score = title_score(title, name)
         if score > best_score:
             best_score, best_url, best_name = score, href, name
 
@@ -942,7 +1052,7 @@ async def search_flamecomics(title: str) -> Optional[str]:
 
     best_id, best_score = None, 0.0
     for series in props.get("series", []):
-        score = similar(title, series.get("title", ""))
+        score = title_score(title, series.get("title", ""))
         if score > best_score:
             best_score, best_id = score, series.get("series_id")
 
@@ -976,7 +1086,7 @@ async def search_kaliscan(title: str) -> Optional[str]:
     """Find the best-matching series URL on kaliscan.io for a title."""
     search_url = f"https://kaliscan.io/search?q={quote(title)}"
     try:
-        html = await fetch_html_httpx(search_url)
+        html = await fetch_html_httpx(search_url, timeout=KALISCAN_TIMEOUT)
     except Exception as e:
         print(f"[kaliscan] plain fetch failed ({e}), falling back to Playwright")
         try:
@@ -1047,7 +1157,7 @@ async def search_mangadex(title: str) -> Optional[str]:
         for alt in attrs.get("altTitles", []):
             names.extend(alt.values())
         for name in names:
-            score = similar(title, name)
+            score = title_score(title, name)
             if score > best_score:
                 best_score, best_id = score, manga.get("id")
 
@@ -1077,7 +1187,7 @@ async def search_comizy(title: str) -> Optional[str]:
             continue
         names = [item.get("name", "")] + [alt.get("name", "") for alt in item.get("alt_names", [])]
         for name in names:
-            score = similar(title, name)
+            score = title_score(title, name)
             if score > best_score:
                 best_score, best_url = score, item.get("url")
 
@@ -1102,25 +1212,62 @@ SOURCES = {
 }
 
 
+# /api/find waits on every source, so one slow site (kaliscan.io can take
+# 20s+ per page, then a Playwright fallback on top) would hold up the whole
+# answer. Past this budget a source is simply left out.
+SOURCE_TIME_BUDGET = 30.0
+
+
+PROXIED_IMAGE_SOURCES = {"comizy"}
+
+
+async def _source_for(domain: str, title: str) -> Optional[Dict[str, Any]]:
+    search, chapter_list = SOURCES[domain]
+
+    async def lookup():
+        series_url = await search(title)
+        if not series_url:
+            return None, []
+        return series_url, await chapter_list(series_url)
+
+    try:
+        series_url, chapters = await asyncio.wait_for(lookup(), SOURCE_TIME_BUDGET)
+    except asyncio.TimeoutError:
+        print(f"[{domain}] skipped — took longer than {SOURCE_TIME_BUDGET:g}s")
+        return None
+    except Exception as e:
+        print(f"[{domain}] lookup failed ({e})")
+        return None
+    if not series_url:
+        return None
+    if not chapters:
+        return None
+    return {"domain": domain, "series_url": series_url, "chapters": chapters}
+
+
 async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
     """Search every site for a title and read from whichever is more
-    up to date — i.e. has the higher chapter number right now."""
-    domains = list(SOURCES.keys())
-    urls = await asyncio.gather(*(SOURCES[d][0](title) for d in domains))
-
-    candidates: List[Dict[str, Any]] = []
-    for domain, series_url in zip(domains, urls):
-        if not series_url:
-            continue
-        chapters = await SOURCES[domain][1](series_url)
-        if chapters:
-            candidates.append({"domain": domain, "series_url": series_url, "chapters": chapters})
-
+    up to date — i.e. has the higher chapter number right now. Every other
+    site that also has it comes back under "alternates" (best first), so
+    the reader can fall back to one when a chapter won't load from the
+    winner."""
+    results = await asyncio.gather(*(_source_for(d, title) for d in SOURCES))
+    candidates = [r for r in results if r]
     if not candidates:
         return None
 
-    candidates.sort(key=lambda c: c["chapters"][-1]["number"], reverse=True)
-    return candidates[0]
+    # On a tie for the latest chapter, prefer a site whose images load
+    # straight from its own CDN: comizy's must go through this server's
+    # proxy (its CDN checks the Referer), which is slower for readers and
+    # costs this server bandwidth for every page. Then, most chapters wins,
+    # since a longer list means fewer gaps to hit while reading.
+    candidates.sort(
+        key=lambda c: (c["chapters"][-1]["number"], c["domain"] not in PROXIED_IMAGE_SOURCES, len(c["chapters"])),
+        reverse=True,
+    )
+    best = dict(candidates[0])
+    best["alternates"] = candidates[1:]
+    return best
 
 
 async def scrape_chapter(url: str) -> Dict[str, Any]:

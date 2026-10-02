@@ -75,6 +75,7 @@ padding:14px;font-weight:700;font-size:15px;margin-top:4px}
 .linkish{background:none;border:none;color:var(--mint);font-weight:600;
 font-size:inherit;padding:0;text-decoration:underline;cursor:pointer}
 .swap{margin-top:16px}
+.forgot{margin:2px 0 0;text-align:right;font-size:14px}
 .pitch{max-width:420px;margin:22px auto 0;text-align:center}
 .pitch h1{font-size:23px;margin:0 0 8px}
 .pitch .sub{margin:0 0 20px}
@@ -276,6 +277,27 @@ border-radius:5px;margin-right:6px;vertical-align:middle;font-family:ui-monospac
 border:1px solid var(--line);border-radius:11px;padding:12px;font-weight:600;
 font-size:14px;cursor:pointer}
 .sharebtn:hover{border-color:var(--mint);color:var(--mint)}
+/* Storyteller (chapter narration) — floats above the bottom tabs, reader only. */
+.narr{position:fixed;right:16px;bottom:76px;z-index:25;display:flex;flex-direction:column;align-items:flex-end;gap:8px;
+max-width:calc(100vw - 32px)}
+.narr-fab{background:var(--mint);color:#0d2b26;border:none;border-radius:999px;padding:11px 16px;
+font:inherit;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.narr-panel{width:300px;max-width:100%;background:var(--surf2);border:1px solid var(--line);border-radius:14px;
+padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);font-size:14px}
+.narr-panel h4{margin:0 0 4px;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+.narr-panel h4 button{background:none;border:none;color:var(--dim);font-size:20px;line-height:1;cursor:pointer;padding:0 2px}
+.narr-panel .sub{margin:0 0 10px;color:var(--dim);font-size:12.5px}
+.narr-panel select,.narr-panel .go{width:100%;border-radius:10px;padding:10px;font:inherit;font-size:14px}
+.narr-panel select{background:var(--surf);color:var(--text);border:1px solid var(--line);margin-bottom:8px}
+.narr-panel .go{background:var(--mint);color:#0d2b26;border:none;font-weight:700;cursor:pointer}
+.narr-bar{height:6px;background:var(--surf);border-radius:3px;overflow:hidden;margin:8px 0 4px}
+.narr-bar i{display:block;height:100%;background:var(--mint);width:0;transition:width .4s}
+.narr-panel audio{width:100%;margin-top:8px}
+.narr-panel .err{color:var(--bad);margin:6px 0 0}
+/* Reader pages: placeholder height until loaded, so lazy loading can tell
+   which pages are actually near the screen. */
+.rpage{width:100%;display:block;margin:0 0 4px;min-height:30vh;background:var(--surf)}
+.rpage.loaded{min-height:0;background:none}
 .trackbtn{width:100%;margin-top:10px;background:var(--mint);color:#0d2b26;border:none;
 border-radius:11px;padding:13px;font-weight:700;font-size:15px}
 .trackbtn.on{background:var(--surf2);color:var(--mint);border:1px solid var(--mint)}
@@ -414,8 +436,10 @@ font-weight:500;margin:0}
 overflow:hidden}
 .read.buy{border-left-color:#ffa94d}
 .read.buy .n{color:#ffa94d}
-.adslot{margin:16px 0 0;min-height:0;text-align:center}
+.adslot{margin:16px 0 0;min-height:0;text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px}
 .adslot:empty{display:none}
+.adlabel{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.adframe{border:0;max-width:100%;display:block;background:transparent}
 .more{background:none;border:none;color:var(--mint);font-size:13px;font-weight:600;
 padding:6px 0 0;cursor:pointer}
 .adultflag{color:#ff8fa8}
@@ -484,10 +508,25 @@ var HIDE_ADULT = false;
    simply don't appear rather than sending untagged traffic. */
 var AMAZON_TAG = "";
 
-/* Ad slot. Paste your network's script tag here once approved. It renders
-   below the read-here links — after the reader has been given what they
-   came for, never above it. */
-var AD_SLOT_HTML = "";
+/* Ads (Adsterra, or any network that gives you an HTML/script snippet).
+   Paste each ad unit's full code, exactly as the network shows it, into
+   the place you want it. Leave a place "" and nothing shows there.
+     home      - home page, below Trending
+     detail    - a title's page, below its chapter list
+     readerMid - halfway through a chapter (chapters of 20+ pages only)
+     readerEnd - end of a chapter, just above Prev / Next
+   Each ad runs in its own sandboxed frame (adFrame), so the network's
+   scripts can't touch this page or read anyone's sign-in. For a banner the
+   frame takes its size from the code's own width/height; for a native
+   banner (no size in its code) it uses AD_NATIVE_HEIGHT. */
+var ADS = {
+  home: "",
+  detail: "",
+  readerMid: "",
+  readerEnd: ""
+};
+var AD_NATIVE_HEIGHT = 300;
+var AD_SLOT_HTML = "";  // older single slot; used for `detail` if that's empty
 
 /* Cloudflare Turnstile — a free, privacy-friendly CAPTCHA replacement for
    the sign-up form's bot check. This is the *site key*, which is public
@@ -1568,7 +1607,8 @@ function homeView(){
    // Personal rows sit above trending: what's new for you, then what you
    // were just looking at, then everyone else's trending.
    '<div id="personal">'+updatesStrip()+recentHtml()+'</div>'+
-   '<div id="trend"></div>';
+   '<div id="trend"></div>'+
+   adFrame(ADS.home);
   document.getElementById("go").onclick=run;
   wireSuggest(document.getElementById("q"));
   wireUpdates();
@@ -1940,6 +1980,7 @@ function enterReaderChrome(){
 }
 
 function exitReaderChrome(){
+  stopNarration();
   document.body.classList.remove("reading","chrome-hidden");
   if(readerChromeWired){
     window.removeEventListener("scroll", onReaderScroll);
@@ -2476,7 +2517,9 @@ function applyChapter(m, videoCh, hitPromise){
   });
 }
 
-var READER_SITE_LABEL={toongod:"ToonGod", asurascans:"Asura Scans", mangafreak:"MangaFreak"};
+var READER_SITE_LABEL={toongod:"ToonGod", asurascans:"Asura Scans", mangafreak:"MangaFreak",
+  mangadex:"MangaDex", comizy:"Comizy", mangaread:"MangaRead", flamecomics:"Flame Comics",
+  manhuaplus:"ManhuaPlus", kaliscan:"KaliScan", mangakatana:"MangaKatana", weebcentral:"WeebCentral"};
 
 /* WEBTOON's RSS feed and MangaUpdates are both third-party guesses at
    how far a series has gotten, and both can lag behind: the RSS feed
@@ -2540,16 +2583,36 @@ function buyRow(m){
     '<span class="go">Shop →</span></a>';
 }
 
-function adSlot(){
-  return AD_SLOT_HTML ? '<div class="adslot">'+AD_SLOT_HTML+'</div>' : "";
+function adSlot(){ return adFrame(ADS.detail || AD_SLOT_HTML); }
+
+/* One ad, sandboxed: allow-scripts without allow-same-origin gives the
+   frame an opaque origin, so ad code can't read this page, its storage
+   (where the sign-in token lives) or its cookies. Clicks still open the
+   advertiser in a new tab. loading=lazy holds it back until it's near the
+   screen, so ads never compete with chapter pages for bandwidth. */
+function adFrame(code){
+  if(!code) return "";
+  var w=/['"]?width['"]?\s*:\s*(\d+)/.exec(code), h=/['"]?height['"]?\s*:\s*(\d+)/.exec(code);
+  var width=w?parseInt(w[1],10):0, height=h?parseInt(h[1],10):AD_NATIVE_HEIGHT;
+  var doc='<!doctype html><html><head><meta charset="utf-8">'+
+    '<meta name="viewport" content="width=device-width,initial-scale=1">'+
+    '<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}'+
+    'body{display:flex;justify-content:center}</style></head><body>'+code+'</body></html>';
+  return '<div class="adslot"><span class="adlabel">Ad</span>'+
+    '<iframe class="adframe" title="Advertisement" loading="lazy" scrolling="no" '+
+      'sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" '+
+      'style="width:'+(width?Math.min(width, 2000)+'px':'100%')+';height:'+height+'px" '+
+      'srcdoc="'+esc(doc)+'"></iframe></div>';
 }
 
 /* ================= reader (scraper-backed) =================
-   No pasting: this searches ToonGod, Asura Scans and MangaFreak by the
-   manga's own title (server-side, via /api/find) and reads from whichever
-   currently has the newer chapter. Whichever one wins hands back its full
-   chapter list in the same response, so the chapter picker and Prev/Next
-   are free from there — no extra round trip.
+   No pasting: this searches every supported site by the manga's own
+   title (server-side, via /api/find) and reads from whichever currently
+   has the newer chapter. Whichever one wins hands back its full chapter
+   list in the same response, so the chapter picker and Prev/Next are
+   free from there — no extra round trip. Every other site that also has
+   the title comes back as "alternates", which the reader falls back to
+   when a chapter won't load from the winner (loadChapter()).
 
    Tapping into a title means reading it is the likely next step, so
    BOTH lookups this needs — which site (/api/find) and that site's
@@ -2562,7 +2625,7 @@ function adSlot(){
    lookup isn't cached, so retrying (tapping Read again, or opening the
    same title again) tries fresh instead of replaying a possibly-
    transient failure forever. */
-var readerState={chapters:null, index:-1, back:null, domain:null, manga:null};
+var readerState={chapters:null, index:-1, back:null, domain:null, manga:null, alternates:[]};
 var findCache={};
 var scrapeCache={};
 
@@ -2590,6 +2653,54 @@ function scrapeChapter(url){
   scrapeCache[url]=promise;
   promise.then(function(res){ if(!res.ok) delete scrapeCache[url]; });
   return promise;
+}
+
+function chapterLoaded(res){
+  return res.ok && res.d && (res.d.images||[]).length>0;
+}
+
+/* Loads a chapter's pages, and if the current site fails (blocked, down,
+   or just no pages for that chapter), tries the same chapter number on
+   each alternate site in turn. The first that works becomes the reader's
+   source from then on — its chapter list takes over the picker and
+   Prev/Next — and the site that failed drops to the back of the
+   alternates. Resolves with the working result plus `switchedTo` (the
+   new site's domain) when it had to fall back. `exclude` lists sites
+   already known not to work for this chapter (their images wouldn't
+   load) — those are skipped outright, current site included. */
+function loadChapter(url, exclude){
+  exclude=exclude||[];
+  var chapters=readerState.chapters, startIndex=readerState.index;
+  var current=chapters&&chapters[startIndex];
+  var first=exclude.indexOf(readerState.domain)>-1
+    ? Promise.resolve({ok:false, d:null})
+    : scrapeChapter(url);
+  return first.then(function(res){
+    if(chapterLoaded(res)) return res;
+    if(!current || !(readerState.alternates||[]).length) return res;
+
+    var alts=readerState.alternates.filter(function(a){ return exclude.indexOf(a.domain)<0; });
+    function tryNext(i){
+      if(i>=alts.length) return Promise.resolve(res);
+      var alt=alts[i];
+      var idx=(alt.chapters||[]).findIndex(function(c){ return c.number===current.number; });
+      if(idx<0) return tryNext(i+1);
+      return scrapeChapter(alt.chapters[idx].url).then(function(altRes){
+        if(!chapterLoaded(altRes)) return tryNext(i+1);
+        // They moved to another chapter while this was still trying —
+        // don't swap the source out from under whatever they're reading now.
+        if(readerState.chapters!==chapters || readerState.index!==startIndex) return altRes;
+        var failed={domain:readerState.domain, series_url:null, chapters:readerState.chapters};
+        readerState.alternates=readerState.alternates.filter(function(a){ return a!==alt; }).concat([failed]);
+        readerState.chapters=alt.chapters;
+        readerState.index=idx;
+        readerState.domain=alt.domain;
+        altRes.switchedTo=alt.domain;
+        return altRes;
+      });
+    }
+    return tryNext(0);
+  });
 }
 
 /* Each scraped chapter carries its own site-supplied title (a subtitle,
@@ -2643,7 +2754,8 @@ function renderDetailChapters(m, res){
     row.onclick=function(){
       var url=row.getAttribute("data-url");
       var idx=chapters.findIndex(function(c){ return c.url===url; });
-      readerState={chapters:chapters, index:idx, back:back, manga:m};
+      readerState={chapters:chapters, index:idx, back:back, manga:m,
+        domain:res.d.domain, alternates:res.d.alternates||[]};
       readerView(url);
     };
   });
@@ -2677,7 +2789,8 @@ function wireReader(m){
         err.textContent="Couldn't load this right now — try again.";
         return;
       }
-      readerState={chapters:chapters, index:chapters.length-1, back:back, manga:m};
+      readerState={chapters:chapters, index:chapters.length-1, back:back, manga:m,
+        domain:res.d.domain, alternates:res.d.alternates||[]};
       readerView(chapters[chapters.length-1].url);
     });
   };
@@ -2770,7 +2883,11 @@ function renderReaderNav(){
    server-side) and stacks them the way a webtoon reader would. The
    chapter picker and Prev/Next come from readerState, set by whoever
    found/navigated here. */
-function readerView(url){
+var readerLoadToken=0;
+
+function readerView(url, exclude){
+  var token=++readerLoadToken;
+  stopNarration();
   stopRail();
   enterReaderChrome();
   openChapterDropdown=null;
@@ -2782,6 +2899,7 @@ function readerView(url){
     '</div>'+
     '<p class="sub" id="rstatus">Loading…</p>'+
     '<div id="rpages"></div>'+
+    '<div id="radend"></div>'+
     '<div class="readernavslot"></div>'+
     commentsHtml()+
     recommendationsHtml();
@@ -2792,9 +2910,10 @@ function readerView(url){
   wireComments();
   loadRecommendations();
 
-  scrapeChapter(url).then(function(res){
+  loadChapter(url, exclude).then(function(res){
     var status=document.getElementById("rstatus");
-    if(!status) return;   // they navigated away before this resolved
+    // Navigated away, or on to another chapter, before this resolved.
+    if(!status || token!==readerLoadToken) return;
     if(!res.ok){
       status.textContent="Couldn't load this chapter — try again.";
       return;
@@ -2805,7 +2924,17 @@ function readerView(url){
       return;
     }
     status.textContent="";   // loaded fine — no page count to show
-    document.getElementById("rpages").innerHTML=images.map(function(src){
+    if(res.switchedTo){
+      // The picker and Prev/Next were drawn from the site that failed —
+      // redraw them from the one that actually worked.
+      status.textContent="Couldn’t load it from the first site, so this is from "+
+        (READER_SITE_LABEL[res.switchedTo]||res.switchedTo)+".";
+      var picker=document.getElementById("rchapbtn");
+      if(picker) picker.parentNode.outerHTML=chapterPickerHtml();
+      wireChapterPicker();
+      renderReaderNav();
+    }
+    document.getElementById("rpages").innerHTML=images.map(function(src, i){
       // comizy.io's image CDN rejects any request whose Referer isn't
       // comizy.io itself — a plain <img> load always sends *our* origin,
       // so those need routing through our proxy, which sets the right
@@ -2813,10 +2942,189 @@ function readerView(url){
       // so they stay direct to avoid needless bandwidth through our backend.
       var needsProxy=false;
       try{ needsProxy=/(^|\.)cmzcdn\.org$/i.test(new URL(src, location.href).hostname); }catch(e){}
-      return '<img loading="lazy" style="width:100%;display:block;margin:0 0 4px" '+
+      // The first few pages load straight away, at high priority. The rest
+      // wait until the reader scrolls near them — they hold a placeholder
+      // height until loaded, since an image with no height yet counts as
+      // "in view", and a ~200-image chapter would otherwise request every
+      // page at once, with page 1 queued behind page 150.
+      var attrs=i<EAGER_PAGES ? 'fetchpriority="high"' : 'loading="lazy"';
+      var page='<img '+attrs+' class="rpage" decoding="async" '+
         'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
+      // One ad halfway through a long chapter, never in a short one.
+      if(images.length>=20 && i===Math.floor(images.length/2)) page+=adFrame(ADS.readerMid);
+      return page;
     }).join("");
+    document.getElementById("radend").innerHTML=adFrame(ADS.readerEnd);
+    Array.prototype.forEach.call(document.querySelectorAll("#rpages .rpage"), function(img){
+      var done=function(){ img.classList.add("loaded"); };
+      if(img.complete && img.naturalWidth) done();
+      else img.addEventListener("load", done, {once:true});
+    });
+    prefetchNextChapter();
+    watchFirstPage(token, exclude);
+    var shown=readerState.chapters&&readerState.chapters[readerState.index];
+    mountNarration(shown?shown.url:url, token);
   });
+}
+
+/* ================= storyteller (chapter narration) =================
+   A floating "Listen" button in the reader. The backend (server/
+   storyteller.py) reads each page's speech bubbles with OCR, optionally
+   has a local AI model narrate them, and records an MP3 with a free
+   open-source Kokoro voice the listener picks. That takes minutes, so it
+   runs as a job this polls. Only
+   shown when the backend says narration is set up (/api/config). */
+var narrationConfig=null;
+var narration={audio:null, timer:null};
+
+/* Narration may run on a different server from the reader (a machine
+   with more memory — see NARRATION_URL in README.md). When it does, this
+   server's config just points there ("base"), and that server is asked
+   what it can actually do. Every narration request then goes to `base`. */
+function readNarrationConfig(base){
+  return fetch(base+"/api/config").then(function(r){ return r.json(); })
+    .then(function(cfg){ return cfg.narration||{available:false}; });
+}
+
+function getNarrationConfig(){
+  if(!narrationConfig){
+    narrationConfig=readNarrationConfig(READER_BASE)
+      .then(function(n){
+        if(!n.available || !n.base) return Object.assign({}, n, {base:READER_BASE});
+        var remote=n.base.replace(/\/$/,"");
+        return readNarrationConfig(remote).then(function(r){
+          return r.base ? {available:false} : Object.assign({}, r, {base:remote});   // no chains
+        });
+      })
+      .catch(function(){ narrationConfig=null; return {available:false}; });
+  }
+  return narrationConfig;
+}
+
+function stopNarration(){
+  if(narration.timer){ clearTimeout(narration.timer); narration.timer=null; }
+  if(narration.audio){ narration.audio.pause(); narration.audio=null; }
+  var old=document.getElementById("narr");
+  if(old) old.remove();
+}
+
+/* Listeners pick their narrator; the choice is remembered on this device
+   for next time. Voices come from the narration server's own list. */
+var VOICE_KEY="mw-narration-voice";
+function rememberVoice(v){ try{ localStorage.setItem(VOICE_KEY, v); }catch(e){} }
+function voiceOptions(cfg){
+  var voices=cfg.voices||[], saved=null;
+  try{ saved=localStorage.getItem(VOICE_KEY); }catch(e){}
+  var chosen=voices.some(function(v){ return v.id===saved; }) ? saved : cfg.default_voice;
+  return voices.map(function(v){
+    return '<option value="'+esc(v.id)+'"'+(v.id===chosen?' selected':'')+'>'+esc(v.name)+'</option>';
+  }).join("");
+}
+
+var NARRATION_STAGE={queued:"Waiting in line…", reading:"Reading the pages", writing:"Choosing how each line is said",
+  speaking:"Recording the voice…", done:"Ready", error:"Failed"};
+
+function mountNarration(chapterUrl, token){
+  getNarrationConfig().then(function(cfg){
+    if(!cfg.available || token!==readerLoadToken || document.getElementById("narr")) return;
+    var box=document.createElement("div");
+    box.className="narr"; box.id="narr";
+    box.innerHTML='<div class="narr-panel" hidden></div>'+
+      '<button class="narr-fab" aria-label="Listen to this chapter">🎧 Listen</button>';
+    document.body.appendChild(box);
+    var panel=box.querySelector(".narr-panel"), fab=box.querySelector(".narr-fab");
+    var how=cfg.storyteller
+      ? "Reads the dialogue aloud, with a local AI choosing how each line is said."
+      : "Reads the chapter’s dialogue aloud with a free voice.";
+    panel.innerHTML='<h4>Storyteller mode <button aria-label="Close">×</button></h4>'+
+      '<p class="sub">'+how+' Takes a few minutes the first time.</p>'+
+      '<select aria-label="Voice">'+voiceOptions(cfg)+'</select>'+
+      '<button class="go">Narrate this chapter</button>'+
+      '<div class="narr-status"></div>';
+    panel.querySelector("h4 button").onclick=function(){ panel.hidden=true; fab.hidden=false; };
+    fab.onclick=function(){ panel.hidden=false; fab.hidden=true; };
+    panel.querySelector(".go").onclick=function(){
+      var voice=panel.querySelector("select").value;
+      rememberVoice(voice);
+      panel.querySelector("select").disabled=true;
+      this.hidden=true;
+      startNarration(cfg.base, chapterUrl, voice, panel.querySelector(".narr-status"), token);
+    };
+  });
+}
+
+function renderNarrationStatus(el, job){
+  if(job.state==="error"){
+    el.innerHTML='<p class="err">'+esc(job.error||"Narration failed.")+'</p>';
+    return;
+  }
+  var pct=job.total?Math.round(100*job.done/job.total):0;
+  var label=NARRATION_STAGE[job.state]||job.state;
+  if(job.state==="reading" && job.total) label+=" — "+job.done+" of "+job.total+" pages";
+  if(job.state==="writing" && job.total) label+=" — "+job.done+" of "+job.total+" lines";
+  el.innerHTML='<div class="narr-bar"><i style="width:'+(job.state==="speaking"?100:pct)+'%"></i></div>'+
+    '<p class="sub" style="margin:0">'+esc(label)+'</p>';
+}
+
+function startNarration(base, chapterUrl, voice, el, token){
+  el.innerHTML='<p class="sub" style="margin:0">Starting…</p>';
+  fetch(base+"/api/narrate",{method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({chapter_url:chapterUrl, voice:voice})})
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+    .then(function(res){
+      if(token!==readerLoadToken) return;
+      if(!res.ok){ renderNarrationStatus(el, {state:"error", error:res.d.detail}); return; }
+      pollNarration(base, res.d, el, token);
+    })
+    .catch(function(){ renderNarrationStatus(el, {state:"error", error:"Couldn’t reach the server — try again."}); });
+}
+
+function pollNarration(base, job, el, token){
+  if(token!==readerLoadToken) return;
+  if(job.state==="done"){
+    el.innerHTML='<p class="sub" style="margin:0">'+(job.mode==="storyteller"?"AI storyteller":"Dialogue read-aloud")+'</p>'+
+      '<audio controls preload="auto" src="'+esc(base+"/api/narrate/"+job.job+"/audio")+'"></audio>';
+    narration.audio=el.querySelector("audio");
+    narration.audio.play().catch(function(){});   // autoplay can be blocked; the controls are right there
+    return;
+  }
+  renderNarrationStatus(el, job);
+  if(job.state==="error") return;
+  narration.timer=setTimeout(function(){
+    fetch(base+"/api/narrate/"+job.job).then(function(r){ return r.json(); })
+      .then(function(next){ pollNarration(base, next, el, token); })
+      .catch(function(){ pollNarration(base, job, el, token); });
+  }, 2500);
+}
+
+var EAGER_PAGES=3;
+
+/* While someone reads, fetch the next chapter's page list in the
+   background, so tapping Next doesn't wait on the scrape. It also fills
+   the server's shared cache for everyone reading after them. */
+function prefetchNextChapter(){
+  var chapters=readerState.chapters, next=chapters&&chapters[readerState.index+1];
+  if(next) setTimeout(function(){ scrapeChapter(next.url); }, 1500);
+}
+
+/* A site can hand back a full list of page URLs whose image server is
+   down (kaliscan's CDN answering 522, say) — the scrape "worked", but
+   every page is blank. If the very first page fails to load before any
+   page has, treat that site as failed for this chapter and fall through
+   to the next one, exactly as if the scrape itself had failed. */
+function watchFirstPage(token, exclude){
+  var imgs=document.querySelectorAll("#rpages img");
+  if(!imgs.length || !(readerState.alternates||[]).length) return;
+  var anyLoaded=false;
+  Array.prototype.forEach.call(imgs, function(img){
+    img.addEventListener("load", function(){ anyLoaded=true; }, {once:true});
+  });
+  imgs[0].addEventListener("error", function(){
+    if(anyLoaded || token!==readerLoadToken) return;
+    var current=readerState.chapters[readerState.index];
+    if(!current) return;
+    readerView(current.url, (exclude||[]).concat([readerState.domain]));
+  }, {once:true});
 }
 
 /* Comments, scoped to the exact title + chapter someone just read (not
@@ -3313,6 +3621,8 @@ function authView(mode, thenTrack){
           '<input id="au-cap" type="text" autocomplete="off" autocapitalize="characters" '+
           'spellcheck="false" maxlength="5" placeholder="5 characters"></label>'))+
       '<button class="primary" id="au-go">'+(login?"Sign in":"Create account")+'</button>'+
+      (login?'<p class="forgot" id="au-forgot" hidden><button type="button" class="linkish" id="au-forgot-btn">'+
+        'Forgot password?</button></p>':"")+
       '<p class="err" id="au-err"></p>'+
     '</div>'+
     '<p class="hint swap">'+(login
@@ -3323,6 +3633,16 @@ function authView(mode, thenTrack){
   document.getElementById("au-swap").onclick=function(){
     authView(login?"signup":"login", thenTrack);
   };
+  if(login){
+    // Only offered once the server can actually send the email.
+    getServerConfig().then(function(cfg){
+      var row=document.getElementById("au-forgot");
+      if(row && cfg.password_reset) row.hidden=false;
+    });
+    document.getElementById("au-forgot-btn").onclick=function(){
+      forgotView(document.getElementById("au-email").value.trim());
+    };
+  }
 
   /* Lets someone check what they actually typed before submitting, same
      as every password manager and modern sign-up form does. */
@@ -3523,6 +3843,111 @@ function authView(mode, thenTrack){
     };
   });
   window.scrollTo(0,0);
+}
+
+/* ================= password reset =================
+   "Forgot password?" emails a one-time link (server/password_reset.py)
+   back to this same page with #reset=<token>; opening it shows the
+   choose-a-new-password screen. */
+var serverConfig=null;
+function getServerConfig(){
+  if(!serverConfig){
+    serverConfig=fetch(API_BASE+"/api/config").then(function(r){ return r.json(); })
+      .catch(function(){ serverConfig=null; return {}; });
+  }
+  return serverConfig;
+}
+
+function forgotView(prefill){
+  stopRail();
+  var view=document.getElementById("app");
+  view.innerHTML=
+    '<button class="back" id="fbk">← Back</button>'+
+    '<h1>Reset your password</h1>'+
+    '<p class="sub">Enter the email you signed up with and we\'ll send you a link to choose a new password.</p>'+
+    '<div class="form">'+
+      '<label>Email<input id="fp-email" type="email" autocomplete="email" inputmode="email" '+
+        'placeholder="you@example.com" value="'+esc(prefill||"")+'"></label>'+
+      '<button class="primary" id="fp-go">Send reset link</button>'+
+      '<p class="err" id="fp-err"></p>'+
+    '</div>'+
+    '<div class="note" id="fp-sent" hidden><p><strong>Check your email</strong><span id="fp-msg"></span></p></div>';
+  document.getElementById("fbk").onclick=function(){ authView("login"); };
+  var go=document.getElementById("fp-go"), err=document.getElementById("fp-err");
+  function submit(){
+    var email=document.getElementById("fp-email").value.trim();
+    if(!email){ err.textContent="Enter your email address."; return; }
+    err.textContent=""; go.disabled=true; go.textContent="Sending…";
+    api("/api/forgot-password",{method:"POST",body:JSON.stringify({
+      email:email, link:location.origin+location.pathname
+    })}).then(function(d){
+      go.disabled=false; go.textContent="Send reset link";
+      if(d.error){ err.textContent=d.error; return; }
+      document.getElementById("fp-msg").textContent=d.message;
+      document.getElementById("fp-sent").hidden=false;
+      go.textContent="Send again";
+    }).catch(function(){
+      go.disabled=false; go.textContent="Send reset link";
+      err.textContent="Couldn't reach the server. Check your connection and try again.";
+    });
+  }
+  go.onclick=submit;
+  document.getElementById("fp-email").onkeydown=function(e){ if(e.key==="Enter") submit(); };
+  window.scrollTo(0,0);
+}
+
+function resetView(token){
+  stopRail();
+  var view=document.getElementById("app");
+  view.innerHTML=
+    '<h1>Choose a new password</h1>'+
+    '<p class="sub">You\'ll be signed in afterwards, and signed out on every other device.</p>'+
+    '<div class="form">'+
+      '<label>New password<input id="rp-pass" type="password" autocomplete="new-password" '+
+        'placeholder="At least 8 characters"></label>'+
+      '<label>Confirm new password<input id="rp-pass2" type="password" autocomplete="new-password" '+
+        'placeholder="Type it again"></label>'+
+      '<button class="primary" id="rp-go">Save new password</button>'+
+      '<p class="err" id="rp-err"></p>'+
+    '</div>'+
+    '<p class="hint swap" id="rp-again" hidden><button class="linkish" id="rp-again-btn">Send a new link</button></p>';
+  var go=document.getElementById("rp-go"), err=document.getElementById("rp-err");
+  document.getElementById("rp-again-btn").onclick=function(){ forgotView(""); };
+  function submit(){
+    var p1=document.getElementById("rp-pass").value, p2=document.getElementById("rp-pass2").value;
+    if(p1.length<8){ err.textContent="Password must be at least 8 characters."; return; }
+    if(p1!==p2){ err.textContent="Passwords don't match."; return; }
+    err.textContent=""; go.disabled=true; go.textContent="Saving…";
+    api("/api/reset-password",{method:"POST",body:JSON.stringify({token:token, password:p1})})
+      .then(function(d){
+        if(d.error){
+          err.textContent=d.error; go.disabled=false; go.textContent="Save new password";
+          document.getElementById("rp-again").hidden=false;
+          return;
+        }
+        saveAuth({token:d.token, email:d.email, name:d.name, avatar_url:d.avatar_url||null});
+        return pullServerList().then(function(){ setTab("list"); });
+      }).catch(function(){
+        go.disabled=false; go.textContent="Save new password";
+        err.textContent="Couldn't reach the server. Check your connection and try again.";
+      });
+  }
+  go.onclick=submit;
+  ["rp-pass","rp-pass2"].forEach(function(id){
+    document.getElementById(id).onkeydown=function(e){ if(e.key==="Enter") submit(); };
+  });
+  window.scrollTo(0,0);
+}
+
+/* A reset link lands here as #reset=<token>. The token is taken out of the
+   address bar straight away, so it isn't left in history or shared by
+   accident. */
+function openResetFromUrl(){
+  var m=/^#reset=([A-Za-z0-9_-]{20,})$/.exec(location.hash||"");
+  if(!m) return false;
+  try{ history.replaceState(null, "", location.pathname+location.search); }catch(e){}
+  resetView(m[1]);
+  return true;
 }
 
 /* Speaks about this device only, and offers the fix when it can. */
@@ -3956,9 +4381,14 @@ if(isIOS() && !isStandalone() && !store.get("mw.noinstall")){
   setTimeout(function(){ showInstallBar(true); }, 3000);
 }
 document.getElementById("home").onclick=function(){homeView();};
+// A reset link opened in a tab that already has the site open only
+// changes the #fragment, which doesn't reload the page.
+window.addEventListener("hashchange", openResetFromUrl);
 loadAuth();
-homeView();
-openFromUrl();
+if(!openResetFromUrl()){
+  homeView();
+  openFromUrl();
+}
 updateBadge();
 </script>
 </body>
