@@ -46,8 +46,30 @@ def is_spinoff(query: str, candidate: str) -> bool:
     return bool(_SUBTITLE_SEPARATOR.match(c[len(q):]))
 
 
+_STOP_WORDS = {"the", "a", "an", "of"}
+
+
+def _words(s: str) -> set:
+    # Apostrophes dropped and a trailing plural/possessive "s" trimmed, so
+    # "Reader's", "Readers" and "Reader" all count as the same word.
+    words = re.findall(r"[a-z0-9]+", (s or "").lower().replace("'", "").replace("’", ""))
+    return {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words} - _STOP_WORDS
+
+
+def _word_recall(query: str, candidate: str) -> float:
+    q = _words(query)
+    if not q:
+        return 1.0
+    return len(q & _words(candidate)) / len(q)
+
+
 def title_score(query: str, candidate: str) -> float:
-    """similar(), except a sequel/spin-off of the searched title scores 0."""
+    """similar(), except a sequel/spin-off of the searched title scores 0,
+    and the score is scaled by how many of the query's words appear in the
+    candidate as whole words. Character bigrams alone let "Solo Max-Level
+    Newbie" clear the bar for "Solo Leveling" ("level" sits inside
+    "leveling"), and since the source with the most chapters wins, that
+    unrelated series was served for every Solo Leveling search."""
     if is_spinoff(query, candidate):
         return 0.0
-    return similar(query, candidate)
+    return similar(query, candidate) * _word_recall(query, candidate)
