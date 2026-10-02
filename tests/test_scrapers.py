@@ -618,6 +618,14 @@ class SpinoffMatchingTests(unittest.TestCase):
         self.assertEqual(title_score("Solo Leveling", "Solo Leveling: Ragnarok"), 0.0)
         self.assertEqual(title_score("Solo Leveling", "Solo Leveling - Ragnarok"), 0.0)
 
+    def test_a_different_series_sharing_a_word_stem_is_rejected(self):
+        # "level" inside "leveling" let this clear the 0.5 bar, and Asura's
+        # higher chapter count then made it win every Solo Leveling search.
+        self.assertLess(title_score("Solo Leveling", "Solo Max-Level Newbie"), 0.5)
+
+    def test_possessives_and_plurals_still_count_as_the_same_word(self):
+        self.assertGreater(title_score("Omniscient Readers Viewpoint", "Omniscient Reader's Viewpoint"), 0.9)
+
     def test_the_sequel_still_matches_itself(self):
         self.assertEqual(title_score("Solo Leveling: Ragnarok", "Solo Leveling: Ragnarok"), 1.0)
 
