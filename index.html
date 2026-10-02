@@ -513,7 +513,7 @@ var AMAZON_TAG = "";
    the place you want it. Leave a place "" and nothing shows there.
      home      - home page, below Trending
      detail    - a title's page, below its chapter list
-     readerMid - halfway through a chapter (chapters of 20+ pages only)
+     readerPages - between a chapter's pages, after every AD_EVERY_PAGES pages
      readerEnd - end of a chapter, just above Prev / Next
    Each ad runs in its own sandboxed frame (adFrame), so the network's
    scripts can't touch this page or read anyone's sign-in. For a banner the
@@ -522,9 +522,10 @@ var AMAZON_TAG = "";
 var ADS = {
   home: "",
   detail: "",
-  readerMid: "",
+  readerPages: "",
   readerEnd: ""
 };
+var AD_EVERY_PAGES = 4;
 var AD_NATIVE_HEIGHT = 300;
 var AD_SLOT_HTML = "";  // older single slot; used for `detail` if that's empty
 
@@ -2950,8 +2951,9 @@ function readerView(url, exclude){
       var attrs=i<EAGER_PAGES ? 'fetchpriority="high"' : 'loading="lazy"';
       var page='<img '+attrs+' class="rpage" decoding="async" '+
         'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
-      // One ad halfway through a long chapter, never in a short one.
-      if(images.length>=20 && i===Math.floor(images.length/2)) page+=adFrame(ADS.readerMid);
+      // An ad after every AD_EVERY_PAGES pages — but not after the last
+      // page, where readerEnd already sits.
+      if((i+1)%AD_EVERY_PAGES===0 && i<images.length-1) page+=adFrame(ADS.readerPages);
       return page;
     }).join("");
     document.getElementById("radend").innerHTML=adFrame(ADS.readerEnd);
