@@ -239,7 +239,7 @@ ad network's code for each place you want ads, and leave the rest empty.
 |---|---|
 | `home` | Home page, below Trending |
 | `detail` | A title's page, below its chapter list |
-| `readerMid` | Halfway through a chapter (chapters of 20+ pages only) |
+| `readerPages` | Between a chapter's pages, after every `AD_EVERY_PAGES` (default 4) pages |
 | `readerEnd` | End of a chapter, just above Prev / Next |
 
 Every ad runs inside its own sandboxed frame (`adFrame()`), which matters
@@ -253,7 +253,7 @@ since `HIDE_ADULT` is off; it risks the whole AdSense account).
 1. Sign up as a publisher at [adsterra.com](https://adsterra.com) and add
    your site.
 2. Create ad units. **Banner** units fit these places best: 300×250 for
-   `home`/`detail`/`readerMid`, 320×50 or 468×60 for `readerEnd`. Native
+   `home`/`detail`/`readerPages`, 320×50 or 468×60 for `readerEnd`. Native
    Banners work too (set `AD_NATIVE_HEIGHT` to their height).
 3. For each unit, copy its code ("Get code") and paste it between the
    quotes for the place you want it, then push. The frame sizes itself
