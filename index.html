@@ -518,12 +518,20 @@ var AMAZON_TAG = "";
    Each ad runs in its own sandboxed frame (adFrame), so the network's
    scripts can't touch this page or read anyone's sign-in. For a banner the
    frame takes its size from the code's own width/height; for a native
-   banner (no size in its code) it uses AD_NATIVE_HEIGHT. */
+   banner (no size in its code) it uses AD_NATIVE_HEIGHT.
+   A closing script tag inside this block would end it early, so in
+   pasted code write each one with a backslash: "<\/script>". */
+var ADSTERRA_300x250 =
+  "<script>atOptions={'key':'e832e00892145727a8d15aa4718a39b7','format':'iframe','height':250,'width':300,'params':{}};<\/script>" +
+  "<script src=\"https://www.highrevenueformat.com/e832e00892145727a8d15aa4718a39b7/invoke.js\"><\/script>";
+var ADSTERRA_320x50 =
+  "<script>atOptions={'key':'f3f86d952484818d0dac82a4841a4f0a','format':'iframe','height':50,'width':320,'params':{}};<\/script>" +
+  "<script src=\"https://www.highrevenueformat.com/f3f86d952484818d0dac82a4841a4f0a/invoke.js\"><\/script>";
 var ADS = {
-  home: "",
-  detail: "",
-  readerPages: "",
-  readerEnd: ""
+  home: ADSTERRA_300x250,
+  detail: ADSTERRA_300x250,
+  readerPages: ADSTERRA_300x250,
+  readerEnd: ADSTERRA_320x50
 };
 var AD_EVERY_PAGES = 4;
 var AD_NATIVE_HEIGHT = 300;
