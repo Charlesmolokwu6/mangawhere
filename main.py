@@ -9,7 +9,6 @@ import httpx
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
 from server import auth, cache, captcha, comments, db, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
@@ -551,7 +550,17 @@ async def api_comments_post(request: Request, authorization: Optional[str] = Hea
     return comment
 
 
-app.mount("/", StaticFiles(directory=str(BASE_DIR), html=True), name="static")
+# Only the frontend's own files are public. This used to be a StaticFiles
+# mount of the whole project directory, which also served the source,
+# .git and data/ — including the SQLite replica holding every account.
+@app.get("/index.html")
+async def serve_index_file():
+    return FileResponse(BASE_DIR / "index.html")
+
+
+@app.get("/sw.js")
+async def serve_service_worker():
+    return FileResponse(BASE_DIR / "sw.js", media_type="application/javascript")
 
 
 if __name__ == "__main__":

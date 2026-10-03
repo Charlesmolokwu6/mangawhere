@@ -338,3 +338,23 @@ class AvatarApiTests(MainTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PublicFilesTests(MainTestCase):
+    def test_frontend_files_are_served(self):
+        for path in ("/", "/index.html", "/sw.js"):
+            self.assertEqual(self.client.get(path).status_code, 200, path)
+
+    def test_project_files_are_not_served(self):
+        # The database replica, source and git metadata all sit next to
+        # index.html; none of them may be downloadable.
+        for path in (
+            "/data/mangawhere-replica.db",
+            "/data/mangawhere.db",
+            "/main.py",
+            "/server/db.py",
+            "/requirements.txt",
+            "/.git/HEAD",
+            "/render.yaml",
+        ):
+            self.assertEqual(self.client.get(path).status_code, 404, path)
