@@ -257,7 +257,10 @@ since `HIDE_ADULT` is off; it risks the whole AdSense account).
    Banners work too (set `AD_NATIVE_HEIGHT` to their height).
 3. For each unit, copy its code ("Get code") and paste it between the
    quotes for the place you want it, then push. The frame sizes itself
-   from the `width`/`height` in a banner's code.
+   from the `width`/`height` in a banner's code. Write each closing
+   script tag in the pasted code as `<\/script>`: a plain one would end
+   `index.html`'s own script block and break the page. The live units
+   (`ADSTERRA_300x250`, `ADSTERRA_320x50`) show the format.
 
 Popunder and Social Bar units aren't supported on purpose: they run
 across the whole page (not in a frame), cover content, and are the formats
