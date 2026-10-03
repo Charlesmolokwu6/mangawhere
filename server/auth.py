@@ -19,6 +19,12 @@ def _hash_password(password: str, salt: str) -> str:
     ).hex()
 
 
+def _hash_token(token: str) -> str:
+    # Sessions are stored only as this hash, like password-reset tokens, so
+    # a copy of the database can't be used to sign in as anyone.
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def _user_row_to_dict(row) -> Dict[str, Any]:
     return {
         "id": row["id"],
@@ -187,7 +193,7 @@ def create_session(user_id: int) -> str:
         conn.execute(
             "INSERT INTO sessions (token, user_id, created_at, expires_at) "
             "VALUES (?, ?, ?, ?)",
-            (token, user_id, now, now + SESSION_TTL),
+            (_hash_token(token), user_id, now, now + SESSION_TTL),
         )
         conn.commit()
     finally:
@@ -200,7 +206,7 @@ def logout(token: str) -> None:
         return
     conn = db.get_connection()
     try:
-        conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        conn.execute("DELETE FROM sessions WHERE token = ?", (_hash_token(token),))
         conn.commit()
     finally:
         conn.close()
@@ -214,7 +220,7 @@ def user_from_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
         row = conn.execute(
             "SELECT users.* FROM sessions JOIN users ON users.id = sessions.user_id "
             "WHERE sessions.token = ? AND sessions.expires_at > ?",
-            (token, time.time()),
+            (_hash_token(token), time.time()),
         ).fetchone()
     finally:
         conn.close()

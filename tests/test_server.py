@@ -109,6 +109,41 @@ class AuthTests(ServerTestCase):
         auth.logout(result["token"])
         self.assertIsNone(auth.user_from_token(result["token"]))
 
+    def test_database_holds_only_a_hash_of_the_session_token(self):
+        result = self._register()
+        conn = db.get_connection()
+        try:
+            stored = [row["token"] for row in conn.execute("SELECT token FROM sessions")]
+        finally:
+            conn.close()
+        self.assertEqual(len(stored), 1)
+        self.assertNotEqual(stored[0], result["token"])
+        # The stored value itself must not work as a sign-in token.
+        self.assertIsNone(auth.user_from_token(stored[0]))
+
+    def test_sessions_from_before_hashing_are_signed_out_and_purged(self):
+        user = auth.user_from_token(self._register()["token"])
+        old_token = "x" * 43  # a raw token_urlsafe(32), as stored before
+        conn = db.get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO sessions (token, user_id, created_at, expires_at) "
+                "VALUES (?, ?, 0, 9999999999)",
+                (old_token, user["id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertIsNone(auth.user_from_token(old_token))
+        db.purge_expired()
+        conn = db.get_connection()
+        try:
+            left = [row["token"] for row in conn.execute("SELECT token FROM sessions")]
+        finally:
+            conn.close()
+        self.assertNotIn(old_token, left)
+        self.assertEqual(len(left), 1)  # the hashed session survives
+
     def test_skip_captcha_bypasses_custom_captcha_when_turnstile_passed(self):
         # skip_captcha=True (Turnstile configured) means the custom captcha
         # is never consulted -- a deliberately wrong answer still succeeds

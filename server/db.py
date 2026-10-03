@@ -252,6 +252,10 @@ def purge_expired() -> None:
     conn = get_connection()
     try:
         conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+        # Sessions made before tokens were hashed (auth._hash_token) hold
+        # the raw token, never 64 hex characters; they can no longer match
+        # a sign-in anyway, so drop them rather than keep raw tokens around.
+        conn.execute("DELETE FROM sessions WHERE length(token) != 64")
         conn.execute("DELETE FROM captchas WHERE expires_at < ?", (now,))
         conn.execute("DELETE FROM scrape_cache WHERE expires_at < ?", (now,))
         # Kept a day past expiry so the per-hour request limit can still see them.
