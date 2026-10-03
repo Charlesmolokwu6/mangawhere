@@ -2599,10 +2599,23 @@ function adSlot(){ return adFrame(ADS.detail || AD_SLOT_HTML); }
    (where the sign-in token lives) or its cookies. Clicks still open the
    advertiser in a new tab. loading=lazy holds it back until it's near the
    screen, so ads never compete with chapter pages for bandwidth. */
+/* ?adtest=1 prints, inside each ad frame, what the network's script did:
+   how many elements and frames it made and any error it threw. That tells
+   "the network sent no ad" apart from "the sandbox broke its script". */
+var AD_DEBUG=/[?&]adtest=1\b/.test(location.search);
+var AD_DEBUG_HEAD='<script>window.__adErr=[];window.onerror=function(m){__adErr.push(m)};<\/script>';
+var AD_DEBUG_TAIL='<script>setTimeout(function(){var d=document.createElement("pre");'+
+  'd.style.cssText="position:absolute;top:0;left:0;margin:0;color:#fff;background:#000a;font:11px monospace;white-space:pre-wrap";'+
+  'd.textContent="atOptions:"+typeof atOptions+" frames:"+document.querySelectorAll("iframe").length+'+
+  '" elements:"+document.body.getElementsByTagName("*").length+" errors:"+(__adErr.join(" | ")||"none");'+
+  'document.body.appendChild(d)},8000)<\/script>';
+
 function adFrame(code){
   if(!code) return "";
   var w=/['"]?width['"]?\s*:\s*(\d+)/.exec(code), h=/['"]?height['"]?\s*:\s*(\d+)/.exec(code);
   var width=w?parseInt(w[1],10):0, height=h?parseInt(h[1],10):AD_NATIVE_HEIGHT;
+  // crossorigin lets onerror see the real message instead of "Script error."
+  if(AD_DEBUG) code=AD_DEBUG_HEAD+code.replace(/<script src=/g,'<script crossorigin="anonymous" src=')+AD_DEBUG_TAIL;
   var doc='<!doctype html><html><head><meta charset="utf-8">'+
     '<meta name="viewport" content="width=device-width,initial-scale=1">'+
     '<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}'+
