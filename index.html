@@ -2599,6 +2599,22 @@ function adSlot(){ return adFrame(ADS.detail || AD_SLOT_HTML); }
    (where the sign-in token lives) or its cookies. Clicks still open the
    advertiser in a new tab. loading=lazy holds it back until it's near the
    screen, so ads never compete with chapter pages for bandwidth. */
+/* The ad frame's opaque origin makes document.cookie and localStorage
+   throw, and Adsterra's script reads the cookie first thing, so it died
+   before drawing an ad. This gives the frame in-memory stand-ins: the
+   network can keep its frequency-cap state for the life of the frame,
+   and still can't reach this page's real storage or cookies. */
+var AD_STORAGE_SHIM='<script>(function(){'+
+  'try{document.cookie}catch(e){var jar={};Object.defineProperty(document,"cookie",{configurable:true,'+
+    'get:function(){return Object.keys(jar).map(function(k){return k+"="+jar[k]}).join("; ")},'+
+    'set:function(v){var p=String(v).split(";")[0],i=p.indexOf("=");if(i>0)jar[p.slice(0,i).trim()]=p.slice(i+1).trim()}})}'+
+  'function mem(){var d={};return{getItem:function(k){return Object.prototype.hasOwnProperty.call(d,k)?d[k]:null},'+
+    'setItem:function(k,v){d[k]=String(v)},removeItem:function(k){delete d[k]},clear:function(){d={}},'+
+    'key:function(i){return Object.keys(d)[i]||null},get length(){return Object.keys(d).length}}}'+
+  '["localStorage","sessionStorage"].forEach(function(n){try{window[n]}catch(e){'+
+    'Object.defineProperty(window,n,{configurable:true,value:mem()})}})'+
+  '})();<\/script>';
+
 /* ?adtest=1 prints, inside each ad frame, what the network's script did:
    how many elements and frames it made and any error it threw. That tells
    "the network sent no ad" apart from "the sandbox broke its script". */
@@ -2619,7 +2635,7 @@ function adFrame(code){
   var doc='<!doctype html><html><head><meta charset="utf-8">'+
     '<meta name="viewport" content="width=device-width,initial-scale=1">'+
     '<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}'+
-    'body{display:flex;justify-content:center}</style></head><body>'+code+'</body></html>';
+    'body{display:flex;justify-content:center}</style>'+AD_STORAGE_SHIM+'</head><body>'+code+'</body></html>';
   return '<div class="adslot"><span class="adlabel">Ad</span>'+
     '<iframe class="adframe" title="Advertisement" loading="lazy" scrolling="no" '+
       'sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" '+
