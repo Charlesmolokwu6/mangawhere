@@ -2634,9 +2634,36 @@ function hostedAdFrame(size){
   var wh=size.split("x");
   return AD_FRAME_START+
       'sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" '+
-      'style="width:'+wh[0]+'px;height:'+wh[1]+'px" '+
+      'style="width:'+wh[0]+'px;height:'+wh[1]+'px" onload="adHostLoaded(this)" '+
       'src="'+esc(host.href+"?unit="+size+(AD_DEBUG?"&debug=1":""))+'"></iframe></div>';
 }
+
+/* A second load means the frame left ad.html: an ad tried to redirect,
+   the sandbox kept it inside the frame, and the advertiser's page
+   (refusing to be framed) shows as Chrome's grey sad-face box. Put the
+   ad page back once; if it happens again, hide the slot. */
+function adHostLoaded(f){
+  if(f._expected){ f._expected--; return; }  // ad.html's own retry
+  f._loads=(f._loads||0)+1;
+  if(f._loads<2) return;
+  if(!f._reset){ f._reset=true; f._loads=0; f.src=f.getAttribute("src"); return; }
+  var slot=f.closest(".adslot"); if(slot) slot.style.display="none";
+}
+
+// ad.html reports its own retry ("mw-ad-retry") and giving up
+// ("mw-ad-empty"). Only messages from the ad host, and only about the
+// frame that actually sent them, are acted on.
+window.addEventListener("message", function(e){
+  var hostOrigin;
+  try{ hostOrigin=new URL(AD_HOST, location.href).origin; }catch(err){ return; }
+  if(e.origin!==hostOrigin || (e.data!=="mw-ad-retry" && e.data!=="mw-ad-empty")) return;
+  var frames=document.querySelectorAll("iframe.adframe");
+  for(var i=0;i<frames.length;i++){
+    if(frames[i].contentWindow!==e.source) continue;
+    if(e.data==="mw-ad-retry") frames[i]._expected=(frames[i]._expected||0)+1;
+    else { var slot=frames[i].closest(".adslot"); if(slot) slot.style.display="none"; }
+  }
+});
 
 function adFrame(code){
   if(!code) return "";
