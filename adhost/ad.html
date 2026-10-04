@@ -38,6 +38,33 @@ if (params.get("debug") === "1") {
     document.body.appendChild(d);
   }, 8000);
 }
+// Adsterra draws its ad in an iframe. If that iframe loads a second time,
+// the ad navigated itself (a redirect ad); the advertiser's page usually
+// refuses to be framed and shows as a grey sad-face box. Try one fresh ad,
+// then give up and leave the frame empty.
+if (unit && window.MutationObserver) {
+  new MutationObserver(function (changes) {
+    changes.forEach(function (c) {
+      Array.prototype.forEach.call(c.addedNodes, function (n) {
+        if (n.tagName !== "IFRAME") return;
+        var loads = 0;
+        n.addEventListener("load", function () {
+          if (++loads < 2) return;
+          // Tell the site first, so it knows this reload is ours (and
+          // isn't the frame itself being redirected away).
+          if (params.get("retry") !== "1") {
+            parent.postMessage("mw-ad-retry", "*");
+            params.set("retry", "1");
+            location.replace(location.pathname + "?" + params.toString());
+          } else {
+            n.remove();
+            parent.postMessage("mw-ad-empty", "*");
+          }
+        });
+      });
+    });
+  }).observe(document.documentElement, {childList: true, subtree: true});
+}
 if (unit) {
   // Adsterra's banner code: atOptions, then its loader (which itself uses
   // document.write, so it has to be written in while the page parses).
