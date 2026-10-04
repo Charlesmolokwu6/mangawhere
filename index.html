@@ -508,30 +508,24 @@ var HIDE_ADULT = false;
    simply don't appear rather than sending untagged traffic. */
 var AMAZON_TAG = "";
 
-/* Ads (Adsterra, or any network that gives you an HTML/script snippet).
-   Paste each ad unit's full code, exactly as the network shows it, into
-   the place you want it. Leave a place "" and nothing shows there.
+/* Ads. Each place below holds either an ad unit on AD_HOST (a size such as
+   "300x250", the units listed in adhost/ad.html) or a network's raw
+   HTML/script snippet. Leave a place "" and nothing shows there.
      home      - home page, below Trending
      detail    - a title's page, below its chapter list
      readerPages - between a chapter's pages, after every AD_EVERY_PAGES pages
      readerEnd - end of a chapter, just above Prev / Next
-   Each ad runs in its own sandboxed frame (adFrame), so the network's
-   scripts can't touch this page or read anyone's sign-in. For a banner the
-   frame takes its size from the code's own width/height; for a native
-   banner (no size in its code) it uses AD_NATIVE_HEIGHT.
-   A closing script tag inside this block would end it early, so in
-   pasted code write each one with a backslash: "<\/script>". */
-var ADSTERRA_300x250 =
-  "<script>atOptions={'key':'e832e00892145727a8d15aa4718a39b7','format':'iframe','height':250,'width':300,'params':{}};<\/script>" +
-  "<script src=\"https://www.highrevenueformat.com/e832e00892145727a8d15aa4718a39b7/invoke.js\"><\/script>";
-var ADSTERRA_320x50 =
-  "<script>atOptions={'key':'f3f86d952484818d0dac82a4841a4f0a','format':'iframe','height':50,'width':320,'params':{}};<\/script>" +
-  "<script src=\"https://www.highrevenueformat.com/f3f86d952484818d0dac82a4841a4f0a/invoke.js\"><\/script>";
+   AD_HOST is adhost/ad.html deployed as its own Render static site. Being a
+   different origin from this page, its ad code gets working cookies (which
+   Adsterra's script needs) yet can't read this page, its storage or anyone's
+   sign-in. A raw snippet instead runs in a sandboxed srcdoc frame; for that,
+   write each closing script tag in it with a backslash: "<\/script>". */
+var AD_HOST = "https://mangawhere-ads.onrender.com/ad.html";
 var ADS = {
-  home: ADSTERRA_300x250,
-  detail: ADSTERRA_300x250,
-  readerPages: ADSTERRA_300x250,
-  readerEnd: ADSTERRA_320x50
+  home: "300x250",
+  detail: "300x250",
+  readerPages: "300x250",
+  readerEnd: "320x50"
 };
 var AD_EVERY_PAGES = 4;
 var AD_NATIVE_HEIGHT = 300;
@@ -2626,8 +2620,27 @@ var AD_DEBUG_TAIL='<script>setTimeout(function(){var d=document.createElement("p
   '" elements:"+document.body.getElementsByTagName("*").length+" errors:"+(__adErr.join(" | ")||"none");'+
   'document.body.appendChild(d)},8000)<\/script>';
 
+var AD_FRAME_START='<div class="adslot"><span class="adlabel">Ad</span>'+
+  '<iframe class="adframe" title="Advertisement" loading="lazy" scrolling="no" ';
+
+/* A unit on AD_HOST. allow-same-origin only lets the frame keep its own
+   (ad host) origin so its cookies work; it's still cross-origin to this
+   page. Were AD_HOST ever served from this page's own origin, that flag
+   would hand ad code this page's storage, so nothing is shown then. */
+function hostedAdFrame(size){
+  var host;
+  try{ host=new URL(AD_HOST, location.href); }catch(e){ return ""; }
+  if(host.origin===location.origin) return "";
+  var wh=size.split("x");
+  return AD_FRAME_START+
+      'sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" '+
+      'style="width:'+wh[0]+'px;height:'+wh[1]+'px" '+
+      'src="'+esc(host.href+"?unit="+size+(AD_DEBUG?"&debug=1":""))+'"></iframe></div>';
+}
+
 function adFrame(code){
   if(!code) return "";
+  if(AD_HOST && /^\d+x\d+$/.test(code)) return hostedAdFrame(code);
   var w=/['"]?width['"]?\s*:\s*(\d+)/.exec(code), h=/['"]?height['"]?\s*:\s*(\d+)/.exec(code);
   var width=w?parseInt(w[1],10):0, height=h?parseInt(h[1],10):AD_NATIVE_HEIGHT;
   // crossorigin lets onerror see the real message instead of "Script error."
@@ -2636,8 +2649,7 @@ function adFrame(code){
     '<meta name="viewport" content="width=device-width,initial-scale=1">'+
     '<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}'+
     'body{display:flex;justify-content:center}</style>'+AD_STORAGE_SHIM+'</head><body>'+code+'</body></html>';
-  return '<div class="adslot"><span class="adlabel">Ad</span>'+
-    '<iframe class="adframe" title="Advertisement" loading="lazy" scrolling="no" '+
+  return AD_FRAME_START+
       'sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" '+
       'style="width:'+(width?Math.min(width, 2000)+'px':'100%')+';height:'+height+'px" '+
       'srcdoc="'+esc(doc)+'"></iframe></div>';

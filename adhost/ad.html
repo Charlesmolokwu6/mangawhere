@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Advertisement</title>
+<style>html,body{margin:0;padding:0;background:transparent;overflow:hidden}body{display:flex;justify-content:center}</style>
+<!--
+  MangaWhere's ad frame. The main site (index.html, adFrame) embeds this
+  page as ad.html?unit=300x250. It lives on its own origin
+  (mangawhere-ads.onrender.com) so ad code gets working cookies and
+  storage here, yet stays cross-origin to the site: it can't read the
+  site's storage, cookies or sign-in.
+  Only the units listed below can be shown; ?unit= just picks one.
+  ?debug=1 prints what the network's script did after 8 seconds.
+-->
+</head>
+<body>
+<script>
+var UNITS = {
+  "300x250": {key: "e832e00892145727a8d15aa4718a39b7", width: 300, height: 250},
+  "320x50":  {key: "f3f86d952484818d0dac82a4841a4f0a", width: 320, height: 50}
+};
+var params = new URLSearchParams(location.search);
+var unit = UNITS[params.get("unit")];
+var adErrors = [];
+if (params.get("debug") === "1") {
+  window.onerror = function (m) { adErrors.push(m); };
+  setTimeout(function () {
+    var d = document.createElement("pre");
+    d.style.cssText = "position:absolute;top:0;left:0;margin:0;color:#fff;background:#000a;font:11px monospace;white-space:pre-wrap";
+    var f = document.querySelector("iframe");
+    d.textContent = "host ok unit:" + (params.get("unit") || "none") +
+      " frames:" + document.querySelectorAll("iframe").length +
+      (f ? " inner:" + f.offsetWidth + "x" + f.offsetHeight : "") +
+      " errors:" + (adErrors.join(" | ") || "none");
+    document.body.appendChild(d);
+  }, 8000);
+}
+if (unit) {
+  // Adsterra's banner code: atOptions, then its loader (which itself uses
+  // document.write, so it has to be written in while the page parses).
+  window.atOptions = {key: unit.key, format: "iframe", height: unit.height, width: unit.width, params: {}};
+  document.write('<script src="https://www.highrevenueformat.com/' + unit.key + '/invoke.js"' +
+    (params.get("debug") === "1" ? ' crossorigin="anonymous"' : "") + '><\/script>');
+}
+</script>
+</body>
+</html>

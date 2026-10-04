@@ -255,12 +255,16 @@ since `HIDE_ADULT` is off; it risks the whole AdSense account).
 2. Create ad units. **Banner** units fit these places best: 300×250 for
    `home`/`detail`/`readerPages`, 320×50 or 468×60 for `readerEnd`. Native
    Banners work too (set `AD_NATIVE_HEIGHT` to their height).
-3. For each unit, copy its code ("Get code") and paste it between the
-   quotes for the place you want it, then push. The frame sizes itself
-   from the `width`/`height` in a banner's code. Write each closing
-   script tag in the pasted code as `<\/script>`: a plain one would end
-   `index.html`'s own script block and break the page. The live units
-   (`ADSTERRA_300x250`, `ADSTERRA_320x50`) show the format.
+3. Ads are served from `adhost/ad.html`, deployed as its own Render
+   static site (`mangawhere-ads`, publish directory `adhost`). Its own
+   origin gives ad code working cookies (Adsterra's script needs them)
+   while keeping it cross-origin to the site, so it can't read the site's
+   storage or anyone's sign-in. Add each unit's key to `UNITS` in
+   `adhost/ad.html`, then put its size (e.g. `"300x250"`) in the place you
+   want it in `index.html`'s `ADS`. Add the ad host's own address as a
+   website in Adsterra too, since that's the page the ads load on.
+   `?adtest=1` on the site prints, in each ad frame, what the network's
+   script did.
 
 Popunder and Social Bar units aren't supported on purpose: they run
 across the whole page (not in a frame), cover content, and are the formats
