@@ -521,6 +521,11 @@ var AMAZON_TAG = "";
    sign-in. A raw snippet instead runs in a sandboxed srcdoc frame; for that,
    write each closing script tag in it with a backslash: "<\/script>". */
 var AD_HOST = "https://mangawhere-ads.onrender.com/ad.html";
+/* Rotate a hosted ad to a fresh one after this many seconds ON SCREEN
+   (at least half the frame visible, tab in front); time scrolled away or
+   in the background doesn't count. 0 = off. Off until Adsterra confirms
+   automatic refresh is allowed on the account. */
+var AD_REFRESH_SECONDS = 0;
 var ADS = {
   home: "300x250",
   detail: "300x250",
@@ -2634,7 +2639,7 @@ function hostedAdFrame(size){
   var wh=size.split("x");
   return AD_FRAME_START+
       'sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" '+
-      'style="width:'+wh[0]+'px;height:'+wh[1]+'px" onload="adHostLoaded(this)" '+
+      'style="width:'+wh[0]+'px;height:'+wh[1]+'px" data-hosted onload="adHostLoaded(this)" '+
       'src="'+esc(host.href+"?unit="+size+(AD_DEBUG?"&debug=1":""))+'"></iframe></div>';
 }
 
@@ -2649,6 +2654,25 @@ function adHostLoaded(f){
   if(!f._reset){ f._reset=true; f._loads=0; f.src=f.getAttribute("src"); return; }
   var slot=f.closest(".adslot"); if(slot) slot.style.display="none";
 }
+
+// Every few seconds, credit on-screen time to each hosted ad frame and
+// swap in a fresh ad once it has been seen for AD_REFRESH_SECONDS.
+var AD_REFRESH_TICK=5;
+setInterval(function(){
+  if(!AD_REFRESH_SECONDS || document.visibilityState!=="visible") return;
+  var frames=document.querySelectorAll("iframe.adframe[data-hosted]");
+  for(var i=0;i<frames.length;i++){
+    var f=frames[i], r=f.getBoundingClientRect();
+    if(!r.width || !r.height) continue;  // hidden slot
+    var seenH=Math.min(r.bottom, innerHeight)-Math.max(r.top, 0);
+    var seenW=Math.min(r.right, innerWidth)-Math.max(r.left, 0);
+    if(seenH<=0 || seenW<=0 || seenH*seenW < r.width*r.height/2) continue;
+    f._seen=(f._seen||0)+AD_REFRESH_TICK;
+    if(f._seen<AD_REFRESH_SECONDS) continue;
+    f._seen=0; f._loads=0; f._reset=false;
+    f.src=f.getAttribute("src");
+  }
+}, AD_REFRESH_TICK*1000);
 
 // ad.html reports its own retry ("mw-ad-retry") and giving up
 // ("mw-ad-empty"). Only messages from the ad host, and only about the
