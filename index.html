@@ -523,9 +523,9 @@ var AMAZON_TAG = "";
 var AD_HOST = "https://mangawhere-ads.onrender.com/ad.html";
 /* Rotate a hosted ad to a fresh one after this many seconds ON SCREEN
    (at least half the frame visible, tab in front); time scrolled away or
-   in the background doesn't count. 0 = off. Off until Adsterra confirms
-   automatic refresh is allowed on the account. */
-var AD_REFRESH_SECONDS = 0;
+   in the background doesn't count. 0 = off. Adsterra confirmed refresh is
+   allowed with a minimum of 10 seconds; never set it below that. */
+var AD_REFRESH_SECONDS = 120;
 var ADS = {
   home: "300x250",
   detail: "300x250",
@@ -2660,6 +2660,7 @@ function adHostLoaded(f){
 var AD_REFRESH_TICK=5;
 setInterval(function(){
   if(!AD_REFRESH_SECONDS || document.visibilityState!=="visible") return;
+  var every=Math.max(AD_REFRESH_SECONDS, 10);  // Adsterra's minimum
   var frames=document.querySelectorAll("iframe.adframe[data-hosted]");
   for(var i=0;i<frames.length;i++){
     var f=frames[i], r=f.getBoundingClientRect();
@@ -2668,7 +2669,7 @@ setInterval(function(){
     var seenW=Math.min(r.right, innerWidth)-Math.max(r.left, 0);
     if(seenH<=0 || seenW<=0 || seenH*seenW < r.width*r.height/2) continue;
     f._seen=(f._seen||0)+AD_REFRESH_TICK;
-    if(f._seen<AD_REFRESH_SECONDS) continue;
+    if(f._seen<every) continue;
     f._seen=0; f._loads=0; f._reset=false;
     f.src=f.getAttribute("src");
   }
