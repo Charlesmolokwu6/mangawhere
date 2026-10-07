@@ -104,6 +104,21 @@ CREATE TABLE IF NOT EXISTS scrape_cache (
     value TEXT NOT NULL,
     expires_at REAL NOT NULL
 );
+
+-- Whether a title actually opens in the reader (server/health.py).
+CREATE TABLE IF NOT EXISTS title_health (
+    key TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    alts TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL,
+    reason TEXT,
+    source TEXT,
+    checked_at REAL,
+    requested_at REAL NOT NULL,
+    seen_at REAL NOT NULL,
+    reports INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_title_health_status ON title_health (status, checked_at);
 """
 
 
@@ -258,6 +273,8 @@ def purge_expired() -> None:
         conn.execute("DELETE FROM sessions WHERE length(token) != 64")
         conn.execute("DELETE FROM captchas WHERE expires_at < ?", (now,))
         conn.execute("DELETE FROM scrape_cache WHERE expires_at < ?", (now,))
+        # Titles nobody has been shown for a month stop being re-checked.
+        conn.execute("DELETE FROM title_health WHERE seen_at < ?", (now - 30 * 86400,))
         # Kept a day past expiry so the per-hour request limit can still see them.
         conn.execute("DELETE FROM password_resets WHERE expires_at < ?", (now - 86400,))
         conn.commit()

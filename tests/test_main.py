@@ -358,3 +358,42 @@ class PublicFilesTests(MainTestCase):
             "/render.yaml",
         ):
             self.assertEqual(self.client.get(path).status_code, 404, path)
+
+
+class FindApiTests(MainTestCase):
+    FOUND = {"domain": "mangaread", "chapters": [{"number": 1.0, "url": "u1", "title": ""}], "alternates": []}
+
+    def test_other_names_are_tried_when_the_title_is_not_found(self):
+        searched = []
+
+        async def fake_find(name):
+            searched.append(name)
+            return self.FOUND if name == "Backstabbed in a Backwater Dungeon" else None
+
+        with patch("main.find_best_source", fake_find):
+            response = self.client.get("/api/find", params=[
+                ("title", "Chou Nankan Dungeon de 10-man nen Shugyou Shita"),
+                ("alt", "超難関ダンジョンで10万年修行した結果"),  # no Latin letters: skipped
+                ("alt", "Backstabbed in a Backwater Dungeon"),
+                ("alt", "Never searched once one is found"),
+            ])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["domain"], "mangaread")
+        self.assertEqual(searched, [
+            "Chou Nankan Dungeon de 10-man nen Shugyou Shita",
+            "Backstabbed in a Backwater Dungeon",
+        ])
+
+    def test_not_found_under_any_name_is_a_404(self):
+        async def fake_find(name):
+            return None
+
+        with patch("main.find_best_source", fake_find):
+            response = self.client.get("/api/find", params=[("title", "Nope"), ("alt", "Still Nope")])
+        self.assertEqual(response.status_code, 404)
+
+    def test_names_are_capped(self):
+        import main
+
+        names = main._find_names("Main", ["A1", "a1", "B2", "C3", "D4", "E5"])
+        self.assertEqual(names, ["Main", "A1", "B2", "C3"])
