@@ -237,7 +237,9 @@ ad network's code for each place you want ads, and leave the rest empty.
 
 | Place | Where it shows |
 |---|---|
+| `homeTop` | Home page, at the very top above the headline |
 | `home` | Home page, below Trending |
+| `detailChapters` | A title's page, just above its chapter list |
 | `detail` | A title's page, below its chapter list |
 | `readerPages` | Between a chapter's pages, after every `AD_EVERY_PAGES` (default 4) pages |
 | `readerEnd` | End of a chapter, just above Prev / Next |

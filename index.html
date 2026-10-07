@@ -514,7 +514,9 @@ var AMAZON_TAG = "";
    "300x250", the units listed in adhost/ad.html) or a network's raw
    HTML/script snippet, or a list of those to show together, one under
    the other. Leave a place "" and nothing shows there.
+     homeTop   - home page, at the very top above the headline
      home      - home page, below Trending
+     detailChapters - a title's page, just above its chapter list
      detail    - a title's page, below its chapter list
      readerPages - between a chapter's pages, after every AD_EVERY_PAGES pages
      readerEnd - end of a chapter, just above Prev / Next
@@ -530,7 +532,9 @@ var AD_HOST = "https://mangawhere-ads.onrender.com/ad.html";
    allowed with a minimum of 10 seconds; never set it below that. */
 var AD_REFRESH_SECONDS = 25;
 var ADS = {
+  homeTop: "320x50",
   home: "300x250",
+  detailChapters: "320x50",
   detail: "300x250",
   readerPages: ["320x50", "320x50"],   // two thin strips together between pages
   readerEnd: "320x50"
@@ -1605,6 +1609,7 @@ function avatarHtml(name, email, avatarUrl, size){
 
 function homeView(){
   app.innerHTML=
+   adFrame(ADS.homeTop)+
    '<h1>Saw a manga edit? Find where to read it.</h1>'+
    '<p class="sub">Paste the video link, or type the manga name.</p>'+
    '<div class="searchwrap"><div class="paste">'+
@@ -2319,6 +2324,7 @@ function detailHtml(m,videoCh){
     shareRow(m)+
     '</div>'+
     '</div>'+
+    adFrame(ADS.detailChapters)+
     '<h3>Chapters</h3>'+
     '<div id="detailchapters"><p class="sub" style="margin:0">Looking for a chapter list…</p></div>'+
     buyRow(m)+adSlot();
