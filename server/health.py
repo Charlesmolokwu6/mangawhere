@@ -10,10 +10,17 @@ and the title page label them instead.
 One title is checked at a time with a pause between checks, so the free
 server isn't swamped. Results are re-checked periodically, sooner when a
 reader's browser reports that a title it was told is fine didn't load.
+
+The live list is kept in this process's memory: every page that shows
+titles asks about them, and the database (Turso, a network round trip per
+statement) is far too slow for that. Changes are written to the
+title_health table in the background and read back at startup, so a
+restart doesn't forget what's been checked.
 """
 
 import asyncio
 import json
+import threading
 import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
@@ -26,18 +33,28 @@ BROKEN = "broken"
 OK_RECHECK = 12 * 3600        # a working title is re-verified twice a day
 BROKEN_RECHECK = 3 * 3600     # a broken one may have been fixed upstream
 REPORT_RECHECK = 10 * 60      # a reader hit a failure: look again soon
-CHECK_PAUSE = 20              # seconds between checks
+CHECK_PAUSE = 30              # seconds between checks
 IDLE_PAUSE = 60               # nothing due: look again in a minute
 CHECK_TIMEOUT = 180           # one title's whole check
+SAVE_EVERY = 30               # seconds between writes to the database
 MAX_TITLES_PER_REQUEST = 120
 MAX_QUEUED = 600              # unchecked titles accepted before new ones wait
 MAX_TITLE_LENGTH = 200
 MAX_ALTS = 6
 SOURCES_TO_TRY = 4            # best source plus up to 3 alternates
+FORGET_AFTER = 30 * 86400     # not shown for a month: stop re-checking
+
+COLUMNS = ("key", "title", "alts", "status", "reason", "source",
+           "checked_at", "requested_at", "seen_at", "reports")
 
 Find = Callable[[str, Sequence[str]], Awaitable[Optional[Dict[str, Any]]]]
 Scrape = Callable[[str], Awaitable[Optional[Dict[str, Any]]]]
 ImageOk = Callable[[str], Awaitable[bool]]
+
+_lock = threading.Lock()
+_titles: Dict[str, Dict[str, Any]] = {}
+_dirty: set = set()
+_loaded = False
 
 
 def key_for(title: str) -> str:
@@ -59,65 +76,99 @@ def _clean(title: Any, alts: Any) -> Optional[tuple]:
     return title, clean_alts
 
 
-SEEN_REFRESH = 86400          # "still being shown" is rewritten at most daily
+def _new_entry(key: str, title: str, alts: List[str], now: float) -> Dict[str, Any]:
+    return {"key": key, "title": title, "alts": alts, "status": PENDING, "reason": None,
+            "source": None, "checked_at": None, "requested_at": now, "seen_at": now, "reports": 0}
+
+
+def load() -> None:
+    """Read saved results back from the database (once, at startup)."""
+    global _loaded
+    conn = db.get_connection()
+    try:
+        rows = conn.execute(f"SELECT {', '.join(COLUMNS)} FROM title_health").fetchall()
+    finally:
+        conn.close()
+    cutoff = time.time() - FORGET_AFTER
+    with _lock:
+        for r in rows:
+            entry = {c: r[c] for c in COLUMNS}
+            if (entry["seen_at"] or 0) < cutoff:
+                continue
+            try:
+                entry["alts"] = json.loads(entry["alts"] or "[]")
+            except ValueError:
+                entry["alts"] = []
+            entry["reports"] = entry["reports"] or 0
+            _titles.setdefault(entry["key"], entry)
+        _loaded = True
+
+
+def save() -> int:
+    """Write every changed title to the database: one upsert per batch."""
+    with _lock:
+        keys = list(_dirty)
+        _dirty.clear()
+        rows = [dict(_titles[k]) for k in keys if k in _titles]
+    if not rows:
+        return 0
+    try:
+        conn = db.get_connection()
+        try:
+            for start in range(0, len(rows), 50):
+                batch = rows[start:start + 50]
+                params: List[Any] = []
+                for e in batch:
+                    params += [e["key"], e["title"], json.dumps(e["alts"]), e["status"], e["reason"],
+                               e["source"], e["checked_at"], e["requested_at"], e["seen_at"], e["reports"]]
+                conn.execute(
+                    f"INSERT INTO title_health ({', '.join(COLUMNS)}) VALUES "
+                    + ",".join(["(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"] * len(batch))
+                    + " ON CONFLICT(key) DO UPDATE SET title = excluded.title, alts = excluded.alts, "
+                    "status = excluded.status, reason = excluded.reason, source = excluded.source, "
+                    "checked_at = excluded.checked_at, requested_at = excluded.requested_at, "
+                    "seen_at = excluded.seen_at, reports = excluded.reports",
+                    params,
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        with _lock:
+            _dirty.update(e["key"] for e in rows)  # try again next time
+        raise
+    return len(rows)
 
 
 def statuses(items: List[Dict[str, Any]]) -> Dict[str, str]:
     """Known status for each title ({"title", "alts"} dicts), keyed by the
     title as sent. Titles never seen before are queued for a check and
-    come back "pending" (shown as normal until checked).
-
-    This runs on every page that shows titles, against a remote database
-    (Turso) where each statement is a network round trip and a transaction
-    left open too long is cancelled. So it's a fixed handful of statements
-    however many titles: one read, then at most one update and one insert."""
+    come back "pending" (shown as normal until checked). Memory only."""
     now = time.time()
-    wanted: Dict[str, tuple] = {}
-    for item in items[:MAX_TITLES_PER_REQUEST]:
-        if not isinstance(item, dict):
-            continue
-        cleaned = _clean(item.get("title"), item.get("alts"))
-        if cleaned:
-            wanted.setdefault(key_for(cleaned[0]), cleaned)
-    if not wanted:
-        return {}
-
-    keys = list(wanted)
-    marks = ",".join("?" * len(keys))
-    conn = db.get_connection()
-    try:
-        known = {
-            r["key"]: (r["status"], r["seen_at"])
-            for r in conn.execute(
-                f"SELECT key, status, seen_at FROM title_health WHERE key IN ({marks})", keys
-            )
-        }
-        queued = conn.execute(
-            "SELECT COUNT(*) AS n FROM title_health WHERE status = ?", (PENDING,)
-        ).fetchone()["n"]
-
-        stale_seen = [k for k, (_, seen) in known.items() if seen < now - SEEN_REFRESH]
-        new_keys = [k for k in keys if k not in known][: max(0, MAX_QUEUED - queued)]
-        if stale_seen:
-            conn.execute(
-                f"UPDATE title_health SET seen_at = ? WHERE key IN ({','.join('?' * len(stale_seen))})",
-                [now] + stale_seen,
-            )
-        if new_keys:
-            rows = []
-            for k in new_keys:
-                title, alts = wanted[k]
-                rows += [k, title, json.dumps(alts), PENDING, now, now]
-            conn.execute(
-                "INSERT OR IGNORE INTO title_health (key, title, alts, status, requested_at, seen_at) "
-                "VALUES " + ",".join(["(?, ?, ?, ?, ?, ?)"] * len(new_keys)),
-                rows,
-            )
-        if stale_seen or new_keys:
-            conn.commit()
-    finally:
-        conn.close()
-    return {wanted[k][0]: known[k][0] if k in known else PENDING for k in keys}
+    out: Dict[str, str] = {}
+    with _lock:
+        queued = sum(1 for e in _titles.values() if e["status"] == PENDING)
+        for item in items[:MAX_TITLES_PER_REQUEST]:
+            if not isinstance(item, dict):
+                continue
+            cleaned = _clean(item.get("title"), item.get("alts"))
+            if not cleaned:
+                continue
+            title, alts = cleaned
+            key = key_for(title)
+            entry = _titles.get(key)
+            if entry:
+                if entry["seen_at"] < now - 86400:  # "still shown", saved at most daily
+                    entry["seen_at"] = now
+                    _dirty.add(key)
+                out[title] = entry["status"]
+                continue
+            if queued < MAX_QUEUED:
+                _titles[key] = _new_entry(key, title, alts, now)
+                _dirty.add(key)
+                queued += 1
+            out[title] = PENDING
+    return out
 
 
 def report(title: Any, alts: Any) -> bool:
@@ -129,19 +180,15 @@ def report(title: Any, alts: Any) -> bool:
         return False
     title, alts = cleaned
     now = time.time()
-    conn = db.get_connection()
-    try:
-        # One statement: this can be called on a remote database.
-        conn.execute(
-            "INSERT INTO title_health (key, title, alts, status, requested_at, seen_at, reports) "
-            "VALUES (?, ?, ?, ?, ?, ?, 1) "
-            "ON CONFLICT(key) DO UPDATE SET reports = reports + 1, "
-            "requested_at = excluded.requested_at, seen_at = excluded.seen_at",
-            (key_for(title), title, json.dumps(alts), PENDING, now, now),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    key = key_for(title)
+    with _lock:
+        entry = _titles.get(key)
+        if entry is None:
+            entry = _titles[key] = _new_entry(key, title, alts, now)
+        entry["reports"] += 1
+        entry["requested_at"] = now
+        entry["seen_at"] = now
+        _dirty.add(key)
     return True
 
 
@@ -149,69 +196,66 @@ def next_due() -> Optional[Dict[str, Any]]:
     """The title most in need of a check: never checked first, then ones a
     reader reported, then working/broken titles whose re-check is due."""
     now = time.time()
-    conn = db.get_connection()
-    try:
-        row = conn.execute(
-            "SELECT * FROM title_health WHERE status = ? ORDER BY requested_at LIMIT 1",
-            (PENDING,),
-        ).fetchone()
-        if not row:
-            row = conn.execute(
-                "SELECT * FROM title_health WHERE requested_at > checked_at AND checked_at < ? "
-                "ORDER BY requested_at LIMIT 1",
-                (now - REPORT_RECHECK,),
-            ).fetchone()
-        if not row:
-            row = conn.execute(
-                "SELECT * FROM title_health WHERE (status = ? AND checked_at < ?) "
-                "OR (status = ? AND checked_at < ?) ORDER BY checked_at LIMIT 1",
-                (OK, now - OK_RECHECK, BROKEN, now - BROKEN_RECHECK),
-            ).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    with _lock:
+        entries = list(_titles.values())
+
+    def pick(candidates, by):
+        return dict(min(candidates, key=by)) if candidates else None
+
+    return (
+        pick([e for e in entries if e["status"] == PENDING], lambda e: e["requested_at"])
+        or pick([e for e in entries if e["checked_at"] is not None
+                 and e["requested_at"] > e["checked_at"]
+                 and e["checked_at"] < now - REPORT_RECHECK], lambda e: e["requested_at"])
+        or pick([e for e in entries if e["checked_at"] is not None and (
+                    (e["status"] == OK and e["checked_at"] < now - OK_RECHECK)
+                    or (e["status"] == BROKEN and e["checked_at"] < now - BROKEN_RECHECK))],
+                lambda e: e["checked_at"])
+    )
 
 
 def record(key: str, status: str, reason: Optional[str], source: Optional[str]) -> None:
-    conn = db.get_connection()
-    try:
-        conn.execute(
-            "UPDATE title_health SET status = ?, reason = ?, source = ?, checked_at = ? WHERE key = ?",
-            (status, reason, source, time.time(), key),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    with _lock:
+        entry = _titles.get(key)
+        if entry is None:
+            return
+        entry.update(status=status, reason=reason, source=source, checked_at=time.time())
+        _dirty.add(key)
 
 
 def summary() -> Dict[str, Any]:
-    conn = db.get_connection()
-    try:
-        counts = {
-            r["status"]: r["n"]
-            for r in conn.execute("SELECT status, COUNT(*) AS n FROM title_health GROUP BY status")
-        }
-        broken = [
-            {
-                "title": r["title"],
-                "reason": r["reason"],
-                "checked_at": r["checked_at"],
-                "reader_reports": r["reports"],
-            }
-            for r in conn.execute(
-                "SELECT title, reason, checked_at, reports FROM title_health "
-                "WHERE status = ? ORDER BY reports DESC, seen_at DESC LIMIT 200",
-                (BROKEN,),
-            )
-        ]
-    finally:
-        conn.close()
+    with _lock:
+        entries = [dict(e) for e in _titles.values()]
+    counts = {s: sum(1 for e in entries if e["status"] == s) for s in (OK, BROKEN, PENDING)}
+    broken = sorted((e for e in entries if e["status"] == BROKEN),
+                    key=lambda e: (-e["reports"], -(e["seen_at"] or 0)))[:200]
     return {
-        "ok": counts.get(OK, 0),
-        "broken": counts.get(BROKEN, 0),
-        "pending": counts.get(PENDING, 0),
-        "broken_titles": broken,
+        "ok": counts[OK],
+        "broken": counts[BROKEN],
+        "pending": counts[PENDING],
+        "broken_titles": [
+            {"title": e["title"], "reason": e["reason"], "checked_at": e["checked_at"],
+             "reader_reports": e["reports"]}
+            for e in broken
+        ],
     }
+
+
+def forget_old() -> None:
+    cutoff = time.time() - FORGET_AFTER
+    with _lock:
+        for key in [k for k, e in _titles.items() if (e["seen_at"] or 0) < cutoff]:
+            del _titles[key]
+            _dirty.discard(key)
+
+
+def reset() -> None:
+    """Forget everything in memory (tests)."""
+    global _loaded
+    with _lock:
+        _titles.clear()
+        _dirty.clear()
+        _loaded = False
 
 
 async def check(title: str, alts: Sequence[str], find: Find, scrape: Scrape, image_ok: ImageOk):
@@ -245,35 +289,45 @@ async def check(title: str, alts: Sequence[str], find: Find, scrape: Scrape, ima
 _task: Optional[asyncio.Task] = None
 
 
+async def _save_quietly() -> None:
+    try:
+        await asyncio.to_thread(save)
+    except Exception as e:
+        print(f"[health] save failed (will retry): {e}")
+
+
 async def _run_forever(find: Find, scrape: Scrape, image_ok: ImageOk) -> None:
-    await asyncio.sleep(30)  # let the server finish starting
-    while True:
-        due = None
+    if not _loaded:
         try:
-            due = await asyncio.to_thread(next_due)
+            await asyncio.to_thread(load)
         except Exception as e:
-            print(f"[health] queue read failed: {e}")
+            print(f"[health] couldn't load saved results: {e}")
+    await asyncio.sleep(30)  # let the server finish starting
+    last_save = time.time()
+    while True:
+        if time.time() - last_save >= SAVE_EVERY:
+            await _save_quietly()
+            forget_old()
+            last_save = time.time()
+        due = next_due()
         if not due:
             await asyncio.sleep(IDLE_PAUSE)
             continue
         try:
-            alts = json.loads(due.get("alts") or "[]")
             status, reason, source = await asyncio.wait_for(
-                check(due["title"], alts, find, scrape, image_ok), CHECK_TIMEOUT
+                check(due["title"], due["alts"], find, scrape, image_ok), CHECK_TIMEOUT
             )
         except asyncio.TimeoutError:
-            # Too slow to call either way; keep any earlier verdict and
-            # move on. A never-checked title stays pending until the next try.
+            # Too slow to call either way; keep any earlier verdict. A title
+            # never checked before counts as broken for now (a reader would
+            # have given up too) and is looked at again in a few hours.
             status = due["status"] if due["status"] != PENDING else BROKEN
             reason, source = "Check timed out", due.get("source")
         except Exception as e:
             print(f"[health] check failed for {due['title']!r}: {e}")
             status = due["status"] if due["status"] != PENDING else BROKEN
             reason, source = "Check failed", due.get("source")
-        try:
-            await asyncio.to_thread(record, due["key"], status, reason, source)
-        except Exception as e:
-            print(f"[health] couldn't save result for {due['title']!r}: {e}")
+        record(due["key"], status, reason, source)
         await asyncio.sleep(CHECK_PAUSE)
 
 
@@ -283,8 +337,9 @@ def start(find: Find, scrape: Scrape, image_ok: ImageOk) -> None:
         _task = asyncio.ensure_future(_run_forever(find, scrape, image_ok))
 
 
-def stop() -> None:
+async def stop() -> None:
     global _task
     if _task is not None:
         _task.cancel()
         _task = None
+    await _save_quietly()
