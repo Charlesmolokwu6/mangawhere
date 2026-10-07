@@ -1256,13 +1256,25 @@ async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
     if not candidates:
         return None
 
+    # A site holding only a sliver of the series (MangaDex had 3 of The
+    # Greatest Estate Developer's 223 chapters, all side stories) can still
+    # tie on the latest number, and would then be all the reader shows.
+    # Anything with under half the longest list only wins if nothing
+    # fuller was found.
+    longest = max(len(c["chapters"]) for c in candidates)
+
     # On a tie for the latest chapter, prefer a site whose images load
     # straight from its own CDN: comizy's must go through this server's
     # proxy (its CDN checks the Referer), which is slower for readers and
     # costs this server bandwidth for every page. Then, most chapters wins,
     # since a longer list means fewer gaps to hit while reading.
     candidates.sort(
-        key=lambda c: (c["chapters"][-1]["number"], c["domain"] not in PROXIED_IMAGE_SOURCES, len(c["chapters"])),
+        key=lambda c: (
+            len(c["chapters"]) * 2 >= longest,
+            c["chapters"][-1]["number"],
+            c["domain"] not in PROXIED_IMAGE_SOURCES,
+            len(c["chapters"]),
+        ),
         reverse=True,
     )
     best = dict(candidates[0])

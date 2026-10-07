@@ -1648,6 +1648,37 @@ function chips(active){
         (curGenre===g)+'">'+esc(g)+'</button>'; }).join("")+'</div>';
 }
 
+/* Title health (server/health.py): the server checks in the background
+   that each title the site shows really opens in the reader. Browsing
+   rows drop titles that failed their last check; anything not checked yet
+   still shows (and gets queued). If the check can't be reached, nothing
+   is hidden. */
+function healthFilter(rows){
+  if(!READER_BASE || !rows || !rows.length) return Promise.resolve(rows||[]);
+  var body=JSON.stringify({titles:rows.map(function(r){
+    return {title:r.title, alts:(r.alts||[]).slice(0,6)}; })});
+  return fetchTimeout(READER_BASE+"/api/health/status",
+      {method:"POST", headers:{"Content-Type":"application/json"}, body:body}, 4000)
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      var st=(d&&d.statuses)||{};
+      return rows.filter(function(r){ return st[r.title]!=="broken"; });
+    })
+    .catch(function(){ return rows; });
+}
+
+// A title a reader couldn't open: the server re-checks it soon. Once per
+// title per visit is plenty.
+var reportedUnreadable={};
+function reportUnreadable(m){
+  if(!READER_BASE || !m || !m.title || reportedUnreadable[m.title]) return;
+  reportedUnreadable[m.title]=true;
+  fetch(READER_BASE+"/api/health/report",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({title:m.title, alts:(m.alts||[]).slice(0,6)}), keepalive:true})
+    .catch(function(){});
+}
+
 function loadTrending(country,genre){
   curFilter=country||"";
   if(genre!==undefined) curGenre=genre||"";
@@ -1659,7 +1690,7 @@ function loadTrending(country,genre){
     '</div></div></div>'; }).join("");
   wireChips();
   wireGenreToggle();
-  trending(curFilter,curGenre).then(function(rows){
+  trending(curFilter,curGenre).then(healthFilter).then(function(rows){
     setDiag("source: "+sourceUsed);
     var el=document.getElementById("trend");
     if(!el) return;
@@ -2175,7 +2206,7 @@ function render(r){
   // candidate actually shown here, not on every keystroke like the
   // type-ahead suggestions do.
   picks.forEach(function(x,i){
-    findChapters(x.m.title).then(function(res){
+    findChapters(x.m.title, x.m.alts).then(function(res){
       var el=document.getElementById("pickavail-"+i);
       if(!el) return;   // picked already, or navigated away
       if(res.ok && (res.d.chapters||[]).length){
@@ -2392,7 +2423,8 @@ function fillChapters(m, videoCh){
   // own count) turns out to be behind (a capped RSS feed, a stalled fan
   // translation, etc). Every path that opens a detail page routes through
   // here, so this is the one place this needs to be wired up.
-  findChapters(m.title).then(function(res){
+  findChapters(m.title, m.alts).then(function(res){
+    if(!res.ok) reportUnreadable(m);
     if(res.ok) reconcileChapterCount(res.d.chapters, res.d.domain);
     renderDetailChapters(m, res);
   });
@@ -2731,9 +2763,18 @@ var readerState={chapters:null, index:-1, back:null, domain:null, manga:null, al
 var findCache={};
 var scrapeCache={};
 
-function findChapters(title){
+/* Sites list a series under different names, so the other names a title
+   is known by go along too: the server tries them in turn when the main
+   title isn't found. Only names with Latin letters, since no source
+   indexes native-script titles. */
+function altParams(alts){
+  return (alts||[]).filter(function(a){ return a && /[A-Za-z]/.test(a); }).slice(0,3)
+    .map(function(a){ return "&alt="+encodeURIComponent(a); }).join("");
+}
+
+function findChapters(title, alts){
   if(findCache[title]) return findCache[title];
-  var promise=fetch(READER_BASE+"/api/find?title="+encodeURIComponent(title))
+  var promise=fetch(READER_BASE+"/api/find?title="+encodeURIComponent(title)+altParams(alts))
     .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, status:r.status, d:d}; }); })
     .catch(function(){ return {ok:false, status:0, d:null}; });
   findCache[title]=promise;
@@ -2878,7 +2919,7 @@ function wireReader(m){
     err.textContent="";
     go.disabled=true; go.textContent="Finding…";
 
-    findChapters(m.title).then(function(res){
+    findChapters(m.title, m.alts).then(function(res){
       go.disabled=false; go.textContent=label;
       if(!res.ok){
         err.textContent = res.status===404
@@ -3018,11 +3059,13 @@ function readerView(url, exclude){
     if(!status || token!==readerLoadToken) return;
     if(!res.ok){
       status.textContent="Couldn't load this chapter — try again.";
+      reportUnreadable(readerState.manga);
       return;
     }
     var images=res.d.images||[];
     if(!images.length){
       status.textContent="Couldn't load this chapter — try again.";
+      reportUnreadable(readerState.manga);
       return;
     }
     status.textContent="";   // loaded fine — no page count to show
@@ -3217,16 +3260,22 @@ function prefetchNextChapter(){
    to the next one, exactly as if the scrape itself had failed. */
 function watchFirstPage(token, exclude){
   var imgs=document.querySelectorAll("#rpages img");
-  if(!imgs.length || !(readerState.alternates||[]).length) return;
+  if(!imgs.length) return;
   var anyLoaded=false;
   Array.prototype.forEach.call(imgs, function(img){
     img.addEventListener("load", function(){ anyLoaded=true; }, {once:true});
   });
   imgs[0].addEventListener("error", function(){
     if(anyLoaded || token!==readerLoadToken) return;
-    var current=readerState.chapters[readerState.index];
-    if(!current) return;
-    readerView(current.url, (exclude||[]).concat([readerState.domain]));
+    var tried=(exclude||[]).concat([readerState.domain]);
+    var current=readerState.chapters&&readerState.chapters[readerState.index];
+    var untried=(readerState.alternates||[]).some(function(a){ return tried.indexOf(a.domain)<0; });
+    if(current && untried){ readerView(current.url, tried); return; }
+    // Every site tried and the pages still won't load: say so instead of
+    // leaving broken images, and have the server re-check this title.
+    var status=document.getElementById("rstatus");
+    if(status) status.textContent="This chapter's pages won't load right now — try again later.";
+    reportUnreadable(readerState.manga);
   }, {once:true});
 }
 
@@ -3358,7 +3407,12 @@ function loadRecommendations(){
     if(!el || !box) return;   // navigated away before this resolved
     rows=rows.filter(function(r){ return r.title && r.title!==m.title; });
     if(HIDE_ADULT) rows=rows.filter(function(r){ return !r.adult; });
-    rows=rows.slice(0,12);
+    return healthFilter(rows.slice(0,16));
+  }).then(function(rows){
+    var el=document.getElementById("recsrail");
+    box=document.getElementById("recsbox");
+    if(!el || !box) return;
+    rows=(rows||[]).slice(0,12);
     if(!rows.length){ box.hidden=true; return; }
     box.hidden=false;
     el.innerHTML='<div class="rail"><div class="track">'+

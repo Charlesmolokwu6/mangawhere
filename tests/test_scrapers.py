@@ -713,6 +713,39 @@ class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
             result = await core.find_best_source("X")
         self.assertEqual(result["domain"], "comizy")
 
+    async def test_a_site_with_only_a_sliver_of_the_series_does_not_win(self):
+        def chapters(*numbers):
+            return [{"number": float(n), "url": f"u{n}", "title": ""} for n in numbers]
+
+        # MangaDex held 3 side-story chapters of a 223-chapter series and
+        # tied on the latest number; as a direct-image site it used to win,
+        # leaving the reader with a 3-chapter list.
+        found = {
+            "mangadex": chapters(223.7, 223.8, 223.9),
+            "comizy": chapters(*range(1, 224), 223.9),
+            "asurascans": chapters(*range(1, 224)),
+        }
+
+        def fake_source(domain):
+            async def search(title):
+                return f"https://{domain}/series" if domain in found else None
+
+            async def chapter_list(url):
+                return found[domain]
+
+            return (search, chapter_list)
+
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "comizy")
+        self.assertEqual(result["alternates"][-1]["domain"], "mangadex")
+
+        # Alone, though, a short list is still better than nothing.
+        found = {"mangadex": chapters(223.7, 223.8, 223.9)}
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            result = await core.find_best_source("X")
+        self.assertEqual(result["domain"], "mangadex")
+
     async def test_one_source_raising_does_not_sink_the_others(self):
         async def boom(title):
             raise RuntimeError("site changed")

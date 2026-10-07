@@ -1,8 +1,9 @@
 import asyncio
 import json
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Sequence
 from urllib.parse import urlparse
 
 import httpx
@@ -11,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from server import auth, cache, captcha, comments, db, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
+from server import auth, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -20,7 +21,9 @@ BASE_DIR = Path(__file__).resolve().parent
 async def lifespan(app: FastAPI):
     db.init_db()
     poller.start()
+    health.start(find_title, scrape_cached, image_loads)
     yield
+    health.stop()
     poller.stop()
     if _proxy_client is not None:
         await _proxy_client.aclose()
@@ -183,6 +186,9 @@ async def proxy_post(request: Request, url: Optional[str] = Query(default=None))
 # chapters are kept well inside that.
 CHAPTER_TTL = 6 * 3600
 KALISCAN_CHAPTER_TTL = 30 * 60
+# MangaDex hands out image addresses on a volunteer-run server (MangaDex@Home)
+# that are only promised for about 15 minutes; cached for hours they 404.
+MANGADEX_CHAPTER_TTL = 10 * 60
 SERIES_TTL = 30 * 60
 FIND_TTL = 30 * 60
 FIND_MISS_TTL = 10 * 60  # "not found anywhere" — rechecked sooner
@@ -195,17 +201,56 @@ def _cacheable(response: JSONResponse, seconds: int) -> JSONResponse:
     return response
 
 
+def _chapter_ttl(url: str) -> float:
+    lowered = url.lower()
+    if "kaliscan" in lowered:
+        return KALISCAN_CHAPTER_TTL
+    if "mangadex" in lowered:
+        return MANGADEX_CHAPTER_TTL
+    return CHAPTER_TTL
+
+
+async def scrape_cached(url: str):
+    return await cache.cached(
+        "chapter", url, _chapter_ttl(url),
+        lambda: scrape_chapter(url),
+        keep=lambda p: bool(p and p.get("images")),
+    )
+
+
+IMAGE_CHECK_UA = (
+    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/130.0 Mobile Safari/537.36"
+)
+
+
+async def image_loads(url: str) -> bool:
+    """Does a page image actually come back, the way the reader asks for it?
+    Direct images go with no Referer (the reader's <img> uses no-referrer);
+    proxied CDNs get the Referer the proxy would send. Only the headers are
+    read, not the whole image."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False
+    headers = {"User-Agent": IMAGE_CHECK_UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}
+    for suffix, referer in PROXY_REFERER_OVERRIDES.items():
+        if parsed.hostname == suffix or parsed.hostname.endswith("." + suffix):
+            headers["Referer"] = referer
+            break
+    try:
+        async with _get_proxy_client().stream("GET", url, headers=headers, follow_redirects=True) as r:
+            content_type = r.headers.get("content-type", "")
+            return r.status_code == 200 and not content_type.startswith(("text/", "application/json"))
+    except Exception:
+        return False
+
+
 @app.get("/api/scrape")
 async def api_scrape(url: str = Query(..., description="Chapter URL to scrape")):
     _require_absolute_url(url)
-    kaliscan = "kaliscan" in url.lower()
 
     try:
-        payload = await cache.cached(
-            "chapter", url, KALISCAN_CHAPTER_TTL if kaliscan else CHAPTER_TTL,
-            lambda: scrape_chapter(url),
-            keep=lambda p: bool(p and p.get("images")),
-        )
+        payload = await scrape_cached(url)
     except Exception:
         raise HTTPException(
             status_code=502, detail="Couldn't reach that page — the site may be blocking us."
@@ -218,7 +263,8 @@ async def api_scrape(url: str = Query(..., description="Chapter URL to scrape"))
     response = JSONResponse(content=payload)
     response.headers["Referrer-Policy"] = "no-referrer"
     if payload["images"]:
-        _cacheable(response, 300 if kaliscan else 3600)
+        # Browsers may keep it no longer than the server does.
+        _cacheable(response, int(min(_chapter_ttl(url), 3600)))
     return response
 
 
@@ -243,16 +289,52 @@ async def api_series(url: str = Query(..., description="Series page URL to list 
     return response
 
 
+MAX_FIND_ALTS = 3
+
+
+def _find_names(title: str, alts: Sequence[str]) -> List[str]:
+    """The title first, then up to MAX_FIND_ALTS other names it's known by.
+    Names with no Latin letters (native Japanese/Korean/Chinese) are skipped:
+    none of the sources index those, so they'd only cost a full search."""
+    names = [title.strip()]
+    seen = {names[0].lower()}
+    for alt in alts:
+        alt = (alt or "").strip()
+        if not alt or len(alt) > 200 or alt.lower() in seen or not re.search(r"[A-Za-z]", alt):
+            continue
+        names.append(alt)
+        seen.add(alt.lower())
+        if len(names) > MAX_FIND_ALTS:
+            break
+    return names
+
+
+async def find_title(title: str, alts: Sequence[str] = ()):
+    """find_best_source under the title, then under each other name until
+    one turns up. Sites list a series under different names (AniList's
+    English title, the romanized original, a fan translation), and searching
+    only the first missed series that were sitting right there. Each name is
+    cached on its own, so a miss under the main title isn't searched twice."""
+    for name in _find_names(title, alts):
+        result = await cache.cached(
+            "find", name, FIND_TTL, lambda n=name: find_best_source(n),
+            miss_ttl=FIND_MISS_TTL,
+        )
+        if result:
+            return result
+    return None
+
+
 @app.get("/api/find")
-async def api_find(title: str = Query(..., description="Manga title to find a reading source for")):
+async def api_find(
+    title: str = Query(..., description="Manga title to find a reading source for"),
+    alt: List[str] = Query(default=[], description="Other names the title is known by"),
+):
     if not title or not title.strip():
         raise HTTPException(status_code=400, detail="Missing title query parameter")
 
     try:
-        result = await cache.cached(
-            "find", title, FIND_TTL, lambda: find_best_source(title.strip()),
-            miss_ttl=FIND_MISS_TTL,
-        )
+        result = await find_title(title, alt)
     except Exception:
         raise HTTPException(status_code=502, detail="Couldn't search for that title right now.")
 
@@ -264,6 +346,41 @@ async def api_find(title: str = Query(..., description="Manga title to find a re
     response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
     return _cacheable(response, 300)
+
+
+@app.post("/api/health/status")
+async def api_health_status(request: Request):
+    """Which of these titles open in the reader. Body: {"titles": [{"title",
+    "alts"}, ...]}. Unknown titles are queued for a check and come back
+    "pending"; the site hides only "broken" ones."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Expected JSON")
+    items = body.get("titles") if isinstance(body, dict) else None
+    if not isinstance(items, list):
+        raise HTTPException(status_code=400, detail="Expected a titles list")
+    return {"statuses": await asyncio.to_thread(health.statuses, items)}
+
+
+@app.post("/api/health/report")
+async def api_health_report(request: Request):
+    """The reader couldn't open a title: have it re-checked soon."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Expected JSON")
+    if not isinstance(body, dict) or not await asyncio.to_thread(
+        health.report, body.get("title"), body.get("alts")
+    ):
+        raise HTTPException(status_code=400, detail="Expected a title")
+    return {"ok": True}
+
+
+@app.get("/api/health")
+async def api_health():
+    """How many titles open in the reader, and which don't and why."""
+    return await asyncio.to_thread(health.summary)
 
 
 @app.get("/api/video-lookup")
