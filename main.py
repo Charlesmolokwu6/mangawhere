@@ -190,8 +190,12 @@ KALISCAN_CHAPTER_TTL = 30 * 60
 # that are only promised for about 15 minutes; cached for hours they 404.
 MANGADEX_CHAPTER_TTL = 10 * 60
 SERIES_TTL = 30 * 60
-FIND_TTL = 30 * 60
+FIND_TTL = 30 * 60          # an answer this old is refreshed in the background...
+FIND_KEEP_TTL = 12 * 3600   # ...but still served instantly for up to this long
 FIND_MISS_TTL = 10 * 60  # "not found anywhere" — rechecked sooner
+# Once one site has found a title, how long the rest get before the reader
+# is answered. Fast sites (APIs) answer in 1-3s; the slowest took 20-30s.
+FIND_GRACE = 4.0
 
 
 def _cacheable(response: JSONResponse, seconds: int) -> JSONResponse:
@@ -316,13 +320,25 @@ async def find_title(title: str, alts: Sequence[str] = ()):
     only the first missed series that were sitting right there. Each name is
     cached on its own, so a miss under the main title isn't searched twice."""
     for name in _find_names(title, alts):
-        result = await cache.cached(
-            "find", name, FIND_TTL, lambda n=name: find_best_source(n),
+        result = await cache.cached_swr(
+            "find", name, FIND_TTL, FIND_KEEP_TTL,
+            # A reader is waiting: answer once a site has it, and swap in
+            # the full ranking when the slower sites finish.
+            lambda n=name: find_best_source(
+                n, grace=FIND_GRACE, on_complete=lambda full, n=n: _save_full_find(n, full)
+            ),
+            # Nobody is waiting on a background refresh: search every site.
+            refresh=lambda n=name: find_best_source(n),
             miss_ttl=FIND_MISS_TTL,
         )
         if result:
             return result
     return None
+
+
+async def _save_full_find(name: str, full) -> None:
+    if full:
+        await cache.store("find", name, full, FIND_KEEP_TTL)
 
 
 @app.get("/api/find")

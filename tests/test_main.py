@@ -366,7 +366,7 @@ class FindApiTests(MainTestCase):
     def test_other_names_are_tried_when_the_title_is_not_found(self):
         searched = []
 
-        async def fake_find(name):
+        async def fake_find(name, **kwargs):
             searched.append(name)
             return self.FOUND if name == "Backstabbed in a Backwater Dungeon" else None
 
@@ -385,7 +385,7 @@ class FindApiTests(MainTestCase):
         ])
 
     def test_not_found_under_any_name_is_a_404(self):
-        async def fake_find(name):
+        async def fake_find(name, **kwargs):
             return None
 
         with patch("main.find_best_source", fake_find):
