@@ -253,7 +253,8 @@ since `HIDE_ADULT` is off; it risks the whole AdSense account).
 1. Sign up as a publisher at [adsterra.com](https://adsterra.com) and add
    your site.
 2. Create ad units. **Banner** units fit these places best: 300×250 for
-   `home`/`detail`/`readerPages`, 320×50 or 468×60 for `readerEnd`. Native
+   `home`/`detail`, and the thin 320×50 for `readerPages`/`readerEnd`, since a
+   300×250 box between chapter pages interrupts reading. Native
    Banners work too (set `AD_NATIVE_HEIGHT` to their height).
 3. Ads are served from `adhost/ad.html`, deployed as its own Render
    static site (`mangawhere-ads`, publish directory `adhost`). Its own
