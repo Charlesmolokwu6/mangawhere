@@ -59,42 +59,65 @@ def _clean(title: Any, alts: Any) -> Optional[tuple]:
     return title, clean_alts
 
 
+SEEN_REFRESH = 86400          # "still being shown" is rewritten at most daily
+
+
 def statuses(items: List[Dict[str, Any]]) -> Dict[str, str]:
     """Known status for each title ({"title", "alts"} dicts), keyed by the
     title as sent. Titles never seen before are queued for a check and
-    come back "pending" (shown as normal until checked)."""
+    come back "pending" (shown as normal until checked).
+
+    This runs on every page that shows titles, against a remote database
+    (Turso) where each statement is a network round trip and a transaction
+    left open too long is cancelled. So it's a fixed handful of statements
+    however many titles: one read, then at most one update and one insert."""
     now = time.time()
-    out: Dict[str, str] = {}
+    wanted: Dict[str, tuple] = {}
+    for item in items[:MAX_TITLES_PER_REQUEST]:
+        if not isinstance(item, dict):
+            continue
+        cleaned = _clean(item.get("title"), item.get("alts"))
+        if cleaned:
+            wanted.setdefault(key_for(cleaned[0]), cleaned)
+    if not wanted:
+        return {}
+
+    keys = list(wanted)
+    marks = ",".join("?" * len(keys))
     conn = db.get_connection()
     try:
+        known = {
+            r["key"]: (r["status"], r["seen_at"])
+            for r in conn.execute(
+                f"SELECT key, status, seen_at FROM title_health WHERE key IN ({marks})", keys
+            )
+        }
         queued = conn.execute(
             "SELECT COUNT(*) AS n FROM title_health WHERE status = ?", (PENDING,)
         ).fetchone()["n"]
-        for item in items[:MAX_TITLES_PER_REQUEST]:
-            cleaned = _clean(item.get("title") if isinstance(item, dict) else None,
-                             item.get("alts") if isinstance(item, dict) else None)
-            if not cleaned:
-                continue
-            title, alts = cleaned
-            key = key_for(title)
-            row = conn.execute("SELECT status FROM title_health WHERE key = ?", (key,)).fetchone()
-            if row:
-                conn.execute("UPDATE title_health SET seen_at = ? WHERE key = ?", (now, key))
-                out[title] = row["status"]
-            elif queued < MAX_QUEUED:
-                conn.execute(
-                    "INSERT INTO title_health (key, title, alts, status, requested_at, seen_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (key, title, json.dumps(alts), PENDING, now, now),
-                )
-                queued += 1
-                out[title] = PENDING
-            else:
-                out[title] = PENDING
-        conn.commit()
+
+        stale_seen = [k for k, (_, seen) in known.items() if seen < now - SEEN_REFRESH]
+        new_keys = [k for k in keys if k not in known][: max(0, MAX_QUEUED - queued)]
+        if stale_seen:
+            conn.execute(
+                f"UPDATE title_health SET seen_at = ? WHERE key IN ({','.join('?' * len(stale_seen))})",
+                [now] + stale_seen,
+            )
+        if new_keys:
+            rows = []
+            for k in new_keys:
+                title, alts = wanted[k]
+                rows += [k, title, json.dumps(alts), PENDING, now, now]
+            conn.execute(
+                "INSERT OR IGNORE INTO title_health (key, title, alts, status, requested_at, seen_at) "
+                "VALUES " + ",".join(["(?, ?, ?, ?, ?, ?)"] * len(new_keys)),
+                rows,
+            )
+        if stale_seen or new_keys:
+            conn.commit()
     finally:
         conn.close()
-    return out
+    return {wanted[k][0]: known[k][0] if k in known else PENDING for k in keys}
 
 
 def report(title: Any, alts: Any) -> bool:
@@ -106,21 +129,16 @@ def report(title: Any, alts: Any) -> bool:
         return False
     title, alts = cleaned
     now = time.time()
-    key = key_for(title)
     conn = db.get_connection()
     try:
-        row = conn.execute("SELECT key FROM title_health WHERE key = ?", (key,)).fetchone()
-        if row:
-            conn.execute(
-                "UPDATE title_health SET reports = reports + 1, requested_at = ?, seen_at = ? WHERE key = ?",
-                (now, now, key),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO title_health (key, title, alts, status, requested_at, seen_at, reports) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1)",
-                (key, title, json.dumps(alts), PENDING, now, now),
-            )
+        # One statement: this can be called on a remote database.
+        conn.execute(
+            "INSERT INTO title_health (key, title, alts, status, requested_at, seen_at, reports) "
+            "VALUES (?, ?, ?, ?, ?, ?, 1) "
+            "ON CONFLICT(key) DO UPDATE SET reports = reports + 1, "
+            "requested_at = excluded.requested_at, seen_at = excluded.seen_at",
+            (key_for(title), title, json.dumps(alts), PENDING, now, now),
+        )
         conn.commit()
     finally:
         conn.close()

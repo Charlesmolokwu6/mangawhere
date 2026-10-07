@@ -61,6 +61,47 @@ class StatusTests(HealthDbTestCase):
         self.assertIsNone(self._row("C"))
 
 
+class RemoteDatabaseTests(HealthDbTestCase):
+    """On Turso every statement is a network round trip, and a transaction
+    left open while dozens run gets cancelled ("stream was idle for too
+    long"), which is what broke the first live deploy. A status lookup
+    must stay a fixed handful of statements however many titles it covers."""
+
+    def count_statements(self, fn):
+        real = db.get_connection
+        count = {"n": 0}
+
+        class Counting:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def execute(self, *args):
+                count["n"] += 1
+                return self._conn.execute(*args)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        db.get_connection = lambda: Counting(real())
+        try:
+            fn()
+        finally:
+            db.get_connection = real
+        return count["n"]
+
+    def test_status_lookup_is_a_few_statements_however_many_titles(self):
+        titles = [{"title": f"Title {i}", "alts": ["Alt"]} for i in range(100)]
+        self.assertLessEqual(self.count_statements(lambda: health.statuses(titles)), 4)
+        # Seen again the same day: reads only.
+        self.assertLessEqual(self.count_statements(lambda: health.statuses(titles)), 2)
+        self.assertEqual(health.summary()["pending"], 100)
+
+    def test_a_report_is_one_statement(self):
+        self.assertEqual(self.count_statements(lambda: health.report("A", [])), 1)
+        self.assertEqual(self.count_statements(lambda: health.report("A", [])), 1)
+        self.assertEqual(self._row("A")["reports"], 2)
+
+
 class QueueTests(HealthDbTestCase):
     def test_order_is_unchecked_then_reported_then_stale(self):
         health.statuses([{"title": "Fresh"}, {"title": "Stale"}, {"title": "Reported"}])
