@@ -18,9 +18,12 @@
 </head>
 <body>
 <script>
+// Units registered to this page's own site (mangawhere-ads.onrender.com) in
+// Adsterra, since this is the page the ads actually load on. The first pair,
+// registered to mangawhere.onrender.com, was e832e008.../f3f86d95....
 var UNITS = {
-  "300x250": {key: "e832e00892145727a8d15aa4718a39b7", width: 300, height: 250},
-  "320x50":  {key: "f3f86d952484818d0dac82a4841a4f0a", width: 320, height: 50}
+  "300x250": {key: "9cf4c2d47b34c372fccb8f57da842958", width: 300, height: 250},
+  "320x50":  {key: "0f8b7c3621aaafd11f5351c19639c035", width: 320, height: 50}
 };
 var params = new URLSearchParams(location.search);
 var unit = UNITS[params.get("unit")];
