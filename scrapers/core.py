@@ -1,8 +1,9 @@
 import asyncio
 import json
 import re
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
@@ -94,10 +95,32 @@ class CloudflareBlocked(PermissionError):
     a real one just gets the identical deny page a plain fetch did."""
 
 
+# Hosts a plain fetch couldn't reach at all (no DNS, connection refused),
+# with when. Every source falls back to a headless browser when a plain
+# fetch fails, and starting Chromium is the most expensive thing this
+# server does: on Render's free plan (0.15 CPU) it pinned the CPU for ~20s
+# per search for kaliscan.io, whose domain no longer exists. A browser can't
+# reach a host plain HTTP couldn't, so the fallback is skipped for a while.
+UNREACHABLE_FOR = 10 * 60
+_unreachable: Dict[str, float] = {}
+
+
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+class SiteUnreachable(Exception):
+    pass
+
+
 async def fetch_html_httpx(url: str, timeout: float = 15.0) -> str:
     """Fast standard fetch path for normal HTML pages."""
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=timeout) as client:
-        response = await client.get(url)
+        try:
+            response = await client.get(url)
+        except httpx.ConnectError:
+            _unreachable[_host(url)] = time.monotonic()
+            raise
         lowered = response.text.lower()
         if "used cloudflare to restrict access" in lowered:
             raise CloudflareBlocked("Cloudflare denied this request outright")
@@ -117,6 +140,9 @@ async def fetch_html_httpx(url: str, timeout: float = 15.0) -> str:
 
 async def fetch_html_playwright(url: str) -> str:
     """Browser-based fallback used when anti-bot protection blocks standard HTTP requests."""
+    seen = _unreachable.get(_host(url))
+    if seen is not None and time.monotonic() - seen < UNREACHABLE_FOR:
+        raise SiteUnreachable(f"{_host(url)} couldn't be reached; not starting a browser")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(user_agent=HEADERS["User-Agent"])
@@ -1206,7 +1232,9 @@ SOURCES = {
     "mangaread": (search_mangaread, scrape_mangaread_chapter_list),
     "flamecomics": (search_flamecomics, scrape_flamecomics_chapter_list),
     "manhuaplus": (search_manhuaplus, scrape_manhuaplus_chapter_list),
-    "kaliscan": (search_kaliscan, scrape_kaliscan_chapter_list),
+    # kaliscan.io's domain stopped resolving in October 2026; its scrapers
+    # stay (chapter URLs cached from before still route to them) but it's
+    # no longer searched.
     "mangakatana": (search_mangakatana, scrape_mangakatana_chapter_list),
     "weebcentral": (search_weebcentral, scrape_weebcentral_chapter_list),
 }
@@ -1221,6 +1249,15 @@ SOURCE_TIME_BUDGET = 30.0
 PROXIED_IMAGE_SOURCES = {"comizy"}
 
 
+# A site that keeps running out of time (down, or throttling us) is left out
+# of searches for a while instead of holding every search up and burning
+# the server's small CPU share on it.
+TIMEOUTS_BEFORE_REST = 2
+REST_FOR = 10 * 60
+_timeouts: Dict[str, int] = {}
+_rested: Dict[str, float] = {}
+
+
 async def _source_for(domain: str, title: str) -> Optional[Dict[str, Any]]:
     search, chapter_list = SOURCES[domain]
 
@@ -1230,14 +1267,24 @@ async def _source_for(domain: str, title: str) -> Optional[Dict[str, Any]]:
             return None, []
         return series_url, await chapter_list(series_url)
 
+    rested_at = _rested.get(domain)
+    if rested_at is not None and time.monotonic() - rested_at < REST_FOR:
+        return None
     try:
         series_url, chapters = await asyncio.wait_for(lookup(), SOURCE_TIME_BUDGET)
     except asyncio.TimeoutError:
-        print(f"[{domain}] skipped — took longer than {SOURCE_TIME_BUDGET:g}s")
+        _timeouts[domain] = _timeouts.get(domain, 0) + 1
+        if _timeouts[domain] >= TIMEOUTS_BEFORE_REST:
+            _rested[domain] = time.monotonic()
+            _timeouts[domain] = 0
+            print(f"[{domain}] timed out {TIMEOUTS_BEFORE_REST} times running — resting it for {REST_FOR // 60} min")
+        else:
+            print(f"[{domain}] skipped — took longer than {SOURCE_TIME_BUDGET:g}s")
         return None
     except Exception as e:
         print(f"[{domain}] lookup failed ({e})")
         return None
+    _timeouts[domain] = 0
     if not series_url:
         return None
     if not chapters:
