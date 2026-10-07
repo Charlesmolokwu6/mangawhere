@@ -3,6 +3,8 @@ import json
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import httpx
+
 from scrapers import clean_image_urls, extract_chapter_list, extract_image_urls_from_html
 from scrapers import core
 from scrapers.matching import title_score
@@ -639,6 +641,32 @@ class SpinoffMatchingTests(unittest.TestCase):
 
 
 class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        core._timeouts.clear()
+        core._rested.clear()
+
+    async def test_a_site_that_keeps_timing_out_is_rested(self):
+        calls = {"n": 0}
+
+        async def slow(title):
+            calls["n"] += 1
+            await asyncio.sleep(5)
+
+        async def nothing(title):
+            return None
+
+        async def chapter_list(url):
+            return []
+
+        sources = {d: (nothing, chapter_list) for d in core.SOURCES}
+        sources["mangakatana"] = (slow, chapter_list)
+        with patch.dict(core.SOURCES, sources), patch.object(core, "SOURCE_TIME_BUDGET", 0.02):
+            for _ in range(4):
+                await core.find_best_source("X")
+        # Two timeouts, then left out of the next searches.
+        self.assertEqual(calls["n"], 2)
+        self.assertIn("mangakatana", core._rested)
+
     async def test_a_source_over_its_time_budget_is_left_out(self):
         async def slow(title):
             await asyncio.sleep(5)
@@ -750,8 +778,8 @@ class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
         def chapters(*numbers):
             return [{"number": float(n), "url": f"u{n}", "title": ""} for n in numbers]
 
-        delays = {"mangadex": 0.0, "comizy": 0.02, "kaliscan": 0.5}
-        found = {"mangadex": chapters(1, 2), "comizy": chapters(1, 2, 3), "kaliscan": chapters(1, 2, 3, 4)}
+        delays = {"mangadex": 0.0, "comizy": 0.02, "mangakatana": 0.5}
+        found = {"mangadex": chapters(1, 2), "comizy": chapters(1, 2, 3), "mangakatana": chapters(1, 2, 3, 4)}
 
         def fake_source(domain):
             async def search(title):
@@ -778,7 +806,7 @@ class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quick["domain"], "comizy")
         self.assertEqual([a["domain"] for a in quick["alternates"]], ["mangadex"])
         # ...and the slow site's result still arrives for the cache.
-        self.assertEqual(full["domain"], "kaliscan")
+        self.assertEqual(full["domain"], "mangakatana")
         self.assertEqual(len(full["alternates"]), 2)
 
     async def test_with_grace_and_nothing_found_it_waits_for_everyone(self):
@@ -812,3 +840,42 @@ class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnreachableSiteTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        core._unreachable.clear()
+
+    async def test_no_browser_is_started_for_a_host_plain_http_could_not_reach(self):
+        async def refuse(self, url, *args, **kwargs):
+            raise httpx.ConnectError("[Errno -2] Name or service not known")
+
+        with patch.object(httpx.AsyncClient, "get", refuse):
+            with self.assertRaises(httpx.ConnectError):
+                await core.fetch_html_httpx("https://gone.example/search?q=x")
+
+        def no_browser():
+            raise AssertionError("started a browser for an unreachable site")
+
+        with patch.object(core, "async_playwright", no_browser):
+            with self.assertRaises(core.SiteUnreachable):
+                await core.fetch_html_playwright("https://gone.example/other")
+
+    async def test_the_browser_is_still_tried_for_reachable_but_blocked_sites(self):
+        launched = []
+
+        class FakePlaywright:
+            async def __aenter__(self):
+                launched.append(True)
+                raise RuntimeError("stop here")
+
+            async def __aexit__(self, *exc):
+                return False
+
+        with patch.object(core, "async_playwright", FakePlaywright):
+            with self.assertRaises(RuntimeError):
+                await core.fetch_html_playwright("https://blocked.example/")
+        self.assertEqual(launched, [True])
+
+    async def test_kaliscan_is_no_longer_searched(self):
+        self.assertNotIn("kaliscan", core.SOURCES)
