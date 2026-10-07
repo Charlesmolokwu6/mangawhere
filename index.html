@@ -438,7 +438,9 @@ overflow:hidden}
 .read.buy .n{color:#ffa94d}
 .adslot{margin:16px 0 0;min-height:0;text-align:center;display:flex;flex-direction:column;align-items:center;gap:4px}
 .adslot:empty{display:none}
-.adlabel{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.adgroup{margin:16px 0 0}
+.adgroup .adslot{margin-top:6px}
+.adgroup .adslot:first-child{margin-top:0}
 .adframe{border:0;max-width:100%;display:block;background:transparent}
 .more{background:none;border:none;color:var(--mint);font-size:13px;font-weight:600;
 padding:6px 0 0;cursor:pointer}
@@ -510,7 +512,8 @@ var AMAZON_TAG = "";
 
 /* Ads. Each place below holds either an ad unit on AD_HOST (a size such as
    "300x250", the units listed in adhost/ad.html) or a network's raw
-   HTML/script snippet. Leave a place "" and nothing shows there.
+   HTML/script snippet, or a list of those to show together, one under
+   the other. Leave a place "" and nothing shows there.
      home      - home page, below Trending
      detail    - a title's page, below its chapter list
      readerPages - between a chapter's pages, after every AD_EVERY_PAGES pages
@@ -529,7 +532,7 @@ var AD_REFRESH_SECONDS = 25;
 var ADS = {
   home: "300x250",
   detail: "300x250",
-  readerPages: "320x50",   // a thin strip between pages; a box there interrupts reading
+  readerPages: ["320x50", "320x50"],   // two thin strips together between pages
   readerEnd: "320x50"
 };
 var AD_EVERY_PAGES = 4;
@@ -2657,7 +2660,7 @@ var AD_DEBUG_TAIL='<script>setTimeout(function(){var d=document.createElement("p
   '" elements:"+document.body.getElementsByTagName("*").length+" errors:"+(__adErr.join(" | ")||"none");'+
   'document.body.appendChild(d)},8000)<\/script>';
 
-var AD_FRAME_START='<div class="adslot"><span class="adlabel">Ad</span>'+
+var AD_FRAME_START='<div class="adslot">'+
   '<iframe class="adframe" title="Advertisement" loading="lazy" scrolling="no" ';
 
 /* A unit on AD_HOST. allow-same-origin only lets the frame keep its own
@@ -2724,6 +2727,8 @@ window.addEventListener("message", function(e){
 
 function adFrame(code){
   if(!code) return "";
+  // A list shows its ads together, one under the other.
+  if(Array.isArray(code)) return '<div class="adgroup">'+code.map(adFrame).join("")+'</div>';
   if(AD_HOST && /^\d+x\d+$/.test(code)) return hostedAdFrame(code);
   var w=/['"]?width['"]?\s*:\s*(\d+)/.exec(code), h=/['"]?height['"]?\s*:\s*(\d+)/.exec(code);
   var width=w?parseInt(w[1],10):0, height=h?parseInt(h[1],10):AD_NATIVE_HEIGHT;
@@ -3080,13 +3085,6 @@ function readerView(url, exclude){
       renderReaderNav();
     }
     document.getElementById("rpages").innerHTML=images.map(function(src, i){
-      // comizy.io's image CDN rejects any request whose Referer isn't
-      // comizy.io itself — a plain <img> load always sends *our* origin,
-      // so those need routing through our proxy, which sets the right
-      // Referer server-side. Every other source's CDN doesn't check this,
-      // so they stay direct to avoid needless bandwidth through our backend.
-      var needsProxy=false;
-      try{ needsProxy=/(^|\.)cmzcdn\.org$/i.test(new URL(src, location.href).hostname); }catch(e){}
       // The first few pages load straight away, at high priority. The rest
       // wait until the reader scrolls near them — they hold a placeholder
       // height until loaded, since an image with no height yet counts as
@@ -3094,7 +3092,7 @@ function readerView(url, exclude){
       // page at once, with page 1 queued behind page 150.
       var attrs=i<EAGER_PAGES ? 'fetchpriority="high"' : 'loading="lazy"';
       var page='<img '+attrs+' class="rpage" decoding="async" '+
-        'src="'+esc(needsProxy?via(src):src)+'" referrerpolicy="no-referrer" alt="">';
+        'src="'+esc(pageSrc(src))+'" referrerpolicy="no-referrer" alt="">';
       // An ad after every AD_EVERY_PAGES pages — but not after the last
       // page, where readerEnd already sits.
       if((i+1)%AD_EVERY_PAGES===0 && i<images.length-1) page+=adFrame(ADS.readerPages);
@@ -3248,9 +3246,42 @@ var EAGER_PAGES=3;
 /* While someone reads, fetch the next chapter's page list in the
    background, so tapping Next doesn't wait on the scrape. It also fills
    the server's shared cache for everyone reading after them. */
+/* comizy.io's image CDN rejects any request whose Referer isn't comizy.io
+   itself, and a plain <img> load always sends our origin, so those go
+   through our proxy, which sets the right Referer server-side. Every other
+   source's CDN doesn't check, so they stay direct to spare our server. */
+function pageSrc(src){
+  var needsProxy=false;
+  try{ needsProxy=/(^|\.)cmzcdn\.org$/i.test(new URL(src, location.href).hostname); }catch(e){}
+  return needsProxy?via(src):src;
+}
+
+/* Pages are big (0.2-2 MB each) and phone data is the bottleneck, so the
+   next chapter gets a head start: its page list is fetched shortly after
+   this one opens, and once the reader is most of the way down, its first
+   few pages are downloaded too. Tapping Next then shows them at once. */
 function prefetchNextChapter(){
   var chapters=readerState.chapters, next=chapters&&chapters[readerState.index+1];
-  if(next) setTimeout(function(){ scrapeChapter(next.url); }, 1500);
+  if(!next) return;
+  setTimeout(function(){ scrapeChapter(next.url); }, 1500);
+  var pages=document.querySelectorAll("#rpages .rpage");
+  var mark=pages[Math.floor(pages.length*0.6)];
+  if(!mark || typeof IntersectionObserver==="undefined") return;
+  var token=readerLoadToken;
+  var io=new IntersectionObserver(function(entries){
+    if(!entries.some(function(e){ return e.isIntersecting; })) return;
+    io.disconnect();
+    if(token!==readerLoadToken) return;
+    scrapeChapter(next.url).then(function(res){
+      if(!chapterLoaded(res) || token!==readerLoadToken) return;
+      res.d.images.slice(0, EAGER_PAGES).forEach(function(src){
+        var img=new Image();
+        img.referrerPolicy="no-referrer";
+        img.src=pageSrc(src);
+      });
+    });
+  });
+  io.observe(mark);
 }
 
 /* A site can hand back a full list of page URLs whose image server is
