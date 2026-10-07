@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import quote, urljoin
 
 import httpx
@@ -1245,16 +1245,10 @@ async def _source_for(domain: str, title: str) -> Optional[Dict[str, Any]]:
     return {"domain": domain, "series_url": series_url, "chapters": chapters}
 
 
-async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
-    """Search every site for a title and read from whichever is more
-    up to date — i.e. has the higher chapter number right now. Every other
-    site that also has it comes back under "alternates" (best first), so
-    the reader can fall back to one when a chapter won't load from the
-    winner."""
-    results = await asyncio.gather(*(_source_for(d, title) for d in SOURCES))
-    candidates = [r for r in results if r]
+def _rank(candidates: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not candidates:
         return None
+    candidates = list(candidates)
 
     # A site holding only a sliver of the series (MangaDex had 3 of The
     # Greatest Estate Developer's 223 chapters, all side stories) can still
@@ -1280,6 +1274,56 @@ async def find_best_source(title: str) -> Optional[Dict[str, Any]]:
     best = dict(candidates[0])
     best["alternates"] = candidates[1:]
     return best
+
+
+async def find_best_source(
+    title: str,
+    grace: Optional[float] = None,
+    on_complete: Optional[Callable[[Optional[Dict[str, Any]]], Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Search every site for a title and read from whichever is more
+    up to date — i.e. has the higher chapter number right now. Every other
+    site that also has it comes back under "alternates" (best first), so
+    the reader can fall back to one when a chapter won't load from the
+    winner.
+
+    With `grace`, the answer doesn't wait for the slowest site: once any
+    site has found the title, the rest get `grace` more seconds, then the
+    best found so far is returned. A reader opening a series used to wait
+    ~20-30s for one slow site even when a fast one answered in two. Sites
+    still searching carry on in the background; when they're done the
+    full ranking goes to `on_complete` (to replace the cached answer)."""
+    tasks = [asyncio.ensure_future(_source_for(d, title)) for d in SOURCES]
+    if grace is None:
+        return _rank([r for r in await asyncio.gather(*tasks) if r])
+
+    loop = asyncio.get_running_loop()
+    found: List[Dict[str, Any]] = []
+    pending = set(tasks)
+    deadline = None
+    while pending:
+        timeout = None if deadline is None else max(0.0, deadline - loop.time())
+        done, pending = await asyncio.wait(pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+        found += [r for r in (t.result() for t in done) if r]
+        if found and deadline is None:
+            deadline = loop.time() + grace
+        if deadline is not None and loop.time() >= deadline:
+            break
+
+    if pending:
+        async def finish(rest=pending, so_far=list(found)):
+            results = await asyncio.gather(*rest, return_exceptions=True)
+            full = _rank(so_far + [r for r in results if isinstance(r, dict)])
+            if on_complete is not None:
+                try:
+                    outcome = on_complete(full)
+                    if asyncio.iscoroutine(outcome):
+                        await outcome
+                except Exception as e:
+                    print(f"[find] saving the full result for {title!r} failed: {e}")
+
+        asyncio.ensure_future(finish())
+    return _rank(found)
 
 
 async def scrape_chapter(url: str) -> Dict[str, Any]:

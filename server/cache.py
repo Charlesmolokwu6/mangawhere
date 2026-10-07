@@ -134,5 +134,81 @@ async def cached(
     return value
 
 
+_refreshing: set = set()
+
+
+def _memory_entry(key: str) -> Optional[Tuple[float, Any]]:
+    entry = _memory.get(key)
+    if not entry or entry[0] < time.time():
+        _memory.pop(key, None)
+        return None
+    _memory.move_to_end(key)
+    return entry
+
+
+async def _store(namespace: str, key: str, value: Any, ttl: float) -> None:
+    expires_at = time.time() + ttl
+    _memory_set(key, value, expires_at)
+    try:
+        await asyncio.to_thread(_db_set, key, value, expires_at)
+    except Exception as e:
+        print(f"[cache] write failed for {namespace}: {e}")
+
+
+async def store(namespace: str, raw_key: str, value: Any, ttl: float) -> None:
+    """Put a value in the cache directly (e.g. a fuller answer that arrived
+    after a quicker one was already served)."""
+    await _store(namespace, _key(namespace, raw_key), value, ttl)
+
+
+async def _refresh(namespace: str, key: str, produce, ttl: float, keep) -> None:
+    try:
+        value = await produce()
+        if keep(value):  # a failed refresh keeps serving the old answer
+            await _store(namespace, key, value, ttl)
+    except Exception as e:
+        print(f"[cache] background refresh failed for {namespace}: {e}")
+    finally:
+        _refreshing.discard(key)
+
+
+async def cached_swr(
+    namespace: str,
+    raw_key: str,
+    fresh_ttl: float,
+    keep_ttl: float,
+    produce: Callable[[], Awaitable[Any]],
+    *,
+    refresh: Optional[Callable[[], Awaitable[Any]]] = None,
+    keep: Callable[[Any], bool] = bool,
+    miss_ttl: Optional[float] = None,
+) -> Any:
+    """cached(), but a kept answer stays usable for keep_ttl: once it's
+    older than fresh_ttl it's still returned at once, and `refresh` (default
+    `produce`) runs in the background to replace it. Readers never wait on
+    a lookup they or someone else already did; only a title nobody has
+    looked up in keep_ttl costs a full search. Misses aren't served stale."""
+    key = _key(namespace, raw_key)
+    entry = _memory_entry(key)
+    if entry is None:
+        try:
+            hit, stored = await asyncio.to_thread(_db_get, key)
+        except Exception as e:
+            print(f"[cache] read failed for {namespace}: {e}")
+            hit = False
+        if hit:
+            _memory_set(key, stored[1], stored[0])
+            entry = stored
+    if entry is not None:
+        expires_at, value = entry
+        stored_at = expires_at - keep_ttl
+        if keep(value) and time.time() - stored_at > fresh_ttl and key not in _refreshing:
+            _refreshing.add(key)
+            asyncio.ensure_future(_refresh(namespace, key, refresh or produce, keep_ttl, keep))
+        return value
+    return await cached(namespace, raw_key, keep_ttl, produce, keep=keep, miss_ttl=miss_ttl)
+
+
 def clear_memory() -> None:
     _memory.clear()
+    _refreshing.clear()

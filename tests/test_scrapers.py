@@ -746,6 +746,52 @@ class FindBestSourceTests(unittest.IsolatedAsyncioTestCase):
             result = await core.find_best_source("X")
         self.assertEqual(result["domain"], "mangadex")
 
+    async def test_with_grace_it_answers_without_waiting_for_slow_sites(self):
+        def chapters(*numbers):
+            return [{"number": float(n), "url": f"u{n}", "title": ""} for n in numbers]
+
+        delays = {"mangadex": 0.0, "comizy": 0.02, "kaliscan": 0.5}
+        found = {"mangadex": chapters(1, 2), "comizy": chapters(1, 2, 3), "kaliscan": chapters(1, 2, 3, 4)}
+
+        def fake_source(domain):
+            async def search(title):
+                if domain not in found:
+                    return None
+                await asyncio.sleep(delays[domain])
+                return f"https://{domain}/series"
+
+            async def chapter_list(url):
+                return found[domain]
+
+            return (search, chapter_list)
+
+        completed = asyncio.get_running_loop().create_future()
+        loop = asyncio.get_running_loop()
+        with patch.dict(core.SOURCES, {d: fake_source(d) for d in core.SOURCES}):
+            started = loop.time()
+            quick = await core.find_best_source("X", grace=0.1, on_complete=completed.set_result)
+            took = loop.time() - started
+            full = await asyncio.wait_for(completed, 2)
+
+        # Answered after the fast sites plus the grace, not the slow one...
+        self.assertLess(took, 0.4)
+        self.assertEqual(quick["domain"], "comizy")
+        self.assertEqual([a["domain"] for a in quick["alternates"]], ["mangadex"])
+        # ...and the slow site's result still arrives for the cache.
+        self.assertEqual(full["domain"], "kaliscan")
+        self.assertEqual(len(full["alternates"]), 2)
+
+    async def test_with_grace_and_nothing_found_it_waits_for_everyone(self):
+        async def nothing(title):
+            await asyncio.sleep(0.01)
+            return None
+
+        async def chapter_list(url):
+            return []
+
+        with patch.dict(core.SOURCES, {d: (nothing, chapter_list) for d in core.SOURCES}):
+            self.assertIsNone(await core.find_best_source("X", grace=0.05))
+
     async def test_one_source_raising_does_not_sink_the_others(self):
         async def boom(title):
             raise RuntimeError("site changed")
