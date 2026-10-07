@@ -1,4 +1,3 @@
-import json
 import tempfile
 import time
 import unittest
@@ -13,32 +12,34 @@ def chapters(*numbers):
     return [{"number": float(n), "url": f"u{n}", "title": ""} for n in numbers]
 
 
-class HealthDbTestCase(unittest.TestCase):
+class HealthTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self._tmp.close()
         db.DB_PATH = Path(self._tmp.name)
         db.init_db()
+        health.reset()
 
     def tearDown(self):
+        health.reset()
         Path(self._tmp.name).unlink(missing_ok=True)
 
-    def _row(self, title):
-        conn = db.get_connection()
-        try:
-            row = conn.execute("SELECT * FROM title_health WHERE key = ?", (health.key_for(title),)).fetchone()
-            return dict(row) if row else None
-        finally:
-            conn.close()
+    def entry(self, title):
+        return health._titles.get(health.key_for(title))
+
+    def backdate(self, title, checked_ago, requested_ago=None):
+        e = self.entry(title)
+        e["checked_at"] = time.time() - checked_ago
+        e["requested_at"] = time.time() - (requested_ago if requested_ago is not None else checked_ago + 1)
 
 
-class StatusTests(HealthDbTestCase):
+class StatusTests(HealthTestCase):
     def test_unknown_titles_are_queued_as_pending(self):
         out = health.statuses([{"title": "Solo Leveling", "alts": ["Na Honjaman Level Up"]}])
         self.assertEqual(out, {"Solo Leveling": "pending"})
-        row = self._row("solo  LEVELING")  # same key, whatever the spacing/case
-        self.assertEqual(row["status"], "pending")
-        self.assertEqual(json.loads(row["alts"]), ["Na Honjaman Level Up"])
+        e = self.entry("solo  LEVELING")  # same key, whatever the spacing/case
+        self.assertEqual(e["status"], "pending")
+        self.assertEqual(e["alts"], ["Na Honjaman Level Up"])
 
     def test_known_titles_return_their_status(self):
         health.statuses([{"title": "A"}, {"title": "B"}])
@@ -57,70 +58,112 @@ class StatusTests(HealthDbTestCase):
             health.statuses([{"title": t} for t in ("A", "B", "C")])
         finally:
             health.MAX_QUEUED = original
-        self.assertIsNotNone(self._row("B"))
-        self.assertIsNone(self._row("C"))
+        self.assertIsNotNone(self.entry("B"))
+        self.assertIsNone(self.entry("C"))
 
-
-class RemoteDatabaseTests(HealthDbTestCase):
-    """On Turso every statement is a network round trip, and a transaction
-    left open while dozens run gets cancelled ("stream was idle for too
-    long"), which is what broke the first live deploy. A status lookup
-    must stay a fixed handful of statements however many titles it covers."""
-
-    def count_statements(self, fn):
+    def test_lookups_never_touch_the_database(self):
+        # Every page that shows titles asks; on Turso each statement is a
+        # network round trip (the first live deploy took 4-8s and 500ed).
         real = db.get_connection
-        count = {"n": 0}
 
-        class Counting:
-            def __init__(self, conn):
-                self._conn = conn
+        def forbidden():
+            raise AssertionError("status lookup opened the database")
 
-            def execute(self, *args):
-                count["n"] += 1
-                return self._conn.execute(*args)
-
-            def __getattr__(self, name):
-                return getattr(self._conn, name)
-
-        db.get_connection = lambda: Counting(real())
+        db.get_connection = forbidden
         try:
-            fn()
+            health.statuses([{"title": f"Title {i}"} for i in range(100)])
+            health.report("Title 1", [])
+            health.summary()
         finally:
             db.get_connection = real
-        return count["n"]
-
-    def test_status_lookup_is_a_few_statements_however_many_titles(self):
-        titles = [{"title": f"Title {i}", "alts": ["Alt"]} for i in range(100)]
-        self.assertLessEqual(self.count_statements(lambda: health.statuses(titles)), 4)
-        # Seen again the same day: reads only.
-        self.assertLessEqual(self.count_statements(lambda: health.statuses(titles)), 2)
-        self.assertEqual(health.summary()["pending"], 100)
-
-    def test_a_report_is_one_statement(self):
-        self.assertEqual(self.count_statements(lambda: health.report("A", [])), 1)
-        self.assertEqual(self.count_statements(lambda: health.report("A", [])), 1)
-        self.assertEqual(self._row("A")["reports"], 2)
 
 
-class QueueTests(HealthDbTestCase):
+class PersistenceTests(HealthTestCase):
+    def test_results_survive_a_restart(self):
+        health.statuses([{"title": "Good", "alts": ["Alt"]}, {"title": "Bad"}])
+        health.record("good", health.OK, None, "comizy")
+        health.record("bad", health.BROKEN, "Not found on any source", None)
+        health.report("Bad", [])
+        self.assertEqual(health.save(), 2)
+        self.assertEqual(health.save(), 0)  # nothing changed since
+
+        health.reset()
+        health.load()
+        self.assertEqual(self.entry("Good")["status"], "ok")
+        self.assertEqual(self.entry("Good")["alts"], ["Alt"])
+        self.assertEqual(self.entry("Bad")["reason"], "Not found on any source")
+        self.assertEqual(self.entry("Bad")["reports"], 1)
+
+        # Changed again and saved again: an update, not a second row.
+        health.record("good", health.BROKEN, "comizy: page images didn't load", None)
+        health.save()
+        health.reset()
+        health.load()
+        self.assertEqual(self.entry("Good")["status"], "broken")
+
+    def test_load_works_with_rows_that_only_support_column_lookup(self):
+        # The live database (libsql) returns its own row type: row["col"]
+        # works, but the first deploy's dict(row) didn't, and every result
+        # failed to save. load() must only use row["col"].
+        health.statuses([{"title": "A"}])
+        health.save()
+
+        class OnlyColumnLookup:
+            def __init__(self, row):
+                self._row = row
+
+            def __getitem__(self, key):
+                return self._row[key]
+
+        real = db.get_connection
+
+        class Conn:
+            def __init__(self):
+                self._conn = real()
+
+            def execute(self, *args):
+                cursor = self._conn.execute(*args)
+
+                class Cursor:
+                    def fetchall(self):
+                        return [OnlyColumnLookup(r) for r in cursor.fetchall()]
+
+                return Cursor()
+
+            def close(self):
+                self._conn.close()
+
+        health.reset()
+        db.get_connection = Conn
+        try:
+            health.load()
+        finally:
+            db.get_connection = real
+        self.assertEqual(self.entry("A")["status"], "pending")
+
+    def test_a_failed_save_is_retried(self):
+        health.statuses([{"title": "A"}])
+        real = db.get_connection
+
+        def unreachable():
+            raise RuntimeError("database unreachable")
+
+        db.get_connection = unreachable
+        try:
+            with self.assertRaises(RuntimeError):
+                health.save()
+        finally:
+            db.get_connection = real
+        self.assertEqual(health.save(), 1)
+
+
+class QueueTests(HealthTestCase):
     def test_order_is_unchecked_then_reported_then_stale(self):
         health.statuses([{"title": "Fresh"}, {"title": "Stale"}, {"title": "Reported"}])
         for t in ("Fresh", "Stale", "Reported"):
             health.record(health.key_for(t), health.OK, None, "x")
-        conn = db.get_connection()
-        try:
-            # Backdate the checks (and the requests that led to them, which
-            # always come first) so they look like they happened earlier.
-            long_ago = time.time() - health.OK_RECHECK - 60
-            a_while_ago = time.time() - health.REPORT_RECHECK - 60
-            for key, when in (("stale", long_ago), ("reported", a_while_ago)):
-                conn.execute(
-                    "UPDATE title_health SET checked_at = ?, requested_at = ? WHERE key = ?",
-                    (when, when - 1, key),
-                )
-            conn.commit()
-        finally:
-            conn.close()
+        self.backdate("Stale", health.OK_RECHECK + 60)
+        self.backdate("Reported", health.REPORT_RECHECK + 60)
         health.report("Reported", [])
         health.statuses([{"title": "Brand New"}])
 
@@ -132,13 +175,22 @@ class QueueTests(HealthDbTestCase):
         health.record("stale", health.OK, None, "x")
         self.assertIsNone(health.next_due())
 
+    def test_broken_titles_are_rechecked_sooner_than_working_ones(self):
+        health.statuses([{"title": "Ok"}, {"title": "Broken"}])
+        health.record("ok", health.OK, None, "x")
+        health.record("broken", health.BROKEN, "gone", None)
+        self.backdate("Ok", health.BROKEN_RECHECK + 60)
+        self.backdate("Broken", health.BROKEN_RECHECK + 60)
+        self.assertEqual(health.next_due()["title"], "Broken")
+        health.record("broken", health.BROKEN, "gone", None)
+        self.assertIsNone(health.next_due())
+
     def test_a_report_does_not_mark_a_title_broken_by_itself(self):
         health.statuses([{"title": "A"}])
         health.record("a", health.OK, None, "x")
         health.report("A", [])
-        row = self._row("A")
-        self.assertEqual(row["status"], "ok")
-        self.assertEqual(row["reports"], 1)
+        self.assertEqual(self.entry("A")["status"], "ok")
+        self.assertEqual(self.entry("A")["reports"], 1)
 
     def test_summary_lists_broken_titles_with_reasons(self):
         health.statuses([{"title": "Good"}, {"title": "Bad"}, {"title": "Waiting"}])
@@ -201,7 +253,7 @@ class CheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reason, "mangadex: page images didn't load; comizy: chapter pages didn't load")
 
 
-class HealthApiTests(HealthDbTestCase):
+class HealthApiTests(HealthTestCase):
     def setUp(self):
         super().setUp()
         import main
@@ -218,7 +270,7 @@ class HealthApiTests(HealthDbTestCase):
         self.assertEqual(r.json(), {"statuses": {"Eleceed": "broken"}})
 
         self.assertEqual(self.client.post("/api/health/report", json={"title": "Eleceed"}).status_code, 200)
-        self.assertEqual(self._row("Eleceed")["reports"], 1)
+        self.assertEqual(self.entry("Eleceed")["reports"], 1)
 
         summary = self.client.get("/api/health").json()
         self.assertEqual(summary["broken"], 1)

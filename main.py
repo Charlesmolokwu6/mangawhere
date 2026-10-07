@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     poller.start()
     health.start(find_title, scrape_cached, image_loads)
     yield
-    health.stop()
+    await health.stop()
     poller.stop()
     if _proxy_client is not None:
         await _proxy_client.aclose()
@@ -360,7 +360,7 @@ async def api_health_status(request: Request):
     items = body.get("titles") if isinstance(body, dict) else None
     if not isinstance(items, list):
         raise HTTPException(status_code=400, detail="Expected a titles list")
-    return {"statuses": await asyncio.to_thread(health.statuses, items)}
+    return {"statuses": health.statuses(items)}
 
 
 @app.post("/api/health/report")
@@ -370,9 +370,7 @@ async def api_health_report(request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Expected JSON")
-    if not isinstance(body, dict) or not await asyncio.to_thread(
-        health.report, body.get("title"), body.get("alts")
-    ):
+    if not isinstance(body, dict) or not health.report(body.get("title"), body.get("alts")):
         raise HTTPException(status_code=400, detail="Expected a title")
     return {"ok": True}
 
@@ -380,7 +378,7 @@ async def api_health_report(request: Request):
 @app.get("/api/health")
 async def api_health():
     """How many titles open in the reader, and which don't and why."""
-    return await asyncio.to_thread(health.summary)
+    return health.summary()
 
 
 @app.get("/api/video-lookup")
