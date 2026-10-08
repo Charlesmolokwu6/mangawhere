@@ -128,12 +128,15 @@ class _Row:
     across auth.py/watch.py/comments.py/push.py/poller.py works unchanged
     on either backend without those callers needing to know which is live."""
 
-    __slots__ = ("_data",)
+    __slots__ = ("_data", "_values")
 
     def __init__(self, columns, values):
         self._data = dict(zip(columns, values))
+        self._values = tuple(values)
 
     def __getitem__(self, key):
+        if isinstance(key, int):  # by position, like sqlite3.Row
+            return self._values[key]
         return self._data[key]
 
     def keys(self):
