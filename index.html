@@ -1203,7 +1203,7 @@ function dropAdult(rows){
   return (rows||[]).filter(function(m){ return !m.adult; });
 }
 
-function search(q,n){
+function search(q,n,noRespell){
   // Jikan skews toward well-known, anime-adjacent titles — plenty of
   // manhwa/manhua it simply has no record of, so it comes back with an
   // empty (not failed) result. That used to end the chain right there:
@@ -1229,7 +1229,42 @@ function search(q,n){
         sourceUsed="MangaDex ("+priorSource+" had nothing)";
         return dropAdult(r);
       }).catch(function(){ return rows; });   // still nothing -- keep the empty result
+    })
+    .then(function(rows){
+      // A misspelled name ("Greymark" for The Graymark) finds nothing on
+      // any of the above, which all need the spelling close. MangaUpdates'
+      // search forgives spelling: search again under the name it suggests.
+      if((rows && rows.length) || noRespell) return rows;
+      return muRespell(q).then(function(name){
+        if(!name) return rows;
+        return search(name,n,true).then(function(r){
+          if(r.length) sourceUsed+=" · spelled as \""+name+"\" by MangaUpdates";
+          return r.length ? r : rows;
+        });
+      }).catch(function(){ return rows; });
     });
+}
+// The closest comic MangaUpdates has for a query, if it's close enough to
+// be the same name misspelled -- or null.
+function muRespell(q){
+  return fetch(via(MU+"/series/search"),{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({search:q, perpage:5})
+  }).then(function(r){ return r.ok ? r.json() : null; }).then(function(j){
+    // Letters only, without a leading "The": "Greymatk" vs "The Graymark"
+    // scores 0.43, unrelated suggestions ("xyzzy foo" -> "Foo Fighter
+    // Fuji") about 0.2.
+    var bare=function(t){ return t.toLowerCase().replace(/^the\s+/,"").replace(/[^a-z0-9]/g,""); };
+    var best=null, bestScore=0.4;
+    ((j&&j.results)||[]).forEach(function(x){
+      var rec=x.record||x;
+      if(!rec || !rec.title || !isComic(rec)) return;
+      var t=String(rec.title).replace(/<[^>]*>/g,"");
+      var sc=similar(bare(q),bare(t));
+      if(sc>=bestScore && bare(t)!==bare(q)){ best=t; bestScore=sc; }
+    });
+    return best;
+  });
 }
 function trending(country,genre){
   // AniList first here — its TRENDING_DESC is genuinely "what people are
