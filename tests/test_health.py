@@ -201,8 +201,14 @@ class QueueTests(HealthTestCase):
 class CheckTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.scraped = []
+        self.image_requests = []
+        self._pause = health.IMAGE_RETRY_PAUSE
+        health.IMAGE_RETRY_PAUSE = 0
 
-    def fakes(self, found, pages, good_images):
+    def tearDown(self):
+        health.IMAGE_RETRY_PAUSE = self._pause
+
+    def fakes(self, found, pages, good_images, fails_first_time=()):
         async def find(title, alts):
             return found
 
@@ -211,9 +217,28 @@ class CheckTests(unittest.IsolatedAsyncioTestCase):
             return {"images": pages.get(url, [])}
 
         async def image_ok(url):
+            first_time = url not in self.image_requests
+            self.image_requests.append(url)
+            if url in fails_first_time and first_time:
+                return False
             return url in good_images
 
         return find, scrape, image_ok
+
+    async def test_a_page_that_fails_once_is_asked_for_again(self):
+        # MangaDex's image servers 404 a page they haven't cached yet.
+        found = {"domain": "mangadex", "chapters": chapters(1), "alternates": []}
+        status, _, source = await health.check(
+            "T", [], *self.fakes(found, {"u1": ["p1", "p2"]}, {"p1"}, fails_first_time={"p1"})
+        )
+        self.assertEqual((status, source), (health.OK, "mangadex"))
+        self.assertEqual(self.image_requests, ["p1", "p1"])
+
+    async def test_the_second_page_counts_if_the_first_never_loads(self):
+        found = {"domain": "mangadex", "chapters": chapters(1), "alternates": []}
+        status, _, _ = await health.check("T", [], *self.fakes(found, {"u1": ["p1", "p2"]}, {"p2"}))
+        self.assertEqual(status, health.OK)
+        self.assertEqual(self.image_requests, ["p1", "p1", "p2"])
 
     async def test_working_title_is_ok(self):
         found = {"domain": "mangaread", "chapters": chapters(1, 2), "alternates": []}

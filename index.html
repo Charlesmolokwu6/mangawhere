@@ -3109,6 +3109,7 @@ function readerView(url, exclude){
       var done=function(){ img.classList.add("loaded"); };
       if(img.complete && img.naturalWidth) done();
       else img.addEventListener("load", done, {once:true});
+      retryPage(img);
     });
     prefetchNextChapter();
     watchFirstPage(token, exclude);
@@ -3290,6 +3291,28 @@ function prefetchNextChapter(){
   io.observe(mark);
 }
 
+/* Image servers sometimes fail a page once and serve it moments later
+   (MangaDex's servers answer 404 for a page they haven't cached yet). A
+   failed page is asked for again twice before it counts as gone; then it
+   fires "pagefailed". */
+var PAGE_RETRY_DELAYS=[1500,4000];
+function retryPage(img){
+  var tries=0;
+  img.addEventListener("error", function onError(){
+    if(tries>=PAGE_RETRY_DELAYS.length){
+      img.removeEventListener("error", onError);
+      img.dispatchEvent(new Event("pagefailed"));
+      return;
+    }
+    var src=img.getAttribute("src");
+    setTimeout(function(){
+      if(!img.isConnected) return;
+      img.removeAttribute("src");
+      img.setAttribute("src", src);
+    }, PAGE_RETRY_DELAYS[tries++]);
+  });
+}
+
 /* A site can hand back a full list of page URLs whose image server is
    down (kaliscan's CDN answering 522, say) — the scrape "worked", but
    every page is blank. If the very first page fails to load before any
@@ -3302,7 +3325,7 @@ function watchFirstPage(token, exclude){
   Array.prototype.forEach.call(imgs, function(img){
     img.addEventListener("load", function(){ anyLoaded=true; }, {once:true});
   });
-  imgs[0].addEventListener("error", function(){
+  imgs[0].addEventListener("pagefailed", function(){
     if(anyLoaded || token!==readerLoadToken) return;
     var tried=(exclude||[]).concat([readerState.domain]);
     var current=readerState.chapters&&readerState.chapters[readerState.index];
