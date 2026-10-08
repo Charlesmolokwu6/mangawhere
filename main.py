@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
+from scrapers import ytpost
 from server import auth, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -61,6 +62,10 @@ PROXY_ALLOWED_HOSTS = {
     "youtu.be",
     "api.jikan.moe",
     "graphql.anilist.co",
+    # Search's last fallback (index.html's mdSearch). It was never listed,
+    # so that step always got 403 and titles only MangaDex knows (Hand
+    # Jumper) came back "Nothing found".
+    "api.mangadex.org",
     "www.webtoons.com",
     "global.mangaplus.shueisha.co.jp",
     "manga.bilibili.com",
@@ -432,6 +437,26 @@ async def api_video_lookup(
     except Exception:
         raise HTTPException(status_code=502, detail="Couldn't read that video right now.")
 
+    response = JSONResponse(content=result)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.get("/api/post-lookup")
+async def api_post_lookup(url: str = Query(..., description="YouTube community post URL")):
+    """A YouTube community post's text and the titles it lists. Posts
+    aren't videos, so the video path (oEmbed, yt-dlp) can't read them."""
+    _require_absolute_url(url)
+    post_id = ytpost.post_id_from_url(url)
+    if not post_id:
+        raise HTTPException(status_code=400, detail="That isn't a YouTube post link")
+    try:
+        result = await ytpost.lookup_post(post_id)
+    except Exception as e:
+        print(f"[post] lookup failed for {post_id}: {e!r}")
+        raise HTTPException(status_code=502, detail="Couldn't read that post right now.")
+    if not result["text"]:
+        raise HTTPException(status_code=404, detail="That post is private, deleted, or has no text.")
     response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
     return response

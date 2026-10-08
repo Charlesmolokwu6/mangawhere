@@ -58,6 +58,12 @@ class ProxyTests(MainTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("text/html", r.headers["content-type"])
 
+    def test_mangadex_search_is_allowed(self):
+        # The frontend's last search fallback goes through here.
+        with patch("httpx.AsyncClient.request", return_value=self._upstream("application/json")):
+            r = self.client.get("/", params={"url": "https://api.mangadex.org/manga?title=Hand%20Jumper"})
+        self.assertEqual(r.status_code, 200)
+
     def test_disallowed_host_is_rejected(self):
         r = self.client.get("/", params={"url": "https://evil.example.com/steal"})
         self.assertEqual(r.status_code, 403)
