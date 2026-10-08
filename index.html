@@ -425,6 +425,14 @@ background:var(--surf2);flex-shrink:0}
 .chip{background:var(--surf);border:1px solid var(--line);color:var(--dim);border-radius:100px;
 padding:6px 13px;font-size:12px;font-weight:600}
 .chip[aria-pressed="true"]{background:var(--mint);color:#0d2b26;border-color:var(--mint)}
+.postlist{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.postlist button{width:100%;display:flex;align-items:center;gap:10px;text-align:left;
+background:var(--surf);border:1px solid var(--line);border-radius:10px;padding:11px 13px;
+color:var(--text);font-size:14px;font-weight:600;cursor:pointer}
+.postlist button:hover{border-color:var(--mint)}
+.postlist .n{color:var(--dim);font-size:12px;min-width:20px}
+.postlist .go{margin-left:auto;color:var(--mint)}
+.postback{background:none;border:0;color:var(--mint);font-weight:600;padding:0 0 10px;cursor:pointer}
 .pill.kind{background:var(--surf2);color:var(--text);margin-left:6px}
 .pill.adult{background:#4a2030;color:#ff8fa8;margin-left:6px}
 .pill.genre{background:transparent;border:1px solid var(--line);color:var(--dim);
@@ -2077,7 +2085,11 @@ function run(){
   var tr=document.getElementById("trend"); if(tr) tr.style.display="none";
   btn.disabled=true; out.innerHTML='<div class="spin">Working…</div>';
   var isLink=/^https?:\/\//i.test(raw);
-  var job = isLink
+  // Opened from a post's list: keep a way back to that list.
+  var fromPost = postBack && postBack.titles.indexOf(raw)>-1 ? postBack : null;
+  if(!fromPost) postBack=null;
+  var job = isYtPost(raw) ? postLookup(raw)
+    : isLink
     ? oembed(raw).then(function(meta){
         var p=parseCaption(meta.caption);
         if(p.title) return search(p.title).then(function(rows){
@@ -2119,9 +2131,53 @@ function run(){
       })
     : search(raw).then(function(rows){
         return {kind:"results",rows:rows,parsed:{title:raw,chapter:null,confidence:"medium"}};});
-  job.then(render).catch(function(e){
+  job.then(render).then(function(){
+    if(!fromPost) return;
+    postBack=fromPost;
+    out.insertAdjacentHTML("afterbegin",
+      '<button class="postback" id="postback">&larr; Back to the list</button>');
+    document.getElementById("postback").onclick=function(){ render(fromPost); };
+  }).catch(function(e){
     out.innerHTML='<div class="note bad"><p><strong>Error</strong>'+esc(e.message)+'</p></div>';
   }).then(function(){btn.disabled=false; setDiag("source: "+(sourceUsed||"-"));});
+}
+
+/* YouTube community posts ("youtube.com/post/<id>") aren't videos, so the
+   video path can't read them. The server reads the post's text: a list
+   of titles ("1. Chronicles of Runes 2. L.A.G ...") is shown as a list to
+   pick from; anything else is read like a caption. */
+var postBack=null;
+function isYtPost(url){
+  return /^https?:\/\/(www\.|m\.)?youtube\.com\/(post\/|(channel\/[^\/]+\/|@[^\/]+\/|c\/[^\/]+\/)?community\?(.*&)?lb=)/i.test(url);
+}
+function postLookup(url){
+  var out=document.getElementById("out");
+  if(out) out.innerHTML='<div class="spin">Reading the post…</div>';
+  return fetchTimeout(API_BASE+"/api/post-lookup?url="+encodeURIComponent(url), null, 30000)
+    .then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(d){
+        if(!r.ok) throw new Error(d.detail||"Couldn't read that post right now.");
+        return d;
+      });
+    })
+    .then(function(d){
+      if(d.titles && d.titles.length>1)
+        return {kind:"postList", titles:d.titles, author:d.author||"", caption:d.text||""};
+      var p=parseCaption(d.text||"");
+      if(!p.title) return {kind:"noTitle", caption:d.text||""};
+      return search(p.title).then(function(rows){
+        return {kind:"results", rows:rows, parsed:p, caption:d.text||"",
+                author:d.author||"", platform:"YouTube post"};
+      });
+    });
+}
+function postListHtml(r){
+  return '<div class="note"><p><strong>This post lists '+r.titles.length+' titles</strong>'+
+    'Tap one to find where to read it.</p></div>'+
+    '<ol class="postlist">'+r.titles.map(function(t,i){
+      return '<li><button data-i="'+i+'"><span class="n">'+(i+1)+'</span>'+esc(t)+
+        '<span class="go">Find &rsaquo;</span></button></li>';
+    }).join("")+'</ol>';
 }
 
 /* The official player, offered wherever the caption alone came up short.
@@ -2143,6 +2199,18 @@ function watchHtml(r){
 
 function render(r){
   var out=document.getElementById("out");
+  if(r.kind==="postList"){
+    postBack=r;
+    out.innerHTML=(r.author?'<div class="cap">YouTube post · '+esc(r.author)+'</div>':"")+postListHtml(r);
+    Array.prototype.forEach.call(out.querySelectorAll(".postlist button"), function(b){
+      b.onclick=function(){
+        document.getElementById("q").value=r.titles[+b.getAttribute("data-i")];
+        window.scrollTo(0,0);
+        run();
+      };
+    });
+    return;
+  }
   if(r.kind==="unsupported"){
     out.innerHTML='<div class="note"><p><strong>Link not supported</strong>Only TikTok and '+
       'YouTube can be read. Type the manga name instead.</p></div>'; return;}
