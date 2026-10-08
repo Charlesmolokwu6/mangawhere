@@ -69,6 +69,10 @@ if (unit && window.MutationObserver) {
   }).observe(document.documentElement, {childList: true, subtree: true});
 }
 if (unit) {
+  // Adsterra draws a 320x50 unit in a 300px-wide iframe, which crops the
+  // edges off 320-wide banners. Give its frame the unit's full size.
+  document.write("<style>iframe{width:" + unit.width + "px!important;height:" +
+    unit.height + "px!important;max-width:100%}</style>");
   // Adsterra's banner code: atOptions, then its loader (which itself uses
   // document.write, so it has to be written in while the page parses).
   window.atOptions = {key: unit.key, format: "iframe", height: unit.height, width: unit.width, params: {}};
