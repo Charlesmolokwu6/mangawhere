@@ -4,7 +4,8 @@
 # it builds the app straight from GitHub, with narration on and the
 # site's background jobs off. Then set Render's NARRATION_URL to the
 # Space's address (https://<user>-<space>.hf.space). See README.md.
-FROM python:3.11-slim
+# Debian 12: Playwright 1.47 (requirements.txt) has no browser deps for 13.
+FROM python:3.11-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends git libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
