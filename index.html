@@ -450,6 +450,16 @@ overflow:hidden}
 .adgroup .adslot{margin-top:6px}
 .adgroup .adslot:first-child{margin-top:0}
 .adframe{border:0;max-width:100%;display:block;background:transparent}
+/* An ad at the very top of a page sits close under the header instead of
+   adding its own margin to main's top padding, and keeps a small gap
+   above what follows. */
+.adtop{margin:-8px 0 12px}
+.adtop:empty{display:none}
+.adtop>.adslot,.adtop>.adgroup{margin:0}
+/* The reader's "Loading…" line is emptied once pages show; don't keep
+   its margin as a blank band above the first page. */
+#rstatus:empty{display:none}
+#rstatus:empty+#rpages{margin-top:12px}
 .more{background:none;border:none;color:var(--mint);font-size:13px;font-weight:600;
 padding:6px 0 0;cursor:pointer}
 .adultflag{color:#ff8fa8}
@@ -1666,7 +1676,7 @@ function avatarHtml(name, email, avatarUrl, size){
 
 function homeView(){
   app.innerHTML=
-   adFrame(ADS.homeTop)+
+   adTop(ADS.homeTop)+
    '<h1>Saw a manga edit? Find where to read it.</h1>'+
    '<p class="sub">Paste the video link, or type the manga name.</p>'+
    '<div class="searchwrap"><div class="paste">'+
@@ -2848,6 +2858,10 @@ window.addEventListener("message", function(e){
   }
 });
 
+function adTop(code){
+  var html=adFrame(code);
+  return html ? '<div class="adtop">'+html+'</div>' : "";
+}
 function adFrame(code){
   if(!code) return "";
   // A list shows its ads together, one under the other.
@@ -3164,7 +3178,7 @@ function readerView(url, exclude){
   openChapterDropdown=null;
   var view=document.getElementById("app");
   var hasChapters=!!readerState.chapters;
-  view.innerHTML=adFrame(ADS.readerTop)+
+  view.innerHTML=adTop(ADS.readerTop)+
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
       '<button class="back" id="rbk" style="margin:0">← Back</button>'+
       (hasChapters?chapterPickerHtml():'')+
