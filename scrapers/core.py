@@ -414,7 +414,10 @@ async def scrape_weebcentral(url: str) -> List[str]:
 
 COMIZY_API = "https://api.comizy.io"
 COMIZY_ID_IN_HTML = re.compile(r'"id":"([A-Za-z0-9]+)"')
-COMIZY_IS_ADULT_IN_HTML = re.compile(r'"is_adult":(true|false)')
+# Chapter pages spell it is_adult; series pages switched to isAdult in
+# October 2026, which silently let flagged series through as a source
+# whose chapters then all came back empty.
+COMIZY_IS_ADULT_IN_HTML = re.compile(r'"is_?[aA]dult":(true|false)')
 # comizy's search answers 400 to anything over 50 characters (its error
 # message says 200, but 51 already fails), so long light-novel titles
 # never reached it.
