@@ -42,6 +42,7 @@ MAX_QUEUED = 600              # unchecked titles accepted before new ones wait
 MAX_TITLE_LENGTH = 200
 MAX_ALTS = 6
 SOURCES_TO_TRY = 4            # best source plus up to 3 alternates
+IMAGE_RETRY_PAUSE = 3         # seconds before asking for a failed page again
 FORGET_AFTER = 30 * 86400     # not shown for a month: stop re-checking
 
 COLUMNS = ("key", "title", "alts", "status", "reason", "source",
@@ -282,11 +283,24 @@ async def check(title: str, alts: Sequence[str], find: Find, scrape: Scrape, ima
             if not images:
                 problem = "chapter pages didn't load"
                 continue
-            if await image_ok(images[0]):
+            if await _pages_load(images, image_ok):
                 return OK, None, domain
             problem = "page images didn't load"
         tried.append(f"{domain}: {problem}")
     return BROKEN, "; ".join(tried), None
+
+
+async def _pages_load(images: List[str], image_ok: ImageOk) -> bool:
+    """The first page, asked for again after a pause if it fails, then the
+    second. MangaDex's image servers answer 404 for a page they haven't
+    cached yet and serve it moments later; one try marked whole titles
+    broken. The reader retries failed pages the same way."""
+    for attempt, url in enumerate([images[0], images[0]] + images[1:2]):
+        if attempt:
+            await asyncio.sleep(IMAGE_RETRY_PAUSE)
+        if await image_ok(url):
+            return True
+    return False
 
 
 _task: Optional[asyncio.Task] = None
