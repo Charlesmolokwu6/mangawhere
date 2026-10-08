@@ -228,6 +228,14 @@ IMAGE_CHECK_UA = (
 )
 
 
+# Image servers that refuse this server but serve readers' browsers, which
+# load them directly (not through the proxy). MangaDex's @home nodes answer
+# 404 to every request from Render while the same URLs load for anyone
+# else, so fetching from here would hide titles that read fine. For these,
+# the source's own API handing back the chapter's page list is the check.
+IMAGE_CHECK_SKIPPED_SUFFIXES = ("mangadex.network",)
+
+
 async def image_loads(url: str) -> bool:
     """Does a page image actually come back, the way the reader asks for it?
     Direct images go with no Referer (the reader's <img> uses no-referrer);
@@ -236,6 +244,8 @@ async def image_loads(url: str) -> bool:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return False
+    if any(parsed.hostname == s or parsed.hostname.endswith("." + s) for s in IMAGE_CHECK_SKIPPED_SUFFIXES):
+        return True
     headers = {"User-Agent": IMAGE_CHECK_UA, "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}
     for suffix, referer in PROXY_REFERER_OVERRIDES.items():
         if parsed.hostname == suffix or parsed.hostname.endswith("." + suffix):
