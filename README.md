@@ -182,12 +182,21 @@ it there would crash the whole site, not just narration. So on Render
 narration is pointed somewhere else:
 
 1. Run a second copy of this app on a machine with at least ~2GB of RAM
-   (4GB+ with Ollama) — e.g. Oracle Cloud's Always Free VM, a small VPS,
-   or your own computer behind a Cloudflare Tunnel. Same
+   (4GB+ with Ollama). The easiest free one is a **Hugging Face Space**
+   (2 CPUs, 16GB RAM): create a Space with the Docker SDK and add
+   [`narrator/Dockerfile`](narrator/Dockerfile) to it as `Dockerfile`.
+   It builds this repo from GitHub with narration on (`NARRATION_ONLY`
+   leaves the poller and title health checks to the main server), and
+   serves on port 7860. "Factory rebuild" in the Space's settings pulls
+   new code. A free Space sleeps after 48 hours unused, so the first
+   Listen after that waits a minute or two for it to wake. Measured in
+   that image: a 12-page chapter took ~2 minutes and peaked at 1.6GB.
+   Oracle Cloud's Always Free VM, a small VPS, or your own computer
+   behind a Cloudflare Tunnel work too: same
    `pip install -r requirements.txt` and `uvicorn main:app`; add Ollama
    there if you want it.
-2. Set `NARRATION_URL` on Render to that copy's public address (e.g.
-   `https://narrator.example.com`) and redeploy.
+2. Set `NARRATION_URL` on Render to that copy's public address (for a
+   Space, `https://<user>-<space-name>.hf.space`) and redeploy.
 
 The reader then sends narration requests straight to that machine;
 everything else keeps running on Render.
@@ -197,6 +206,8 @@ Environment variables (all optional):
   the narrating (see above). Set this on Render.
 - `NARRATION_ENABLED` — `true`/`false` to force narration on or off on
   this server. Unset, it's on everywhere except Render.
+- `NARRATION_ONLY` — `true` on a copy that only narrates: it skips the
+  push-notification poller and the title health checker.
 - `OLLAMA_HOST` — where Ollama is. Defaults to `http://localhost:11434`.
 - `NARRATION_MODEL` — which Ollama model picks each line's delivery.
   Defaults to `llama3.2:3b`.
