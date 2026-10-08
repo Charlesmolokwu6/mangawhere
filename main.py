@@ -244,9 +244,15 @@ async def image_loads(url: str) -> bool:
     try:
         async with _get_proxy_client().stream("GET", url, headers=headers, follow_redirects=True) as r:
             content_type = r.headers.get("content-type", "")
-            return r.status_code == 200 and not content_type.startswith(("text/", "application/json"))
-    except Exception:
-        return False
+            if r.status_code == 200 and not content_type.startswith(("text/", "application/json")):
+                return True
+            problem = f"HTTP {r.status_code} {content_type}"
+    except Exception as e:
+        problem = repr(e)
+    # Say why: "page images didn't load" alone can't tell a dead image from
+    # an image server that refuses this server but serves readers fine.
+    print(f"[health] image check failed: {problem} for {url[:120]}")
+    return False
 
 
 @app.get("/api/scrape")
