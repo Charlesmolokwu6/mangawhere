@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,11 +22,16 @@ BASE_DIR = Path(__file__).resolve().parent
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    poller.start()
-    health.start(find_title, scrape_cached, image_loads)
+    # A copy that only narrates (narrator/Dockerfile, on a Hugging Face
+    # Space) leaves the site's background jobs to the main server.
+    narration_only = os.environ.get("NARRATION_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
+    if not narration_only:
+        poller.start()
+        health.start(find_title, scrape_cached, image_loads)
     yield
-    await health.stop()
-    poller.stop()
+    if not narration_only:
+        await health.stop()
+        poller.stop()
     if _proxy_client is not None:
         await _proxy_client.aclose()
 
