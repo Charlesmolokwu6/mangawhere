@@ -415,6 +415,10 @@ async def scrape_weebcentral(url: str) -> List[str]:
 COMIZY_API = "https://api.comizy.io"
 COMIZY_ID_IN_HTML = re.compile(r'"id":"([A-Za-z0-9]+)"')
 COMIZY_IS_ADULT_IN_HTML = re.compile(r'"is_adult":(true|false)')
+# comizy's search answers 400 to anything over 50 characters (its error
+# message says 200, but 51 already fails), so long light-novel titles
+# never reached it.
+COMIZY_MAX_QUERY = 50
 
 
 async def scrape_comizy(url: str) -> List[str]:
@@ -1197,7 +1201,11 @@ async def search_comizy(title: str) -> Optional[str]:
     """Find the best-matching series on comizy.io via its internal search
     API. Titles flagged is_adult or has_dmca are skipped — mangawhere has
     no age-gating, and DMCA'd titles aren't comizy's to serve either."""
-    params = {"page": 1, "limit": 10, "q": title}
+    query = title.strip()
+    if len(query) > COMIZY_MAX_QUERY:
+        cut = query[:COMIZY_MAX_QUERY + 1]
+        query = (cut.rsplit(" ", 1)[0] if " " in cut else cut[:COMIZY_MAX_QUERY]).strip()
+    params = {"page": 1, "limit": 10, "q": query}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(f"{COMIZY_API}/titles/search", params=params)

@@ -320,6 +320,18 @@ class ComizyTests(unittest.IsolatedAsyncioTestCase):
             url = await search_comizy("Shadow Slave")
         self.assertIsNone(url)
 
+    async def test_long_titles_are_cut_to_the_search_limit_and_still_match(self):
+        # comizy 400s on queries over 50 characters; the full title is
+        # still what results are scored against.
+        title = "The Laid-Off Cheat-Granting Mage Enjoys a Second Lease on Life"
+        payload = {"data": {"items": [{"url": "/laid-off-mage", "name": title, "alt_names": []}]}}
+        with patch("httpx.AsyncClient.get", return_value=_mock_json_response(payload)) as get:
+            url = await search_comizy(title)
+        query = get.call_args.kwargs["params"]["q"]
+        self.assertLessEqual(len(query), 50)
+        self.assertEqual(query, "The Laid-Off Cheat-Granting Mage Enjoys a Second")
+        self.assertEqual(url, "https://comizy.io/laid-off-mage")
+
     async def test_search_returns_none_on_network_failure(self):
         with patch("httpx.AsyncClient.get", side_effect=RuntimeError("network down")):
             url = await search_comizy("Solo Leveling")
