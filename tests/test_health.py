@@ -101,19 +101,13 @@ class PersistenceTests(HealthTestCase):
         health.load()
         self.assertEqual(self.entry("Good")["status"], "broken")
 
-    def test_load_works_with_rows_that_only_support_column_lookup(self):
-        # The live database (libsql) returns its own row type: row["col"]
-        # works, but the first deploy's dict(row) didn't, and every result
-        # failed to save. load() must only use row["col"].
-        health.statuses([{"title": "A"}])
+    def test_load_works_when_rows_come_back_without_column_names(self):
+        # On the live database (libsql) the saved rows came back with no
+        # column names: row["key"] raised KeyError('key') and every restart
+        # started from an empty list. load() reads them by position.
+        health.statuses([{"title": "A", "alts": ["Alt A"]}])
+        health.record("a", health.OK, None, "comizy")
         health.save()
-
-        class OnlyColumnLookup:
-            def __init__(self, row):
-                self._row = row
-
-            def __getitem__(self, key):
-                return self._row[key]
 
         real = db.get_connection
 
@@ -126,7 +120,7 @@ class PersistenceTests(HealthTestCase):
 
                 class Cursor:
                     def fetchall(self):
-                        return [OnlyColumnLookup(r) for r in cursor.fetchall()]
+                        return [db._Row([], tuple(r)) for r in cursor.fetchall()]
 
                 return Cursor()
 
@@ -139,7 +133,9 @@ class PersistenceTests(HealthTestCase):
             health.load()
         finally:
             db.get_connection = real
-        self.assertEqual(self.entry("A")["status"], "pending")
+        self.assertEqual(self.entry("A")["status"], "ok")
+        self.assertEqual(self.entry("A")["alts"], ["Alt A"])
+        self.assertEqual(self.entry("A")["source"], "comizy")
 
     def test_a_failed_save_is_retried(self):
         health.statuses([{"title": "A"}])

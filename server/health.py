@@ -92,7 +92,10 @@ def load() -> None:
     cutoff = time.time() - FORGET_AFTER
     with _lock:
         for r in rows:
-            entry = {c: r[c] for c in COLUMNS}
+            # By position: on the live database (libsql) these rows came
+            # back without their column names, so r["key"] failed and every
+            # restart forgot all results.
+            entry = {c: r[i] for i, c in enumerate(COLUMNS)}
             if (entry["seen_at"] or 0) < cutoff:
                 continue
             try:
@@ -296,16 +299,22 @@ async def _save_quietly() -> None:
         print(f"[health] save failed (will retry): {e}")
 
 
+async def _load_quietly() -> None:
+    try:
+        await asyncio.to_thread(load)
+    except Exception as e:
+        print(f"[health] couldn't load saved results (will retry): {e!r}")
+
+
 async def _run_forever(find: Find, scrape: Scrape, image_ok: ImageOk) -> None:
     if not _loaded:
-        try:
-            await asyncio.to_thread(load)
-        except Exception as e:
-            print(f"[health] couldn't load saved results: {e}")
+        await _load_quietly()
     await asyncio.sleep(30)  # let the server finish starting
     last_save = time.time()
     while True:
         if time.time() - last_save >= SAVE_EVERY:
+            if not _loaded:
+                await _load_quietly()
             await _save_quietly()
             forget_old()
             last_save = time.time()
