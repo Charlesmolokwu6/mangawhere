@@ -389,6 +389,15 @@ class ComizyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chapters, [])
         mock_get.assert_not_called()
 
+    async def test_chapter_list_blocks_adult_titles_flagged_in_camel_case(self):
+        # Series pages now say isAdult; chapter pages still say is_adult.
+        page_html = '<script>{"initialManga":{"id":"vNAVWD54","isAdult":true}}</script>'
+        with patch("scrapers.core.fetch_html_httpx", return_value=page_html), \
+             patch("httpx.AsyncClient.get", return_value=_mock_json_response({"data": {"chapters": []}})) as mock_get:
+            chapters = await scrape_comizy_chapter_list("https://comizy.io/absolute-dominion")
+        self.assertEqual(chapters, [])
+        mock_get.assert_not_called()
+
     async def test_scrape_extracts_page_images_in_reader_order(self):
         page_html = (
             '<script>{"id":"4N90moOv","is_adult":false}</script>'
