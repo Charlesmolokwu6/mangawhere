@@ -397,3 +397,23 @@ class FindApiTests(MainTestCase):
 
         names = main._find_names("Main", ["A1", "a1", "B2", "C3", "D4", "E5"])
         self.assertEqual(names, ["Main", "A1", "B2", "C3"])
+
+
+class ImageCheckTests(unittest.IsolatedAsyncioTestCase):
+    async def test_mangadex_images_are_not_fetched_from_the_server(self):
+        # MangaDex's image servers 404 every request from Render but serve
+        # readers' browsers; fetching from here hid titles that read fine.
+        import main
+
+        with patch.object(main, "_get_proxy_client", side_effect=AssertionError("fetched")):
+            self.assertTrue(await main.image_loads(
+                "https://cmdxd98sb0x3yprd.mangadex.network/data/abc/1-x.png"))
+            self.assertFalse(await main.image_loads("ftp://example.com/1.png"))
+
+    async def test_other_images_are_still_fetched(self):
+        import main
+
+        with patch.object(main, "_get_proxy_client", side_effect=RuntimeError("down")):
+            self.assertFalse(await main.image_loads("https://cdn.example.com/1.png"))
+            # A look-alike host doesn't get the MangaDex pass.
+            self.assertFalse(await main.image_loads("https://evilmangadex.network/1.png"))
