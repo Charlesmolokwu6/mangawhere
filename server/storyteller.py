@@ -205,9 +205,14 @@ _WORD = re.compile(r"[A-Z']+")
 
 
 def is_noise(text: str) -> bool:
-    """OCR garbage — stray symbols or a misread panel border ("53>>3")."""
+    """OCR garbage — stray symbols or a misread panel border ("53>>3") — or
+    a game-style status screen repeating one label ("Injury C Injury A
+    Injury B ...")."""
     letters = sum(c.isalpha() for c in text)
-    return letters < 2 or letters < 0.5 * len(text.replace(" ", ""))
+    if letters < 2 or letters < 0.5 * len(text.replace(" ", "")):
+        return True
+    words = re.findall(r"[a-z]{3,}", text.lower())
+    return len(words) >= 4 and max(words.count(w) for w in set(words)) >= 0.5 * len(words)
 
 
 def is_sound_effect(text: str) -> bool:
@@ -404,10 +409,17 @@ def repair_word(token: str) -> str:
 # the next glyph as "区可B".
 _NON_LATIN = re.compile(r"\S*[^\x00-\u024f\u2018-\u201f\u2026\s]\S*")
 _CREDITS = re.compile(
-    r"\b(?:art by|story by|adapted by|original story|translat\w*|proofread\w*|typeset\w*|scanlat\w*"
-    r"|discord|patreon|read (?:it )?(?:at|on)|episode \d+|chapter \d+)\b",
+    r"\b(?:art ?by|story ?by|comic ?by|novel ?by|adapted ?by|original ?(?:story|novel)|translat\w*|proofread\w*"
+    r"|typeset\w*|scanlat\w*|discord|patreon|read (?:it )?(?:at|on)|episode \d+|chapter \d+"
+    # Publishers' end pages: staff lists and copyright notices.
+    r"|copyright|unauthori[sz]ed|all rights reserved|head ?of ?\w+|\w*quality ?(?:control|check)|editor ?in ?chief)\b",
     re.I,
 )
+
+
+# Copyright notices are often OCR'd without spaces ("Thisworkisprotectedby
+# copyrightlaws"), where \b can't find the word.
+_CREDITS_ANYWHERE = re.compile(r"copyright|unauthori[sz]ed|allrightsreserved", re.I)
 
 
 def _mostly_upper(text: str) -> bool:
@@ -426,6 +438,8 @@ def normalise_line(text: str) -> str:
     text = re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", " ", text)  # "JUST2YEARS"
     text = text.replace("\u2026", "...")
     text = re.sub(r"\.{2,}", "...", text)
+    text = re.sub(r"([.,!?]+)(?=[A-Za-z])", r"\1 ", text)  # "association.how may", "out,but"
+    text = re.sub(r"(?<=[A-Za-z])- (?=[A-Za-z])", "", text)  # a word hyphenated across lines: "EVERY- ONE"
     text = re.sub(r"\s+", " ", text).strip()
     if not _mostly_upper(text):
         return text  # already normal lettering — leave it alone
@@ -447,7 +461,7 @@ def prepare_pages(pages: List[List[str]]) -> List[Dict[str, Any]]:
     for bubbles in pages:
         lines, effects = [], False
         for bubble in bubbles:
-            if is_noise(bubble) or _CREDITS.search(bubble):
+            if is_noise(bubble) or _CREDITS.search(bubble) or _CREDITS_ANYWHERE.search(bubble):
                 continue
             if is_sound_effect(bubble):
                 effects = True

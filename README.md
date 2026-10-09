@@ -175,11 +175,27 @@ ollama pull llama3.2:3b      # ~2GB, one-time; needs Ollama installed and runnin
 uvicorn main:app --port 8000
 ```
 
-**On Render's free plan, narration is off.** Reading a chapter's pages
-peaks at ~600MB of memory (measured), over the free plan's 512MB — running
-it there would crash the whole site, not just narration. So on Render
-(which sets `RENDER=true`) the Listen button doesn't appear unless
-narration is pointed somewhere else:
+**On Render's free plan, the listener's phone narrates.** Reading a
+chapter's pages on the server peaks at ~600MB+ (measured), over the free
+plan's 512MB, and its 0.15 CPU would take half an hour a chapter. So on
+Render (which sets `RENDER=true`) the Listen button runs storyteller mode
+on the phone instead:
+
+- `ocr-worker.js` (a Web Worker) runs the same PP-OCRv4 models in the
+  browser with onnxruntime-web, both loaded from jsDelivr and kept in the
+  phone's Cache API after the first ~25MB download. Webtoon strips are
+  read in overlapping 1600px slices. Measured in Chromium: the first line
+  is spoken ~15-30s after tapping Start, and a chapter is read faster than
+  it's spoken.
+- `GET /api/narrate/page?chapter_url=&n=` hands the phone page *n* of a
+  chapter the scrapers support (image sites don't let a browser read their
+  pixels). `POST /api/narrate/lines` turns a page's raw OCR lines into
+  speakable lines: bubbles grouped, run-together words split, sound
+  effects and credits dropped. Text only, milliseconds.
+- The phone's own voice (`speechSynthesis`) reads the lines, a page or two
+  behind the reading.
+
+For the recorded Kokoro voices instead, point narration somewhere else:
 
 1. Run a second copy of this app on a machine with at least ~2GB of RAM
    (4GB+ with Ollama). The easiest free one is a **Hugging Face Space**

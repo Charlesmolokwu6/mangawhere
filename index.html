@@ -294,6 +294,12 @@ padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);font-size:14px}
 .narr-bar i{display:block;height:100%;background:var(--mint);width:0;transition:width .4s}
 .narr-panel audio{width:100%;margin-top:8px}
 .narr-panel .err{color:var(--bad);margin:6px 0 0}
+.narr-row{display:flex;gap:8px}
+.narr-row select{flex:1;min-width:0}
+.narr-ctl{display:flex;gap:8px;margin-top:8px}
+.narr-ctl button{flex:1;border-radius:10px;padding:9px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;
+background:var(--surf);color:var(--text);border:1px solid var(--line)}
+.narr-now{margin:8px 0 0;font-size:13px;color:var(--text);font-style:italic;max-height:3.9em;overflow:hidden}
 /* Reader pages: placeholder height until loaded, so lazy loading can tell
    which pages are actually near the screen. */
 .rpage{width:100%;display:block;margin:0 0 4px;min-height:30vh;background:var(--surf)}
@@ -3266,7 +3272,9 @@ var narration={audio:null, timer:null};
    what it can actually do. Every narration request then goes to `base`. */
 function readNarrationConfig(base){
   return fetch(base+"/api/config").then(function(r){ return r.json(); })
-    .then(function(cfg){ return cfg.narration||{available:false}; });
+    .then(function(cfg){
+      return Object.assign({available:false}, cfg.narration, {phone:!!cfg.phone_narration});
+    });
 }
 
 function getNarrationConfig(){
@@ -3276,8 +3284,8 @@ function getNarrationConfig(){
         if(!n.available || !n.base) return Object.assign({}, n, {base:READER_BASE});
         var remote=n.base.replace(/\/$/,"");
         return readNarrationConfig(remote).then(function(r){
-          return r.base ? {available:false} : Object.assign({}, r, {base:remote});   // no chains
-        });
+          return r.base ? {available:false, phone:n.phone} : Object.assign({}, r, {base:remote});   // no chains
+        }, function(){ return {available:false, phone:n.phone}; });
       })
       .catch(function(){ narrationConfig=null; return {available:false}; });
   }
@@ -3285,6 +3293,7 @@ function getNarrationConfig(){
 }
 
 function stopNarration(){
+  stopPhoneNarration();
   if(narration.timer){ clearTimeout(narration.timer); narration.timer=null; }
   if(narration.audio){ narration.audio.pause(); narration.audio=null; }
   var old=document.getElementById("narr");
@@ -3309,7 +3318,11 @@ var NARRATION_STAGE={queued:"Waiting in line…", reading:"Reading the pages", w
 
 function mountNarration(chapterUrl, token){
   getNarrationConfig().then(function(cfg){
-    if(!cfg.available || token!==readerLoadToken || document.getElementById("narr")) return;
+    if(token!==readerLoadToken || document.getElementById("narr")) return;
+    if(!cfg.available){
+      if(cfg.phone && phoneNarrationSupported()) mountPhoneNarration(chapterUrl, token);
+      return;
+    }
     var box=document.createElement("div");
     box.className="narr"; box.id="narr";
     box.innerHTML='<div class="narr-panel" hidden></div>'+
@@ -3378,6 +3391,237 @@ function pollNarration(base, job, el, token){
       .then(function(next){ pollNarration(base, next, el, token); })
       .catch(function(){ pollNarration(base, job, el, token); });
   }, 2500);
+}
+
+/* ---- storyteller mode on the phone ----
+   Where the server can't narrate (Render's free plan; see README), the
+   listener's own phone does it: ocr-worker.js reads each page's speech
+   bubbles, /api/narrate/lines tidies the text (milliseconds of work for
+   the server), and the phone's built-in voice reads it aloud. Pages are
+   read a little ahead of the voice, so it starts talking after the first
+   page rather than after the whole chapter. */
+var PHONE_VOICE_KEY="mw-phone-voice", PHONE_RATE_KEY="mw-phone-rate";
+var PHONE_READ_AHEAD=2;   // pages read ahead of the one being spoken
+var phoneNarr=null;
+
+function phoneNarrationSupported(){
+  return typeof Worker!=="undefined" && typeof OffscreenCanvas!=="undefined" &&
+    typeof createImageBitmap!=="undefined" && typeof WebAssembly!=="undefined" &&
+    "speechSynthesis" in window && typeof SpeechSynthesisUtterance!=="undefined";
+}
+
+function englishVoices(){
+  var all=window.speechSynthesis.getVoices()||[];
+  var en=all.filter(function(v){ return /^en([-_]|$)/i.test(v.lang); });
+  return en.length?en:all;
+}
+function phoneVoiceOptions(){
+  var saved=null; try{ saved=localStorage.getItem(PHONE_VOICE_KEY); }catch(e){}
+  var voices=englishVoices();
+  if(!voices.length) return '<option value="">Phone’s own voice</option>';
+  var chosen=voices.some(function(v){ return v.voiceURI===saved; }) ? saved
+    : (voices.filter(function(v){ return v.default; })[0]||voices[0]).voiceURI;
+  return voices.map(function(v){
+    return '<option value="'+esc(v.voiceURI)+'"'+(v.voiceURI===chosen?' selected':'')+'>'+esc(v.name)+'</option>';
+  }).join("");
+}
+function phoneRateOptions(){
+  var saved="1"; try{ saved=localStorage.getItem(PHONE_RATE_KEY)||"1"; }catch(e){}
+  return [["0.85","Slower"],["1","Normal"],["1.15","Faster"],["1.3","Fastest"]].map(function(o){
+    return '<option value="'+o[0]+'"'+(o[0]===saved?' selected':'')+'>'+o[1]+'</option>';
+  }).join("");
+}
+
+function mountPhoneNarration(chapterUrl, token){
+  var box=document.createElement("div");
+  box.className="narr"; box.id="narr";
+  box.innerHTML='<div class="narr-panel" hidden></div>'+
+    '<button class="narr-fab" aria-label="Listen to this chapter">🎧 Listen</button>';
+  document.body.appendChild(box);
+  var panel=box.querySelector(".narr-panel"), fab=box.querySelector(".narr-fab");
+  panel.innerHTML='<h4>Storyteller mode <button aria-label="Close">×</button></h4>'+
+    '<p class="sub">Reads the chapter’s speech bubbles aloud, right on this phone. '+
+    'The first time, it downloads its text reader (about 25MB).</p>'+
+    '<div class="narr-row"><select class="pv" aria-label="Voice">'+phoneVoiceOptions()+'</select>'+
+    '<select class="pr" aria-label="Speed" style="flex:0 0 auto;width:auto">'+phoneRateOptions()+'</select></div>'+
+    '<button class="go">Start reading</button>'+
+    '<div class="narr-status"></div>';
+  // Phones list their voices a moment after the page loads.
+  window.speechSynthesis.onvoiceschanged=function(){
+    var sel=panel.querySelector(".pv");
+    if(sel && !sel.disabled) sel.innerHTML=phoneVoiceOptions();
+  };
+  panel.querySelector("h4 button").onclick=function(){ panel.hidden=true; fab.hidden=false; };
+  fab.onclick=function(){ panel.hidden=false; fab.hidden=true; };
+  panel.querySelector(".go").onclick=function(){
+    var voice=panel.querySelector(".pv").value, rate=panel.querySelector(".pr").value;
+    try{ localStorage.setItem(PHONE_VOICE_KEY, voice); localStorage.setItem(PHONE_RATE_KEY, rate); }catch(e){}
+    this.hidden=true;
+    panel.querySelector(".pv").disabled=panel.querySelector(".pr").disabled=true;
+    startPhoneNarration(chapterUrl, voice, parseFloat(rate)||1, panel, token);
+  };
+}
+
+function startPhoneNarration(chapterUrl, voiceURI, rate, panel, token){
+  stopPhoneNarration();
+  var total=document.querySelectorAll("#rpages .rpage").length;
+  var el=panel.querySelector(".narr-status");
+  if(!total){ el.innerHTML='<p class="err">This chapter’s pages haven’t loaded yet.</p>'; return; }
+  var st=phoneNarr={token:token, chapterUrl:chapterUrl, total:total, panel:panel, el:el,
+    pages:[], next:0, cur:0, line:0, workers:[], talking:false, paused:false, stopped:false,
+    errors:0, read:0, rate:rate, watchdog:null,
+    voice:englishVoices().filter(function(v){ return v.voiceURI===voiceURI; })[0]||null};
+  el.innerHTML='<div class="narr-bar"><i></i></div><p class="sub ps" style="margin:0"></p>'+
+    '<p class="narr-now"></p><div class="narr-ctl"><button class="pp">Pause</button><button class="pstop">Stop</button></div>';
+  el.querySelector(".pp").onclick=function(){ togglePhonePause(st, this); };
+  el.querySelector(".pstop").onclick=function(){ endPhoneNarration(st, "Stopped."); };
+  // Some phones only allow speech that a tap started, so the voice starts
+  // now, while the first page is still being read.
+  st.talking=true;
+  speakPhoneLine(st, {text:"Storyteller mode. Getting the first page ready.", delivery:"says"}, function(){
+    st.talking=false; speakNextPhoneLine(st);
+  });
+  phoneStatus(st, "Getting the text reader ready…");
+  var n=(navigator.hardwareConcurrency||2)>=6 ? 2 : 1;   // two pages at once on faster phones
+  for(var i=0;i<n;i++) st.workers.push(makeOcrWorker(st));
+  feedOcrWorkers(st);
+}
+
+function makeOcrWorker(st){
+  var w=new Worker("ocr-worker.js");
+  w.page=-1;
+  w.onmessage=function(e){
+    var m=e.data||{};
+    if(st.stopped) return;
+    if(m.type==="progress"){ if(!st.read) phoneStatus(st, m.label); return; }
+    if(m.type!=="result" && m.type!=="error") return;
+    var page=w.page; w.page=-1;
+    if(m.type==="result"){ st.read++; tidyPhonePage(st, page, m.lines||[]); }
+    else {
+      st.errors++;
+      st.pages[page]={lines:[]};
+      // Nothing read and pages keep failing: the reader itself didn't load.
+      if(!st.read && st.errors>=2){
+        endPhoneNarration(st, "Couldn’t start the text reader: "+(m.message||"unknown error")); return;
+      }
+      if(st.cur===page) speakNextPhoneLine(st);
+    }
+    feedOcrWorkers(st);
+  };
+  w.onerror=function(){ if(!st.stopped && !st.read) endPhoneNarration(st, "This browser couldn’t start the text reader."); };
+  return w;
+}
+
+function feedOcrWorkers(st){
+  st.workers.forEach(function(w){
+    if(st.stopped || w.page>=0 || st.next>=st.total || st.next-st.cur>PHONE_READ_AHEAD) return;
+    var page=st.next++;
+    w.page=page;
+    w.postMessage({type:"ocr", id:page, url:READER_BASE+"/api/narrate/page?chapter_url="+
+      encodeURIComponent(st.chapterUrl)+"&n="+page});
+  });
+}
+
+function tidyPhonePage(st, page, lines){
+  function done(spoken){
+    if(st.stopped) return;
+    st.pages[page]={lines:spoken};
+    if(st.cur===page) speakNextPhoneLine(st);
+  }
+  if(!lines.length){ done([]); return; }
+  fetch(READER_BASE+"/api/narrate/lines",{method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({lines:lines})})
+    .then(function(r){ return r.ok ? r.json() : Promise.reject(); })
+    .then(function(d){ done(d.lines||[]); })
+    // Server unreachable: the raw text is better than skipping the page.
+    .catch(function(){ done(lines.map(function(l){ return {text:l[1], delivery:"says"}; })); });
+}
+
+function speakNextPhoneLine(st){
+  if(st.stopped || st.paused || st.talking) return;
+  if(st.cur>=st.total){ endPhoneNarration(st, "Finished this chapter."); return; }
+  var page=st.pages[st.cur];
+  if(!page){ phoneStatus(st, "Reading page "+(st.cur+1)+" of "+st.total+"…"); return; }
+  if(st.line>=page.lines.length){
+    st.cur++; st.line=0;
+    feedOcrWorkers(st);
+    speakNextPhoneLine(st);
+    return;
+  }
+  if(st.line===0) followPhonePage(st.cur);
+  var item=page.lines[st.line++];
+  phoneStatus(st, "Page "+(st.cur+1)+" of "+st.total, item.text);
+  st.talking=true;
+  speakPhoneLine(st, item, function(){ st.talking=false; speakNextPhoneLine(st); });
+}
+
+function speakPhoneLine(st, item, onend){
+  var u=new SpeechSynthesisUtterance(item.text);
+  u.lang="en-US";
+  if(st.voice){ try{ u.voice=st.voice; u.lang=st.voice.lang; }catch(e){} }
+  var rate=st.rate, pitch=1, volume=1;
+  if(item.delivery==="shouts"){ rate*=1.06; pitch=1.12; }
+  else if(item.delivery==="asks"){ pitch=1.06; }
+  else if(item.delivery==="mutters"||item.delivery==="whispers"){ rate*=0.92; pitch=0.92; volume=0.85; }
+  u.rate=rate; u.pitch=pitch; u.volume=volume;
+  var finished=false;
+  function end(){
+    if(finished) return;
+    finished=true; clearTimeout(st.watchdog);
+    if(!st.stopped) onend();
+  }
+  u.onend=end; u.onerror=end;
+  // Some phones never report the end of a line; don't let that stall the chapter.
+  st.watchdog=setTimeout(end, 4000+item.text.length*120/rate);
+  window.speechSynthesis.speak(u);
+}
+
+// Pausing cancels the line being spoken (phones' own pause is unreliable)
+// and says it again on resume.
+function togglePhonePause(st, btn){
+  if(st.stopped) return;
+  st.paused=!st.paused;
+  btn.textContent=st.paused?"Resume":"Pause";
+  if(st.paused){
+    if(st.talking && st.line>0) st.line--;
+    window.speechSynthesis.cancel();
+    phoneStatus(st, "Paused");
+  } else speakNextPhoneLine(st);
+}
+
+function followPhonePage(i){
+  var img=document.querySelectorAll("#rpages .rpage")[i];
+  if(!img) return;
+  var r=img.getBoundingClientRect();
+  if(r.bottom<0 || r.top>window.innerHeight) img.scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function phoneStatus(st, label, now){
+  if(st.stopped || !st.el.isConnected) return;
+  var bar=st.el.querySelector(".narr-bar i"), ps=st.el.querySelector(".ps"), np=st.el.querySelector(".narr-now");
+  if(bar) bar.style.width=Math.round(100*st.cur/st.total)+"%";
+  if(ps) ps.textContent=label;
+  if(np && now!==undefined) np.textContent="“"+now+"”";
+}
+
+function endPhoneNarration(st, message){
+  var panel=st.panel;
+  stopPhoneNarration();
+  if(!panel.isConnected) return;
+  panel.querySelector(".narr-status").innerHTML='<p class="sub" style="margin:8px 0 0">'+esc(message)+'</p>';
+  panel.querySelector(".go").hidden=false;
+  panel.querySelector(".go").textContent="Read again";
+  panel.querySelector(".pv").disabled=panel.querySelector(".pr").disabled=false;
+}
+
+function stopPhoneNarration(){
+  var st=phoneNarr;
+  if(!st) return;
+  phoneNarr=null;
+  st.stopped=true;
+  clearTimeout(st.watchdog);
+  st.workers.forEach(function(w){ w.terminate(); });
+  try{ window.speechSynthesis.cancel(); }catch(e){}
 }
 
 var EAGER_PAGES=3;
