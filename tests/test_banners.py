@@ -120,3 +120,36 @@ class TrimTests(unittest.IsolatedAsyncioTestCase):
     async def test_artwork_that_never_repeats_is_left_alone(self):
         r = await self.trim("https://comizy.io/clean/chapter-9")
         self.assertEqual(r, {"top": None, "bottom": None})
+
+    async def test_a_known_banner_is_found_by_its_shape_with_no_gap_after_it(self):
+        await self.trim("https://comizy.io/s/chapter-49")   # learns the banner
+        joined = banner(66, 800, 1250)
+        joined.paste(banner(1), (0, 0))                      # art runs straight on from it
+        self.pages["https://comizy.io/s/chapter-45"] = [joined, page(story_seed=450)]
+        r = await self.trim("https://comizy.io/s/chapter-45")
+        self.assertAlmostEqual(r["top"]["px"], 480, delta=10)
+
+    async def test_a_notice_image_seen_on_another_series_of_the_same_site_goes_whole(self):
+        notice = banner(21, 1516, 1536)
+        self.pages["https://comizy.io/a/chapter-48"] = [notice, page(story_seed=1)]
+        self.pages["https://comizy.io/b/chapter-12"] = [notice, page(story_seed=2)]
+        self.assertIsNone((await self.trim("https://comizy.io/a/chapter-48"))["top"])
+        r = await self.trim("https://comizy.io/b/chapter-12")
+        self.assertEqual(r["top"], {"px": 1536, "width": 1516, "height": 1536})
+
+    async def test_the_same_chapter_on_another_site_is_not_a_repeat(self):
+        first = page(top=banner(30), story_seed=31)
+        self.pages["https://comizy.io/c/chapter-5"] = [first, page(story_seed=32)]
+        self.pages["https://mangaread.org/manga/c/chapter-5/"] = [first, page(story_seed=32)]
+        await self.trim("https://comizy.io/c/chapter-5")
+        r = await self.trim("https://mangaread.org/manga/c/chapter-5/")
+        self.assertIsNone(r["top"])
+
+    async def test_banners_kept_before_shapes_were_stored_still_load(self):
+        mark = banners.fingerprint(page(top=banner()), 480)
+        conn = db.get_connection()
+        conn.execute("INSERT INTO promo_banners (hash, created_at) VALUES (?, 0)", (f"{mark:032x}",))
+        conn.commit()
+        conn.close()
+        r = await self.trim("https://comizy.io/other/chapter-3")
+        self.assertAlmostEqual(r["top"]["px"], 480, delta=10)

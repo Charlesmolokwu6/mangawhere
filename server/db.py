@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS promo_banners (
     hash TEXT PRIMARY KEY,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS banner_candidates (
+    hash TEXT PRIMARY KEY,
+    chapter_url TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 

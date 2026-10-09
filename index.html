@@ -3314,8 +3314,14 @@ function trimBanners(chapterUrl, token){
     .catch(function(){});
 }
 function clipPage(img, cut, fromBottom){
-  if(!img || !cut || !(cut.px>0) || cut.px>=cut.height) return;
+  if(!img || !cut || !(cut.px>0)) return;
   var before=img.getBoundingClientRect();
+  if(cut.px>=cut.height){
+    // The whole image is a notice ("read only at ..."): hide it.
+    img.style.display="none";
+    if(before.bottom<0) window.scrollBy(0, -before.height);
+    return;
+  }
   var wrap=document.createElement("div");
   wrap.className="rclip";
   wrap.style.aspectRatio=cut.width+" / "+(cut.height-cut.px);
