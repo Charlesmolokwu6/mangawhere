@@ -468,8 +468,8 @@ class PhoneNarrationTests(MainTestCase):
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["lines"], [
-            {"text": "My god, this guy can't stop getting himself hurt.", "delivery": "says"},
-            {"text": "What do you want?", "delivery": "asks"},
+            {"text": "My god, this guy can't stop getting himself hurt.", "delivery": "says", "y": 100},
+            {"text": "What do you want?", "delivery": "asks", "y": 600},
         ])
         self.assertTrue(body["effects"])
 

@@ -228,6 +228,11 @@ def group_into_bubbles(results: List[Any]) -> List[str]:
     bubble sit directly under one another and overlap horizontally, so
     they're merged into one bubble; bubbles come back top-to-bottom (the
     reading order of a vertical webtoon page)."""
+    return [" ".join(b["lines"]) for b in _bubbles(results)]
+
+
+def _bubbles(results: List[Any]) -> List[Dict[str, Any]]:
+    """group_into_bubbles, keeping where each bubble is on the page."""
     lines = []
     for box, text, score in results or []:
         if float(score) < MIN_OCR_CONFIDENCE or len(text.strip()) < 2:
@@ -251,7 +256,7 @@ def group_into_bubbles(results: List[Any]) -> List[str]:
                 break
         else:
             bubbles.append({**line, "lines": [line["text"]]})
-    return [" ".join(b["lines"]) for b in bubbles]
+    return bubbles
 
 
 # Comic lettering is tightly kerned, and at its original size the OCR model
@@ -461,16 +466,35 @@ def prepare_pages(pages: List[List[str]]) -> List[Dict[str, Any]]:
     for bubbles in pages:
         lines, effects = [], False
         for bubble in bubbles:
-            if is_noise(bubble) or _CREDITS.search(bubble) or _CREDITS_ANYWHERE.search(bubble):
-                continue
-            if is_sound_effect(bubble):
-                effects = True
-                continue
-            line = normalise_line(bubble)
-            if line and not is_noise(line):
+            line, effect = _speakable(bubble)
+            effects = effects or effect
+            if line:
                 lines.append(line)
         prepared.append({"lines": lines, "effects": effects})
     return prepared
+
+
+def _speakable(bubble: str):
+    """(the bubble as a line to speak, or None; whether it was a sound effect)."""
+    if is_noise(bubble) or _CREDITS.search(bubble) or _CREDITS_ANYWHERE.search(bubble):
+        return None, False
+    if is_sound_effect(bubble):
+        return None, True
+    line = normalise_line(bubble)
+    return (line if line and not is_noise(line) else None), False
+
+
+def speakable_lines(results: List[Any]) -> Dict[str, Any]:
+    """One page's raw OCR lines as the lines to speak, the way prepare_pages
+    has them, each with the top of its bubble on the page (y, in the page
+    image's pixels) so the reader can scroll to it while it's spoken."""
+    lines, effects = [], False
+    for bubble in _bubbles(results):
+        line, effect = _speakable(" ".join(bubble["lines"]))
+        effects = effects or effect
+        if line:
+            lines.append({"text": line, "delivery": delivery_by_punctuation(line), "y": round(bubble["y0"])})
+    return {"lines": lines, "effects": effects}
 
 
 def delivery_by_punctuation(line: str) -> str:
