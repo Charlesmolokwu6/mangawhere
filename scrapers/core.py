@@ -1,4 +1,5 @@
 import asyncio
+import struct
 import json
 import re
 import time
@@ -1418,6 +1419,99 @@ async def find_best_source(
     return _rank(found)
 
 
+# ---- scanlation promo pages ---------------------------------------------------
+# Webtoon chapters on most sites open with a scanlation group's banner: logo,
+# Discord, credits, "read at ...". In a webtoon every story page is a tall
+# strip, so a wide page at the start can only be that banner; a short one at
+# the very end is a "read at ..." or credits card. Japanese manga is
+# different: a wide page there is a real two-page spread, so manga chapters
+# (pages only ~1.4x taller than wide) are left alone. Only each image's
+# first bytes are fetched, to read its size from the header.
+
+PROMO_PROBE_BYTES = 131072    # stops as soon as the size is read; photo metadata can push it past 16KB
+WEBTOON_MIN_RATIO = 1.7       # a story page at least this much taller than wide: webtoon strips
+IMAGE_REFERER_OVERRIDES = {"cmzcdn.org": "https://comizy.io/"}
+
+
+def image_size_from_header(data: bytes) -> Optional[Tuple[int, int]]:
+    """(width, height) from the start of a PNG, WebP, GIF or JPEG file."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24:
+        return struct.unpack(">II", data[16:24])
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP" and len(data) >= 30:
+        kind = data[12:16]
+        if kind == b"VP8X":
+            return 1 + int.from_bytes(data[24:27], "little"), 1 + int.from_bytes(data[27:30], "little")
+        if kind == b"VP8 ":
+            w, h = struct.unpack("<HH", data[26:30])
+            return w & 0x3FFF, h & 0x3FFF
+        if kind == b"VP8L":
+            bits = int.from_bytes(data[21:25], "little")
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 10:
+        return struct.unpack("<HH", data[6:10])
+    if data[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 <= len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker == 0xFF or 0xD0 <= marker <= 0xD8 or marker == 0x01:
+                i += 1 if marker == 0xFF else 2
+                continue
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                h, w = struct.unpack(">HH", data[i + 5:i + 9])
+                return w, h
+            i += 2 + struct.unpack(">H", data[i + 2:i + 4])[0]
+    return None
+
+
+async def _probe_image_size(client: httpx.AsyncClient, image_url: str, chapter_url: str) -> Optional[Tuple[int, int]]:
+    host = urlparse(image_url).hostname or ""
+    referer = next((ref for suffix, ref in IMAGE_REFERER_OVERRIDES.items()
+                    if host == suffix or host.endswith("." + suffix)),
+                   f"{urlparse(chapter_url).scheme}://{urlparse(chapter_url).netloc}/")
+    headers = {"User-Agent": HEADERS["User-Agent"], "Referer": referer, "Range": f"bytes=0-{PROMO_PROBE_BYTES - 1}"}
+    data = b""
+    try:
+        async with client.stream("GET", image_url, headers=headers) as r:
+            if r.status_code not in (200, 206):
+                return None
+            async for chunk in r.aiter_bytes():
+                data += chunk
+                size = image_size_from_header(data)
+                if size or len(data) >= PROMO_PROBE_BYTES:
+                    return size
+    except Exception:
+        return None
+    return image_size_from_header(data)
+
+
+def trim_promo_pages(images: List[str], sizes: Dict[int, Optional[Tuple[int, int]]]) -> List[str]:
+    """images without the scanlation banners at either end, given the sizes
+    of the first two, middle and last two pages (None where unknown)."""
+    n = len(images)
+    middle = sizes.get(n // 2)
+    if n < 4 or not middle or middle[1] < WEBTOON_MIN_RATIO * middle[0]:
+        return images  # not a webtoon, or can't tell: leave it alone
+    start, end = 0, n
+    while start < 2 and sizes.get(start) and sizes[start][0] > sizes[start][1]:
+        start += 1
+    while end > n - 2 and end - 1 > start and sizes.get(end - 1) and sizes[end - 1][1] <= sizes[end - 1][0]:
+        end -= 1
+    return images[start:end]
+
+
+async def drop_promo_pages(images: List[str], chapter_url: str) -> List[str]:
+    if len(images) < 4:
+        return images
+    n = len(images)
+    wanted = sorted({0, 1, n // 2, n - 2, n - 1})
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        found = await asyncio.gather(*(_probe_image_size(client, images[i], chapter_url) for i in wanted))
+    return trim_promo_pages(images, dict(zip(wanted, found)))
+
+
 async def scrape_chapter(url: str) -> Dict[str, Any]:
     """Auto-detect the site and return the normalized chapter payload."""
     domain = _detect_domain(url)
@@ -1446,6 +1540,10 @@ async def scrape_chapter(url: str) -> Dict[str, Any]:
         images = await scrape_weebcentral(url)
     else:
         images = []
+
+    # Asura's pages already come trimmed, from the sizes on its own page.
+    if domain != "asurascans":
+        images = await drop_promo_pages(images, url)
 
     return {
         "domain": domain,
