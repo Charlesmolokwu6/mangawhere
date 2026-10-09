@@ -677,7 +677,8 @@ async def api_narrate_page(
 @app.post("/api/narrate/lines")
 async def api_narrate_lines(request: Request):
     """One page's raw OCR lines ([box, text, score], from the phone) as the
-    lines to speak: grouped into speech bubbles, run-together words split,
+    lines to speak: grouped into speech bubbles (in right-to-left order for
+    a manga page, "order": "rtl"), run-together words split,
     sound effects and scan credits dropped, each with the top of its bubble
     on the page (y) to scroll to. Text only: milliseconds."""
     try:
@@ -697,7 +698,8 @@ async def api_narrate_lines(request: Request):
             lines.append([box, text, float(score)])
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Each line is [box, text, score].")
-    return storyteller.speakable_lines(lines)
+    # Manga is read right to left; the phone says so for a manga page.
+    return storyteller.speakable_lines(lines, rtl=payload.get("order") == "rtl")
 
 
 @app.get("/api/narrate/{job}")

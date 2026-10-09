@@ -484,12 +484,29 @@ def _speakable(bubble: str):
     return (line if line and not is_noise(line) else None), False
 
 
-def speakable_lines(results: List[Any]) -> Dict[str, Any]:
+def right_to_left(bubbles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Bubbles in a manga page's reading order: top to bottom by row, and
+    right to left along each row. A row is the bubbles whose tops sit
+    beside the row's first (highest) bubble; measuring against that one
+    bubble, not the whole row, keeps a staircase of bubbles running down
+    the page from merging into one long row."""
+    rows: List[List[Dict[str, Any]]] = []
+    for bubble in sorted(bubbles, key=lambda b: b["y0"]):
+        if rows and bubble["y0"] < rows[-1][0]["y1"]:
+            rows[-1].append(bubble)
+        else:
+            rows.append([bubble])
+    return [b for row in rows for b in sorted(row, key=lambda b: -b["x1"])]
+
+
+def speakable_lines(results: List[Any], rtl: bool = False) -> Dict[str, Any]:
     """One page's raw OCR lines as the lines to speak, the way prepare_pages
     has them, each with the top of its bubble on the page (y, in the page
-    image's pixels) so the reader can scroll to it while it's spoken."""
+    image's pixels) so the reader can scroll to it while it's spoken.
+    rtl: the page is manga, read right to left."""
     lines, effects = [], False
-    for bubble in _bubbles(results):
+    bubbles = _bubbles(results)
+    for bubble in right_to_left(bubbles) if rtl else bubbles:
         line, effect = _speakable(" ".join(bubble["lines"]))
         effects = effects or effect
         if line:

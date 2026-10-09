@@ -473,6 +473,20 @@ class PhoneNarrationTests(MainTestCase):
         ])
         self.assertTrue(body["effects"])
 
+    def test_manga_pages_are_read_right_to_left(self):
+        def bubble(x, y, text):
+            return [[[x, y], [x + 200, y], [x + 200, y + 30], [x, y + 30]], text, 0.95]
+
+        # A manga page: two bubbles side by side in the top row, a third below.
+        page = [bubble(50, 100, "THEN WHO ARE YOU?"), bubble(500, 90, "I CAME HERE ALONE."),
+                bubble(60, 400, "WE SHOULD LEAVE NOW."), bubble(520, 410, "WAIT FOR THE OTHERS.")]
+        said = lambda body: [l["text"] for l in body["lines"]]
+        rtl = self.client.post("/api/narrate/lines", json={"lines": page, "order": "rtl"}).json()
+        self.assertEqual(said(rtl), ["I came here alone.", "Then who are you?", "Wait for the others.", "We should leave now."])
+        # Anything else (manhwa, manhua) stays top to bottom.
+        plain = self.client.post("/api/narrate/lines", json={"lines": page}).json()
+        self.assertEqual(said(plain), ["I came here alone.", "Then who are you?", "We should leave now.", "Wait for the others."])
+
     def test_bad_lines_are_rejected(self):
         for body in ({"lines": "x"}, {"lines": [["box", "t", 1]]}, {"lines": [[[[0, 0]] * 4, "x" * 301, 1]]},
                      {"lines": [[[[0, 0]] * 4, "ok", 1]] * 801}, ["not", "a", "dict"]):
