@@ -3306,29 +3306,41 @@ function trimBanners(chapterUrl, token){
     .then(function(r){ return r.ok ? r.json() : null; })
     .then(function(t){
       if(!t || token!==readerLoadToken) return;
-      readerTrim=t;
-      var pages=document.querySelectorAll("#rpages .rpage");
-      if(t.top) clipPage(pages[0], t.top, false);
-      if(t.bottom && pages.length>1) clipPage(pages[pages.length-1], t.bottom, true);
+      var pages=document.querySelectorAll("#rpages .rpage"), n=pages.length;
+      var top=t.top, bottom=t.bottom;
+      // Never let the two meet (a chapter of only a couple of images).
+      if(top && bottom && (top.skip||0)+(bottom.skip||0)+2>n) bottom=null;
+      if(top && (top.skip||0)+1>n) top=null;
+      readerTrim={top:top, bottom:bottom};
+      // Bottom first: hiding pages above shifts what's below.
+      if(bottom){
+        for(var i=0;i<(bottom.skip||0);i++) hidePage(pages[n-1-i]);
+        clipPage(pages[n-1-(bottom.skip||0)], bottom, true);
+      }
+      if(top){
+        for(var j=0;j<(top.skip||0);j++) hidePage(pages[j]);
+        clipPage(pages[top.skip||0], top, false);
+      }
     })
     .catch(function(){});
 }
+function hidePage(img){
+  if(!img || img.style.display==="none") return;
+  var before=img.getBoundingClientRect();
+  img.style.display="none";
+  // Already scrolled past it: keep what's on screen from jumping.
+  if(before.bottom<0) window.scrollBy(0, -before.height);
+}
 function clipPage(img, cut, fromBottom){
   if(!img || !cut || !(cut.px>0)) return;
+  if(cut.px>=cut.height){ hidePage(img); return; }
   var before=img.getBoundingClientRect();
-  if(cut.px>=cut.height){
-    // The whole image is a notice ("read only at ..."): hide it.
-    img.style.display="none";
-    if(before.bottom<0) window.scrollBy(0, -before.height);
-    return;
-  }
   var wrap=document.createElement("div");
   wrap.className="rclip";
   wrap.style.aspectRatio=cut.width+" / "+(cut.height-cut.px);
   img.parentNode.insertBefore(wrap, img);
   wrap.appendChild(img);
   if(!fromBottom) img.style.marginTop=(-100*cut.px/cut.width)+"%";
-  // Already scrolled past it: keep what's on screen from jumping.
   if(before.bottom<0) window.scrollBy(0, wrap.getBoundingClientRect().height-before.height);
 }
 
@@ -3677,7 +3689,9 @@ function feedOcrWorkers(st){
 function phonePageLines(st, n, lines, frontier, last){
   var page=st.pages[n]||(st.pages[n]={lines:[], held:[], done:false, chain:Promise.resolve()});
   // Nothing from a clipped-off banner is read out.
-  var top=n===0&&readerTrim.top, bottom=n===st.total-1&&readerTrim.bottom;
+  var t=readerTrim.top, b=readerTrim.bottom, topSkip=t?(t.skip||0):-1, bottomSkip=b?(b.skip||0):-1;
+  if(n<topSkip || st.total-1-n<bottomSkip) lines=[];
+  var top=t&&n===topSkip&&t, bottom=b&&n===st.total-1-bottomSkip&&b;
   lines=lines.filter(function(l){
     return !(top && l[0][2][1]<=top.px) && !(bottom && l[0][0][1]>=bottom.height-bottom.px);
   });
