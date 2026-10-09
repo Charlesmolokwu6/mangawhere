@@ -1,61 +1,229 @@
-"""Scanlation banners stitched into a chapter's first or last page.
+"""Scanlation banners and notices at either end of a chapter.
 
 Groups paste their banner (logo, Discord, "brought to you by", "read at")
-onto the top of a chapter's first image or the bottom of its last. Where
-the banner is a page of its own, scrapers/core.py drops it by shape; where
-a site cuts every chapter into equal pieces (comizy), it shares an image
-with the story and only the banner itself may go.
+onto the top of a chapter's first image or the bottom of its last, and
+some copies open and close with a notice of their own ("WARNING!! Read
+only at ..."). Where one is a page of its own, scrapers/core.py drops it
+by shape; where a site cuts every chapter into equal pieces (comizy), it
+shares images with the story, can run across two of them, and only the
+banner itself may go.
 
-A banner is the block of artwork between the image's edge and the first
-blank gap. What gives it away is that it repeats: a group puts the same
-banner on every chapter, often across series, where story art never
-repeats. So the block is fingerprinted (a difference hash), and it's a
-banner once the same fingerprint turns up on another chapter, looked for
-in the chapters next to this one (by the chapter number in the address).
-Known banners are kept in the promo_banners table, so a group's banner is
-recognised at once on every chapter after that.
+What gives a banner away is that it repeats, where story art never does.
+Each end of a chapter is read as a strip: its first (or last) few images,
+shrunk to PROFILE_W columns and stacked. The banner is the stretch of the
+strip, from the edge, that is the same as:
+  - the other end of the same chapter (a notice put at both ends),
+  - a banner already known (promo_notices),
+  - the same end of a chapter next to this one (by the chapter number in
+    the address), or
+  - the same end of any chapter read before from the same site
+    (notice_candidates).
+What's found is kept in promo_notices, so a group's banner is recognised
+at once on every chapter after that, of any series.
 
-The reader asks /api/trim after showing a chapter and hides the rows it
-names.
+The reader asks /api/trim after showing a chapter and hides what it names.
 """
 import asyncio
+import base64
 import io
 import re
 import threading
 import time
-from collections import deque
-from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Tuple
+from collections import OrderedDict
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import httpx
 
 from . import db, storyteller
 
-GAP_ROWS = 40            # a blank gap at least this tall ends the block
-UNIFORM = 12             # a row whose grey levels vary less than this is blank
-MIN_BLOCK = 120          # shorter blocks are a line of text or a panel edge, not a banner
-MAX_BLOCK_RATIO = 1.1    # a banner is wide: no taller than this times the width
-MATCH_BITS = 14          # fingerprints this close (of 128 bits) are the same banner
+PROFILE_W = 32           # a strip row is a band of an image, PROFILE_W values across
+ROWS_PER_WIDTH = 64      # bands an image-width tall (a band is 12px of an 800px-wide image)
+STRIP_ROWS = 192         # how much of each end is read: three image-widths
+STRIP_IMAGES = 4         # and from no more images than this
+ROW_DIFF = 16            # bands whose grey levels differ less than this on average are the same
+SPREAD_SHARE = 0.5       # and less than this share of how much the bands vary across
+UNIFORM = 12             # a band varying less than this across is blank (or a flat colour)
+MIN_ROWS = 10            # a shorter match is a panel edge, not a banner
+MIN_TEXTURED = 6         # and a banner has this many bands with something in them
+GAP_ROWS = 4             # this many blank bands is the gap after a banner...
+GO_ON_ROWS = 6           # ...and the match only goes past it if this many bands with something in them match after
+BOTH_ENDS_SHARE = 0.8    # a notice at both ends: this share of its bands the same (the copies are resized)
 NEIGHBOURS = 2           # chapters either side checked for a repeat
+CANDIDATES = 2000        # chapter ends remembered, to spot a repeat later
 CACHE_SIZE = 3000
+STRIP_CACHE = 200
 RECHECK_AFTER = 600      # seconds before a chapter with no banner found is looked at again
-CANDIDATES = 5000        # blocks remembered from chapters read, to spot a repeat later
-MAX_SHAPES = 200         # known banner shapes tried on an image with no gap after its banner
 
 Scrape = Callable[[str], Awaitable[Optional[Dict[str, Any]]]]
+Rows = List[bytes]
+# (image index, first strip row, rows, width, height) for each image in a strip
+Segments = List[Tuple[int, int, int, int, int]]
 
 _lock = threading.Lock()
-_known: List[Tuple[int, Optional[float]]] = []   # (fingerprint, block height / width)
-_candidates: Deque[Tuple[int, str]] = deque(maxlen=CANDIDATES)   # (fingerprint, chapter url)
+_known: List[Rows] = []
+_candidates: "OrderedDict[str, Tuple[Rows, Rows]]" = OrderedDict()   # chapter url -> (head, tail)
 _loaded = False
 _results: Dict[str, Tuple[float, Dict[str, Any]]] = {}   # chapter url -> (when, result)
+_strips: "OrderedDict[Tuple[str, bool], Optional[Tuple[Rows, Segments]]]" = OrderedDict()
 _busy = asyncio.Semaphore(2)   # decoding images is the heaviest thing the free server does
 _added = 0
 
 
-def _close(a: int, b: int) -> bool:
-    return bin(a ^ b).count("1") <= MATCH_BITS
+# ---- strip rows ---------------------------------------------------------
 
+def _pack(rows: Rows) -> str:
+    return base64.b64encode(b"".join(rows)).decode()
+
+
+def _unpack(text: str) -> Rows:
+    data = base64.b64decode(text)
+    return [data[i:i + PROFILE_W] for i in range(0, len(data), PROFILE_W)]
+
+
+def _diff(a: bytes, b: bytes) -> float:
+    return sum(abs(x - y) for x, y in zip(a, b)) / PROFILE_W
+
+
+def _spread(row: bytes) -> float:
+    mean = sum(row) / PROFILE_W
+    return sum(abs(v - mean) for v in row) / PROFILE_W
+
+
+def _same(a: bytes, b: bytes) -> bool:
+    """Two bands are the same picture: close on average, and closer still
+    for bands with little in them (a few marks on white look like any
+    other few marks on white)."""
+    d = _diff(a, b)
+    return d < ROW_DIFF and d < SPREAD_SHARE * (_spread(a) + _spread(b)) / 2 + 3
+
+
+def _textured(row: bytes) -> bool:
+    return max(row) - min(row) >= UNIFORM
+
+
+def image_rows(image) -> Rows:
+    """The image shrunk to PROFILE_W columns (keeping its shape), row by row."""
+    w, h = image.size
+    rows = max(1, round(h * ROWS_PER_WIDTH / w))
+    small = image.convert("L").resize((PROFILE_W, rows), resample=2)   # bilinear: averages bands
+    data = small.tobytes()
+    return [data[i * PROFILE_W:(i + 1) * PROFILE_W] for i in range(rows)]
+
+
+def _run(a: Rows, b: Rows) -> int:
+    """How many rows from the start a and b are the same for. A row may
+    line up one off (each image is shrunk on its own), and one odd row is
+    let through: two in a row end it."""
+    i, misses, length = 0, 0, 0
+    n = min(len(a), len(b))
+    while i < n:
+        same = any(0 <= j < len(b) and _same(a[i], b[j]) for j in (i, i - 1, i + 1))
+        if same:
+            misses = 0
+            length = i + 1
+        else:
+            misses += 1
+            if misses == 2:
+                break
+        i += 1
+    return length
+
+
+def _stop_at_gap(a: Rows, length: int) -> int:
+    """A banner ends at a blank gap: past one, the match only counts if
+    enough of what follows matches too (not just the first line of the
+    story looking like the other's)."""
+    i = 0
+    while i < length:
+        if _textured(a[i]):
+            i += 1
+            continue
+        start = i
+        while i < length and not _textured(a[i]):
+            i += 1
+        if i - start >= GAP_ROWS and sum(_textured(r) for r in a[i:length]) < GO_ON_ROWS:
+            return start
+    return length
+
+
+def match_length(a: Rows, b: Rows) -> int:
+    """_run up to any gap it shouldn't cross, less the blank rows it ends on."""
+    length = _stop_at_gap(a, _run(a, b))
+    while length and not (_textured(a[length - 1]) and _textured(b[min(length - 1, len(b) - 1)])):
+        length -= 1
+    # The banner's last band or two, half banner and half gap, rarely
+    # match: take them too when a gap follows.
+    for extra in (1, 2):
+        edge = a[length:length + extra]
+        gap = a[length + extra:length + extra + GAP_ROWS]
+        if (length and all(_textured(r) for r in edge)
+                and len(gap) == GAP_ROWS and not any(_textured(r) for r in gap)):
+            return length + extra
+    return length
+
+
+def _banner_like(rows: Rows, length: int) -> bool:
+    return length >= MIN_ROWS and sum(_textured(r) for r in rows[:length]) >= MIN_TEXTURED
+
+
+def shared_start(a: Rows, b: Rows) -> int:
+    """Rows at the start of a that b starts with too: a banner, if it's
+    banner-like and doesn't simply run on to where either strip ends (two
+    copies of one chapter)."""
+    length = match_length(a, b)
+    if not _banner_like(a, length) or length >= min(len(a), len(b)) - 1:
+        return 0
+    return length
+
+
+def known_start(rows: Rows, notice: Rows) -> int:
+    """Rows at the start of `rows` that are the whole of a known notice."""
+    length = match_length(rows, notice)
+    return length if length >= len(notice) - 2 and _banner_like(rows, length) else 0
+
+
+def both_ends(head: Rows, tail: Rows) -> int:
+    """Rows at the start of head that are also the very end of tail (in
+    the same order): a notice the chapter opens and closes with. The two
+    copies are often resized differently, so most rows matching is
+    enough. 0 if none."""
+    best, best_share = 0, 0.0
+    for length in range(MIN_ROWS, min(len(head) - 1, len(tail)) + 1):
+        end = tail[len(tail) - length:]
+
+        def same(i):
+            return any(0 <= j < length and _same(head[i], end[j]) for j in (i, i - 1, i + 1))
+
+        if not all(same(i) for i in range(4)):
+            continue   # the start doesn't line up: not this length
+        # Only bands with something in them count: blank ones match anything blank.
+        filled = [i for i in range(length) if _textured(head[i])]
+        if len(filled) < 2 * MIN_TEXTURED or not all(same(i) for i in range(length) if not _textured(head[i])):
+            continue
+        share = sum(same(i) for i in filled) / len(filled)
+        if share >= BOTH_ENDS_SHARE and share >= best_share:
+            best, best_share = length, share
+    return best
+
+
+def _cut(segments: Segments, length: int) -> Optional[Dict[str, int]]:
+    """Strip rows -> {"skip": whole images to hide, "px": rows to clip off
+    the next one, "width", "height"} (images counted from the edge)."""
+    if not length:
+        return None
+    for k, (_, first, rows, w, h) in enumerate(segments):
+        if length < first + rows:
+            if length > first and k + 1 < len(segments) and abs(segments[k + 1][3] - w) > 0.05 * w:
+                # Not the width of what follows: a page of its own (a credits
+                # page), not a piece of the strip. It goes whole.
+                return {"skip": k + 1, "px": 0, "width": segments[k + 1][3], "height": segments[k + 1][4]}
+            return {"skip": k, "px": round((length - first) * h / rows), "width": w, "height": h}
+    _, _, _, w, h = segments[-1]
+    return {"skip": len(segments) - 1, "px": h, "width": w, "height": h}
+
+
+# ---- memory -------------------------------------------------------------
 
 def _load() -> None:
     global _loaded
@@ -63,123 +231,67 @@ def _load() -> None:
         return
     conn = db.get_connection()
     try:
-        known = conn.execute("SELECT hash FROM promo_banners").fetchall()
-        seen = conn.execute("SELECT hash, chapter_url FROM banner_candidates "
+        known = conn.execute("SELECT profile FROM promo_notices").fetchall()
+        seen = conn.execute("SELECT chapter_url, head, tail FROM notice_candidates "
                             "ORDER BY created_at DESC LIMIT ?", (CANDIDATES,)).fetchall()
     finally:
         conn.close()
     with _lock:
-        _known[:] = []
-        for (text,) in ((r[0],) for r in known):
-            mark, _, shape = text.partition(":")
-            _known.append((int(mark, 16), float(shape) if shape else None))
+        _known[:] = [_unpack(r[0]) for r in known]
         _candidates.clear()
-        _candidates.extend((int(r[0], 16), r[1]) for r in reversed(seen))
+        for url, head, tail in reversed(seen):
+            _candidates[url] = (_unpack(head), _unpack(tail))
         _loaded = True
 
 
-def _remember(fingerprint: int, shape: float) -> None:
-    """Keep a banner, stored as "<hash>:<height/width>"."""
+def _remember(notice: Rows) -> None:
     with _lock:
-        if any(_close(fingerprint, k) and s is not None for k, s in _known):
+        if any(known_start(notice, k) for k in _known):
             return
-        _known.append((fingerprint, shape))
+        _known.append(notice)
     conn = db.get_connection()
     try:
-        conn.execute("INSERT OR IGNORE INTO promo_banners (hash, created_at) VALUES (?, ?)",
-                     (f"{fingerprint:032x}:{shape:.4f}", time.time()))
+        conn.execute("INSERT OR IGNORE INTO promo_notices (profile, created_at) VALUES (?, ?)",
+                     (_pack(notice), time.time()))
         conn.commit()
     finally:
         conn.close()
 
 
-def _note(marks: List[int], chapter_url: str) -> None:
-    """Remember a chapter's edge blocks, to recognise them if they repeat."""
+def _note(chapter_url: str, head: Rows, tail: Rows) -> None:
+    """Remember a chapter's ends, to recognise a banner on them later."""
     global _added
     with _lock:
-        _candidates.extend((m, chapter_url) for m in marks)
-        _added += len(marks)
-        prune = _added >= 200
+        _candidates.pop(chapter_url, None)
+        _candidates[chapter_url] = (head, tail)
+        while len(_candidates) > CANDIDATES:
+            _candidates.popitem(last=False)
+        _added += 1
+        prune = _added >= 100
         if prune:
             _added = 0
     conn = db.get_connection()
     try:
-        for m in marks:
-            conn.execute("INSERT OR REPLACE INTO banner_candidates (hash, chapter_url, created_at) "
-                         "VALUES (?, ?, ?)", (f"{m:032x}", chapter_url, time.time()))
+        conn.execute("INSERT OR REPLACE INTO notice_candidates (chapter_url, head, tail, created_at) "
+                     "VALUES (?, ?, ?, ?)", (chapter_url, _pack(head), _pack(tail), time.time()))
         if prune:
-            conn.execute("DELETE FROM banner_candidates WHERE hash NOT IN (SELECT hash FROM "
-                         "banner_candidates ORDER BY created_at DESC LIMIT ?)", (CANDIDATES,))
+            conn.execute("DELETE FROM notice_candidates WHERE chapter_url NOT IN (SELECT chapter_url "
+                         "FROM notice_candidates ORDER BY created_at DESC LIMIT ?)", (CANDIDATES,))
         conn.commit()
     finally:
         conn.close()
-
-
-def is_known(fingerprint: int) -> bool:
-    with _lock:
-        return any(_close(fingerprint, k) for k, _ in _known)
 
 
 def _host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
-def seen_elsewhere(fingerprint: int, chapter_url: str) -> bool:
-    """Whether another chapter on the same site, of any series, had this
-    block. Only the same site: the same chapter from another site shares
-    its story art, and must not count as a repeat."""
+def _same_site_ends(chapter_url: str) -> List[Tuple[Rows, Rows]]:
+    """Ends of chapters read before on the same site. Only the same site:
+    the same chapter from another site shares its story art."""
     host = _host(chapter_url)
     with _lock:
-        return any(_close(fingerprint, m) and url != chapter_url and _host(url) == host
-                   for m, url in _candidates)
-
-
-def edge_block(image, from_bottom: bool = False) -> Optional[int]:
-    """Height of the block of artwork at the image's top (or bottom), from
-    the first non-blank row to the first blank gap, or None if there's no
-    banner-shaped block there."""
-    grey = image.convert("L")
-    w, h = grey.size
-    px = grey.load()
-    step = max(1, w // 100)
-
-    def blank(y):
-        row = [px[x, y] for x in range(0, w, step)]
-        return max(row) - min(row) < UNIFORM
-
-    rows = range(h - 1, -1, -1) if from_bottom else range(h)
-    start, run, seen = None, 0, 0
-    for y in rows:
-        seen += 1
-        if start is None:
-            if blank(y):
-                if seen > h // 4:
-                    return None   # a quarter of the page is blank: no banner at the edge
-                continue
-            start = seen - 1
-            continue
-        run = run + 1 if blank(y) else 0
-        if run >= GAP_ROWS:
-            end = seen - run
-            height = end - start
-            if MIN_BLOCK <= height <= MAX_BLOCK_RATIO * w:
-                return end
-            return None
-    return None
-
-
-def fingerprint(image, end: int, from_bottom: bool = False) -> int:
-    """128-bit difference hash of the block: brightness steps across a
-    17x8 thumbnail, so re-compressed copies of the same banner match."""
-    w, h = image.size
-    box = (0, h - end, w, h) if from_bottom else (0, 0, w, end)
-    small = image.crop(box).convert("L").resize((17, 8))
-    px = small.load()
-    bits = 0
-    for y in range(8):
-        for x in range(16):
-            bits = bits << 1 | (px[x, y] > px[x + 1, y])
-    return bits
+        return [ends for url, ends in _candidates.items() if url != chapter_url and _host(url) == host]
 
 
 def neighbour_urls(chapter_url: str) -> List[str]:
@@ -198,86 +310,107 @@ def neighbour_urls(chapter_url: str) -> List[str]:
     return urls
 
 
-async def _edge_image(client, scrape: Scrape, chapter_url: str, last: bool):
+# ---- reading chapters ---------------------------------------------------
+
+async def _strip(client, scrape: Scrape, chapter_url: str, last: bool) -> Optional[Tuple[Rows, Segments]]:
+    """One end of a chapter as strip rows, in order from that edge (the
+    last end reversed, so both are matched from the edge in)."""
+    key = (chapter_url, last)
+    if key in _strips:
+        _strips.move_to_end(key)
+        return _strips[key]
     from PIL import Image
 
     try:
         chapter = await scrape(chapter_url)
     except Exception:
-        return None
+        chapter = None
     images = (chapter or {}).get("images") or []
-    if not images:
-        return None
-    data = await storyteller.fetch_image(client, images[-1 if last else 0], chapter_url)
-    if not data:
-        return None
-    try:
-        return Image.open(io.BytesIO(data))
-    except Exception:
-        return None
+    result = None
+    if len(images) >= 2:
+        order = list(range(len(images) - 1, -1, -1)) if last else list(range(len(images)))
+        rows: Rows = []
+        segments: Segments = []
+        for index in order[:STRIP_IMAGES]:
+            data = await storyteller.fetch_image(client, images[index], chapter_url)
+            if not data:
+                break
+            try:
+                image = Image.open(io.BytesIO(data))
+                image.load()
+            except Exception:
+                break
+            part = image_rows(image)
+            segments.append((index, len(rows), len(part), image.width, image.height))
+            rows.extend(reversed(part) if last else part)
+            if len(rows) >= STRIP_ROWS:
+                break
+        if segments:
+            result = (rows[:STRIP_ROWS], segments)
+    _strips[key] = result
+    while len(_strips) > STRIP_CACHE:
+        _strips.popitem(last=False)
+    return result
 
 
-def blocks(image, last: bool) -> List[Tuple[int, int]]:
-    """(rows from the edge, fingerprint) of each block at the image's edge
-    that might be a banner: the whole image when it's banner-shaped, and
-    the artwork up to the first gap."""
-    out = []
-    if MIN_BLOCK <= image.height <= MAX_BLOCK_RATIO * image.width:
-        out.append((image.height, fingerprint(image, image.height, from_bottom=last)))
-    end = edge_block(image, from_bottom=last)
-    if end is not None and end < image.height:
-        out.append((end, fingerprint(image, end, from_bottom=last)))
-    return out
-
-
-def _known_shape(image, last: bool) -> Optional[int]:
-    """Rows of a known banner at the edge, found by its shape: for a
-    banner the art runs straight on from, with no gap to find."""
+def _from_known(rows: Rows, last: bool) -> int:
     with _lock:
-        shapes = sorted({round(s, 3) for _, s in _known if s})[:MAX_SHAPES]
-    for shape in shapes:
-        end = round(shape * image.width)
-        if MIN_BLOCK <= end <= image.height and is_known(fingerprint(image, end, from_bottom=last)):
-            return end
-    return None
+        notices = list(_known)
+    best = 0
+    for notice in notices:
+        best = max(best, known_start(rows, list(reversed(notice)) if last else notice))
+    return best
 
 
-async def _find(client, scrape: Scrape, chapter_url: str, last: bool) -> Optional[Dict[str, int]]:
-    image = await _edge_image(client, scrape, chapter_url, last)
-    if image is None:
-        return None
-    image.load()
-    mine = blocks(image, last)
+def _as_notice(rows: Rows, length: int, last: bool) -> Rows:
+    """Matched strip rows as a notice, top to bottom."""
+    part = rows[:length]
+    return list(reversed(part)) if last else part
 
-    def result(end):
-        return {"px": end, "width": image.width, "height": image.height}
 
-    for end, mark in mine:
-        if is_known(mark):
-            # Keeps its shape too, for banners kept before shapes were.
-            await asyncio.to_thread(_remember, mark, end / image.width)
-            return result(end)
-    end = _known_shape(image, last)
-    if end is not None:
-        return result(end)
-    if not mine:
-        return None
-    for end, mark in mine:
-        if seen_elsewhere(mark, chapter_url):
-            await asyncio.to_thread(_remember, mark, end / image.width)
-            return result(end)
-    await asyncio.to_thread(_note, [m for _, m in mine], chapter_url)
+async def _find_end(client, scrape: Scrape, chapter_url: str, rows: Rows, last: bool) -> int:
+    length = _from_known(rows, last)
+    if length:
+        return length
+    for head, tail in _same_site_ends(chapter_url):
+        length = shared_start(rows, tail if last else head)
+        if length:
+            await asyncio.to_thread(_remember, _as_notice(rows, length, last))
+            return length
     for other in neighbour_urls(chapter_url):
-        theirs = await _edge_image(client, scrape, other, last)
-        if theirs is None:
+        theirs = await _strip(client, scrape, other, last)
+        if not theirs:
             continue
-        theirs.load()
-        their_marks = [m for _, m in blocks(theirs, last)]
-        for end, mark in mine:
-            if any(_close(mark, m) for m in their_marks):
-                await asyncio.to_thread(_remember, mark, end / image.width)
-                return result(end)
-    return None
+        length = shared_start(rows, theirs[0])
+        if length:
+            await asyncio.to_thread(_remember, _as_notice(rows, length, last))
+            return length
+    return 0
+
+
+async def _find(client, scrape: Scrape, chapter_url: str) -> Dict[str, Any]:
+    head = await _strip(client, scrape, chapter_url, last=False)
+    tail = await _strip(client, scrape, chapter_url, last=True)
+    if not head or not tail:
+        return {"top": None, "bottom": None}
+    head_rows, head_segments = head
+    tail_rows, tail_segments = tail
+    top = bottom = 0
+    # The same notice at both ends: no need to look anywhere else.
+    both = both_ends(head_rows, list(reversed(tail_rows)))
+    if both:
+        top = bottom = both
+        await asyncio.to_thread(_remember, head_rows[:both])
+    else:
+        top = await _find_end(client, scrape, chapter_url, head_rows, last=False)
+        bottom = await _find_end(client, scrape, chapter_url, tail_rows, last=True)
+    await asyncio.to_thread(_note, chapter_url, head_rows, tail_rows)
+    result = {"top": _cut(head_segments, top), "bottom": _cut(tail_segments, bottom)}
+    # A short chapter: never let the two cuts meet.
+    count = len((await scrape(chapter_url) or {}).get("images") or [])
+    if result["top"] and result["bottom"] and result["top"]["skip"] + result["bottom"]["skip"] + 2 > count:
+        result["bottom"] = None
+    return result
 
 
 def _cached(chapter_url: str) -> Optional[Dict[str, Any]]:
@@ -293,8 +426,9 @@ def _cached(chapter_url: str) -> Optional[Dict[str, Any]]:
 
 
 async def trim_for(chapter_url: str, scrape: Scrape) -> Dict[str, Any]:
-    """{"top": {"px", "width", "height"} or None, "bottom": ...}: rows of the
-    first image's top and the last image's bottom that are a banner."""
+    """{"top": {"skip", "px", "width", "height"} or None, "bottom": ...}:
+    how many whole images at that end are banner, and how many rows of
+    the next one."""
     cached = _cached(chapter_url)
     if cached is not None:
         return cached
@@ -308,9 +442,7 @@ async def trim_for(chapter_url: str, scrape: Scrape) -> Dict[str, Any]:
         if cached is not None:
             return cached
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            top = await _find(client, scrape, chapter_url, last=False)
-            bottom = await _find(client, scrape, chapter_url, last=True)
-    result = {"top": top, "bottom": bottom}
+            result = await _find(client, scrape, chapter_url)
     _results.pop(chapter_url, None)
     if len(_results) >= CACHE_SIZE:
         _results.pop(next(iter(_results)))
@@ -326,3 +458,4 @@ def reset() -> None:
         _candidates.clear()
         _loaded = False
     _results.clear()
+    _strips.clear()

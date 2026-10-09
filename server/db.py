@@ -119,13 +119,16 @@ CREATE TABLE IF NOT EXISTS title_health (
     reports INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_title_health_status ON title_health (status, checked_at);
-CREATE TABLE IF NOT EXISTS promo_banners (
-    hash TEXT PRIMARY KEY,
+DROP TABLE IF EXISTS promo_banners;
+DROP TABLE IF EXISTS banner_candidates;
+CREATE TABLE IF NOT EXISTS promo_notices (
+    profile TEXT PRIMARY KEY,
     created_at REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS banner_candidates (
-    hash TEXT PRIMARY KEY,
-    chapter_url TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS notice_candidates (
+    chapter_url TEXT PRIMARY KEY,
+    head TEXT NOT NULL,
+    tail TEXT NOT NULL,
     created_at REAL NOT NULL
 );
 """
