@@ -937,3 +937,47 @@ class AsuraPromoPageTests(unittest.IsolatedAsyncioTestCase):
         with patch("scrapers.core.fetch_html_httpx", return_value=html):
             urls = await scrape_asurascans("https://asurascans.com/comics/x/chapter/1")
         self.assertEqual(len(urls), 1)
+
+
+class PromoPageTests(unittest.IsolatedAsyncioTestCase):
+    def test_sizes_are_read_from_the_first_bytes_of_each_format(self):
+        import io
+        from PIL import Image
+        from scrapers.core import image_size_from_header
+
+        for fmt, mode, extra in (("JPEG", "RGB", {}), ("PNG", "RGB", {}), ("GIF", "RGB", {}),
+                                 ("WEBP", "RGB", {}), ("WEBP", "RGBA", {"lossless": True}),
+                                 ("WEBP", "RGBA", {"exif": b"Exif\x00\x00MM\x00*"})):
+            out = io.BytesIO()
+            Image.new(mode, (731, 2049)).save(out, fmt, **extra)
+            self.assertEqual(image_size_from_header(out.getvalue()[:4096]), (731, 2049), (fmt, extra))
+        self.assertIsNone(image_size_from_header(b"<html>not an image</html>"))
+
+    def test_webtoon_banners_go_but_manga_spreads_stay(self):
+        from scrapers.core import trim_promo_pages
+
+        pages = [f"p{i}" for i in range(10)]
+        strip, banner, card = (800, 12000), (1778, 1000), (720, 579)
+        # Flame Comics: a staff banner first. WeebCentral: credits cards last.
+        self.assertEqual(trim_promo_pages(pages, {0: banner, 1: strip, 5: strip, 8: strip, 9: strip}), pages[1:])
+        self.assertEqual(trim_promo_pages(pages, {0: strip, 1: strip, 5: strip, 8: card, 9: card}), pages[:8])
+        # Jujutsu Kaisen: a colour spread opens the chapter, and it's story.
+        spread, manga_page = (1600, 1168), (800, 1168)
+        self.assertEqual(trim_promo_pages(pages, {0: spread, 1: manga_page, 5: manga_page, 8: spread, 9: spread}), pages)
+        # Sizes unknown: nothing is dropped.
+        self.assertEqual(trim_promo_pages(pages, {0: banner, 5: None}), pages)
+        self.assertEqual(trim_promo_pages(pages[:3], {0: banner, 1: strip}), pages[:3])
+
+    async def test_scrape_chapter_drops_them_for_any_source(self):
+        from scrapers import core
+
+        images = [f"https://cdn.example/{i}.jpg" for i in range(6)]
+        sizes = {images[0]: (1200, 800), images[3]: (800, 3000)}
+
+        async def probe(client, url, chapter):
+            return sizes.get(url, (800, 3000))
+
+        with patch.object(core, "scrape_mangakatana", AsyncMock(return_value=images)), \
+             patch.object(core, "_probe_image_size", probe):
+            result = await core.scrape_chapter("https://mangakatana.com/manga/x.1/c1")
+        self.assertEqual(result["images"], images[1:])
