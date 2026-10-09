@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 import time
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urljoin, urlparse
 
 import httpx
@@ -184,12 +184,46 @@ async def scrape_asurascans(url: str) -> List[str]:
         except Exception:
             html = ""
 
+    sized = _asura_pages_with_size(html or "")
+    if sized:
+        return clean_image_urls(url for url, _, _ in _drop_asura_promos(sized))
     selectors = [
         "img[data-page-index]",  # current site markup, verified directly
         "#readerarea img",  # older/alternate theme, kept as a fallback
         "#chapter-images img",
     ]
     return extract_image_urls_from_html(html or "", selectors)
+
+
+_ASPECT = re.compile(r"aspect-ratio:\s*(\d+)\s*/\s*(\d+)")
+
+
+def _asura_pages_with_size(html: str) -> List[Tuple[str, int, int]]:
+    """(image URL, width, height) for each page: Asura wraps every page in
+    <div data-page="N" style="aspect-ratio:W / H"><img ...>."""
+    pages = []
+    for div in BeautifulSoup(html, "html.parser").select("div[data-page]"):
+        img = div.find("img")
+        size = _ASPECT.search(div.get("style") or "")
+        if not img or not img.get("src") or not size:
+            return []  # markup changed: read it without trimming
+        pages.append((img["src"], int(size.group(1)), int(size.group(2))))
+    return pages
+
+
+def _drop_asura_promos(pages: List[Tuple[str, int, int]]) -> List[Tuple[str, int, int]]:
+    """Asura opens every chapter with a landscape banner of its logo,
+    Discord and credits (1532x1024 or 1200x800), where the story itself is
+    tall 800-900px-wide strips. Some chapters also end on a short page that
+    is only its "Read at ASURASCANS.COM" banner (900x600). Both go. When
+    that banner is stitched onto the end of the last story strip, the page
+    stays: cutting it would cut the chapter's last panels."""
+    start, end = 0, len(pages)
+    while start < end - 1 and pages[start][1] > pages[start][2]:
+        start += 1
+    if end - start > 1 and pages[end - 1][2] <= pages[end - 1][1]:
+        end -= 1
+    return pages[start:end]
 
 
 async def scrape_mangafreak(url: str) -> List[str]:

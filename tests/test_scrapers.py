@@ -900,3 +900,40 @@ class UnreachableSiteTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_kaliscan_is_no_longer_searched(self):
         self.assertNotIn("kaliscan", core.SOURCES)
+
+
+class AsuraPromoPageTests(unittest.IsolatedAsyncioTestCase):
+    def page_html(self, sizes):
+        divs = "".join(
+            f'<div data-page="{i}" class="w-full" style="aspect-ratio:{w} / {h}">'
+            f'<img src="https://cdn.asurascans.com/c/{i:03d}.webp" data-page-index="{i}"/></div>'
+            for i, (w, h) in enumerate(sizes)
+        )
+        return f"<html><body>{divs}</body></html>"
+
+    async def scrape(self, sizes):
+        from scrapers.core import scrape_asurascans
+
+        with patch("scrapers.core.fetch_html_httpx", return_value=self.page_html(sizes)):
+            urls = await scrape_asurascans("https://asurascans.com/comics/x/chapter/1")
+        return [u.rsplit("/", 1)[-1] for u in urls]
+
+    async def test_opening_banner_and_banner_only_last_page_are_dropped(self):
+        # Seen on Solo Swordmaster: credits banner, story strips, a 900x600 "Read at ASURASCANS.COM" page.
+        self.assertEqual(await self.scrape([(1532, 1024), (900, 16000), (900, 16256), (900, 600)]),
+                         ["001.webp", "002.webp"])
+
+    async def test_a_last_strip_with_the_banner_stitched_on_is_kept(self):
+        # The banner sits under the chapter's last panels: cutting it would cut the story.
+        self.assertEqual(await self.scrape([(1200, 800), (800, 13470), (800, 1417)]), ["001.webp", "002.webp"])
+
+    async def test_never_drops_everything(self):
+        self.assertEqual(await self.scrape([(1200, 800)]), ["000.webp"])
+
+    async def test_other_markup_is_read_untrimmed(self):
+        from scrapers.core import scrape_asurascans
+
+        html = '<img data-page-index="0" src="https://cdn.asurascans.com/c/000.webp">'
+        with patch("scrapers.core.fetch_html_httpx", return_value=html):
+            urls = await scrape_asurascans("https://asurascans.com/comics/x/chapter/1")
+        self.assertEqual(len(urls), 1)
