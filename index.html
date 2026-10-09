@@ -338,6 +338,9 @@ background:var(--surf);color:var(--text);border:1px solid var(--line)}
    which pages are actually near the screen. */
 .rpage{width:100%;display:block;margin:0 0 4px;min-height:30vh;background:var(--surf)}
 .rpage.loaded{min-height:0;background:none}
+/* A page with a scanlation banner clipped off its top or bottom. */
+.rclip{overflow:hidden;width:100%;margin:0 0 4px}
+.rclip .rpage{margin:0;min-height:0}
 .trackbtn{width:100%;margin-top:10px;background:var(--mint);color:#0d2b26;border:none;
 border-radius:11px;padding:13px;font-weight:700;font-size:15px}
 .trackbtn.on{background:var(--surf2);color:var(--mint);border:1px solid var(--mint)}
@@ -3287,9 +3290,40 @@ function readerView(url, exclude){
     });
     prefetchNextChapter();
     watchFirstPage(token, exclude);
+    trimBanners(res.d.chapter_url||url, token);
     var shown=readerState.chapters&&readerState.chapters[readerState.index];
     mountNarration(shown?shown.url:url, token);
   });
+}
+
+/* Scanlation banners stitched onto the top of a chapter's first page or
+   the bottom of its last (server/banners.py finds them). Only those rows
+   are clipped off: the story sharing the image stays where it is. */
+var readerTrim={top:null, bottom:null};
+function trimBanners(chapterUrl, token){
+  readerTrim={top:null, bottom:null};
+  fetch(READER_BASE+"/api/trim?chapter_url="+encodeURIComponent(chapterUrl))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(t){
+      if(!t || token!==readerLoadToken) return;
+      readerTrim=t;
+      var pages=document.querySelectorAll("#rpages .rpage");
+      if(t.top) clipPage(pages[0], t.top, false);
+      if(t.bottom && pages.length>1) clipPage(pages[pages.length-1], t.bottom, true);
+    })
+    .catch(function(){});
+}
+function clipPage(img, cut, fromBottom){
+  if(!img || !cut || !(cut.px>0) || cut.px>=cut.height) return;
+  var before=img.getBoundingClientRect();
+  var wrap=document.createElement("div");
+  wrap.className="rclip";
+  wrap.style.aspectRatio=cut.width+" / "+(cut.height-cut.px);
+  img.parentNode.insertBefore(wrap, img);
+  wrap.appendChild(img);
+  if(!fromBottom) img.style.marginTop=(-100*cut.px/cut.width)+"%";
+  // Already scrolled past it: keep what's on screen from jumping.
+  if(before.bottom<0) window.scrollBy(0, wrap.getBoundingClientRect().height-before.height);
 }
 
 /* ================= storyteller (chapter narration) =================
@@ -3636,6 +3670,11 @@ function feedOcrWorkers(st){
    page's lines are always spoken in order. */
 function phonePageLines(st, n, lines, frontier, last){
   var page=st.pages[n]||(st.pages[n]={lines:[], held:[], done:false, chain:Promise.resolve()});
+  // Nothing from a clipped-off banner is read out.
+  var top=n===0&&readerTrim.top, bottom=n===st.total-1&&readerTrim.bottom;
+  lines=lines.filter(function(l){
+    return !(top && l[0][2][1]<=top.px) && !(bottom && l[0][0][1]>=bottom.height-bottom.px);
+  });
   var held=page.held.concat(lines), limit=last ? Infinity : frontier-PHONE_HOLD_PX;
   var ready=held.filter(function(l){ return l[0][2][1]<limit; });
   var wait=held.filter(function(l){ return l[0][2][1]>=limit; });

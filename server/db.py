@@ -119,6 +119,10 @@ CREATE TABLE IF NOT EXISTS title_health (
     reports INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_title_health_status ON title_health (status, checked_at);
+CREATE TABLE IF NOT EXISTS promo_banners (
+    hash TEXT PRIMARY KEY,
+    created_at REAL NOT NULL
+);
 """
 
 
