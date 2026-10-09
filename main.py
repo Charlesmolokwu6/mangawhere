@@ -646,7 +646,9 @@ async def api_trim(chapter_url: str = Query(..., description="Chapter to look fo
     except Exception as e:
         print(f"[banners] trim failed for {chapter_url}: {e!r}")
         result = {"top": None, "bottom": None}
-    return _cacheable(JSONResponse(content=result), 3600)
+    # Nothing found may change once the banner is learned from another chapter.
+    found = bool(result.get("top") or result.get("bottom"))
+    return _cacheable(JSONResponse(content=result), 3600 if found else banners.RECHECK_AFTER)
 
 
 @app.get("/api/narrate/page")
