@@ -3691,10 +3691,11 @@ function phonePageLines(st, n, lines, frontier, last){
   // Nothing from a clipped-off banner is read out.
   var t=readerTrim.top, b=readerTrim.bottom, topSkip=t?(t.skip||0):-1, bottomSkip=b?(b.skip||0):-1;
   if(n<topSkip || st.total-1-n<bottomSkip) lines=[];
-  var top=t&&n===topSkip&&t, bottom=b&&n===st.total-1-bottomSkip&&b;
+  var cutTop=t&&n===topSkip&&t, cutBottom=b&&n===st.total-1-bottomSkip&&b;
   lines=lines.filter(function(l){
-    return !(top && l[0][2][1]<=top.px) && !(bottom && l[0][0][1]>=bottom.height-bottom.px);
+    return !(cutTop && l[0][2][1]<=cutTop.px) && !(cutBottom && l[0][0][1]>=cutBottom.height-cutBottom.px);
   });
+  var rtl=readsRightToLeft(n);
   var held=page.held.concat(lines), limit=last ? Infinity : frontier-PHONE_HOLD_PX;
   var ready=held.filter(function(l){ return l[0][2][1]<limit; });
   var wait=held.filter(function(l){ return l[0][2][1]>=limit; });
@@ -3709,7 +3710,7 @@ function phonePageLines(st, n, lines, frontier, last){
     });
   }
   page.held=wait;
-  if(ready.length) page.chain=page.chain.then(function(){ return tidyPhoneLines(ready); }).then(function(spoken){
+  if(ready.length) page.chain=page.chain.then(function(){ return tidyPhoneLines(ready, rtl); }).then(function(spoken){
     page.lines=page.lines.concat(spoken);
     if(st.cur===n) speakNextPhoneLine(st);
   });
@@ -3719,9 +3720,19 @@ function phonePageLines(st, n, lines, frontier, last){
   });
 }
 
-function tidyPhoneLines(lines){
+/* Manga (from Japan) is read right to left: along each row of bubbles,
+   the right one first. Not a long vertical strip, though: Japanese
+   webtoons scroll like Korean ones and read left to right. */
+function readsRightToLeft(n){
+  var m=readerState.manga||{};
+  if(m.country!=="JP") return false;
+  var img=document.querySelectorAll("#rpages .rpage")[n];
+  return !(img && img.naturalWidth && img.naturalHeight>=1.7*img.naturalWidth);
+}
+
+function tidyPhoneLines(lines, rtl){
   return fetch(READER_BASE+"/api/narrate/lines",{method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({lines:lines})})
+      body:JSON.stringify(rtl ? {lines:lines, order:"rtl"} : {lines:lines})})
     .then(function(r){ return r.ok ? r.json() : Promise.reject(); })
     .then(function(d){ return d.lines||[]; })
     // Server unreachable: the raw text is better than skipping the lines.

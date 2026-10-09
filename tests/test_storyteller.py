@@ -37,6 +37,19 @@ class OcrGroupingTests(unittest.TestCase):
             ],
         )
 
+    def test_manga_rows_read_right_to_left_without_a_staircase_merging(self):
+        def b(text, x0, y0, x1, y1):
+            return {"text": text, "x0": x0, "y0": y0, "x1": x1, "y1": y1}
+
+        bubbles = [
+            b("top left", 50, 100, 250, 180), b("top right", 500, 80, 700, 200),
+            # A staircase down the page: each one starts just inside the one
+            # before, but they're separate rows read top to bottom.
+            b("step 1", 500, 300, 700, 380), b("step 2", 300, 360, 480, 440), b("step 3", 100, 420, 280, 500),
+        ]
+        self.assertEqual([x["text"] for x in storyteller.right_to_left(bubbles)],
+                         ["top right", "top left", "step 1", "step 2", "step 3"])
+
     def test_low_confidence_and_single_character_lines_are_dropped(self):
         results = [_line("HELLO THERE.", 0, 0, 100, 20), _line("x", 0, 30, 10, 50), _line("GARBLE", 0, 60, 90, 80, 0.3)]
         self.assertEqual(storyteller.group_into_bubbles(results), ["HELLO THERE."])
