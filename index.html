@@ -3402,6 +3402,11 @@ function pollNarration(base, job, el, token){
    page rather than after the whole chapter. */
 var PHONE_VOICE_KEY="mw-phone-voice", PHONE_RATE_KEY="mw-phone-rate";
 var PHONE_READ_AHEAD=2;   // pages read ahead of the one being spoken
+/* Optional: the address of cloudflare/page-cache-worker.js once deployed
+   (e.g. "https://mangawhere-pages.NAME.workers.dev"). Cloudflare then
+   keeps each page it hands out, so Render sends a page once rather than
+   once per listener. Empty: pages come straight from READER_BASE. */
+var NARRATION_PAGE_BASE="";
 var phoneNarr=null;
 
 function phoneNarrationSupported(){
@@ -3441,7 +3446,7 @@ function mountPhoneNarration(chapterUrl, token){
   var panel=box.querySelector(".narr-panel"), fab=box.querySelector(".narr-fab");
   panel.innerHTML='<h4>Storyteller mode <button aria-label="Close">×</button></h4>'+
     '<p class="sub">Reads the chapter’s speech bubbles aloud, right on this phone. '+
-    'The first time, it downloads its text reader (about 25MB).</p>'+
+    'The first time, it downloads its text reader (about 17MB, kept for next time).</p>'+
     '<div class="narr-row"><select class="pv" aria-label="Voice">'+phoneVoiceOptions()+'</select>'+
     '<select class="pr" aria-label="Speed" style="flex:0 0 auto;width:auto">'+phoneRateOptions()+'</select></div>'+
     '<button class="go">Start reading</button>'+
@@ -3517,7 +3522,7 @@ function feedOcrWorkers(st){
     if(st.stopped || w.page>=0 || st.next>=st.total || st.next-st.cur>PHONE_READ_AHEAD) return;
     var page=st.next++;
     w.page=page;
-    w.postMessage({type:"ocr", id:page, url:READER_BASE+"/api/narrate/page?chapter_url="+
+    w.postMessage({type:"ocr", id:page, url:(NARRATION_PAGE_BASE||READER_BASE)+"/api/narrate/page?chapter_url="+
       encodeURIComponent(st.chapterUrl)+"&n="+page});
   });
 }

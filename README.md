@@ -183,7 +183,7 @@ on the phone instead:
 
 - `ocr-worker.js` (a Web Worker) runs the same PP-OCRv4 models in the
   browser with onnxruntime-web, both loaded from jsDelivr and kept in the
-  phone's Cache API after the first ~25MB download. Webtoon strips are
+  phone's Cache API after the first ~17MB download (the runtime too). Webtoon strips are
   read in overlapping 1600px slices. Measured in Chromium: the first line
   is spoken ~15-30s after tapping Start, and a chapter is read faster than
   it's spoken.
