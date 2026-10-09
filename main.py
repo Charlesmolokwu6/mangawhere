@@ -586,6 +586,9 @@ async def api_config():
         "vapid_public_key": push.public_key_b64(),
         "password_reset": password_reset.available(),
         "narration": await storyteller.availability(),
+        # Storyteller mode on the listener's phone (/api/narrate/page and
+        # /api/narrate/lines), wherever full narration isn't set up.
+        "phone_narration": True,
     }
 
 
@@ -610,6 +613,78 @@ async def api_narrate(payload: dict):
         raise HTTPException(status_code=404, detail="Couldn't find any pages in that chapter.")
 
     return await storyteller.start(chapter_url, images, str(payload.get("voice") or ""))
+
+
+# Storyteller mode on the listener's own phone (ocr-worker.js): the phone
+# reads each page's text and speaks it; the server only hands it the page
+# images and tidies the text. Both are light enough for the free plan,
+# where reading pages here isn't.
+PHONE_NARRATION_MAX_LINES = 800
+PHONE_NARRATION_MAX_TEXT = 300
+
+
+def _image_type(data: bytes) -> str:
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"GIF8":
+        return "image/gif"
+    return "application/octet-stream"
+
+
+@app.get("/api/narrate/page")
+async def api_narrate_page(
+    chapter_url: str = Query(..., description="Chapter whose page to fetch"),
+    n: int = Query(..., ge=0, description="Page number, from 0"),
+):
+    """Page n of a chapter, for the phone to read. Image sites don't let a
+    browser read their pixels, so the page comes through here; only pages
+    of chapters the scrapers support, never an arbitrary URL."""
+    _require_absolute_url(chapter_url)
+    try:
+        chapter = await scrape_cached(chapter_url)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Couldn't reach that chapter.")
+    images = [img for img in (chapter or {}).get("images", []) if img]
+    if n >= len(images):
+        raise HTTPException(status_code=404, detail="No such page.")
+    data = await storyteller.fetch_image(_get_proxy_client(), images[n], chapter_url)
+    if not data:
+        raise HTTPException(status_code=502, detail="Couldn't load that page.")
+    return Response(content=data, media_type=_image_type(data),
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.post("/api/narrate/lines")
+async def api_narrate_lines(request: Request):
+    """One page's raw OCR lines ([box, text, score], from the phone) as the
+    lines to speak: grouped into speech bubbles, run-together words split,
+    sound effects and scan credits dropped. Text only: milliseconds."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Expected JSON.")
+    raw = payload.get("lines") if isinstance(payload, dict) else None
+    if not isinstance(raw, list) or len(raw) > PHONE_NARRATION_MAX_LINES:
+        raise HTTPException(status_code=400, detail="Expected a list of lines.")
+    lines = []
+    for item in raw:
+        try:
+            box, text, score = item
+            box = [[float(x), float(y)] for x, y in box][:4]
+            if len(box) != 4 or not isinstance(text, str) or len(text) > PHONE_NARRATION_MAX_TEXT:
+                raise ValueError
+            lines.append([box, text, float(score)])
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Each line is [box, text, score].")
+    page = storyteller.prepare_pages([storyteller.group_into_bubbles(lines)])[0]
+    return {
+        "lines": [{"text": t, "delivery": storyteller.delivery_by_punctuation(t)} for t in page["lines"]],
+        "effects": page["effects"],
+    }
 
 
 @app.get("/api/narrate/{job}")
@@ -739,6 +814,11 @@ async def serve_index_file():
 @app.get("/sw.js")
 async def serve_service_worker():
     return FileResponse(BASE_DIR / "sw.js", media_type="application/javascript")
+
+
+@app.get("/ocr-worker.js")
+async def serve_ocr_worker():
+    return FileResponse(BASE_DIR / "ocr-worker.js", media_type="application/javascript")
 
 
 if __name__ == "__main__":

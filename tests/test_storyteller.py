@@ -153,6 +153,29 @@ class OcrRepairTests(unittest.TestCase):
         prepared = storyteller.prepare_pages([["Art by Sleepy-C I Adapted by UMI", "Episode 156 Chapter 27", "SANGHA..."]])
         self.assertEqual(prepared[0]["lines"], ["Sangha..."])
 
+    def test_publisher_end_pages_and_status_screens_are_not_read_out(self):
+        # Seen on Solo Leveling's last page and a hunter's status window.
+        prepared = storyteller.prepare_pages([[
+            "Comicby:DISCIPLES(REDICESTUDIO) Original Novel by : Chugong Storyby:h-goon",
+            "Headof LanguageQuality LetitiaWells HeadofGraphicsQuality SuyeonLee",
+            "Thisworkisprotectedbycopyrightlawsandwe prohibitunauthorizeduse",
+            "Injury C Injury A Injury A Injury B Injury C Injury B Injury A Injury C",
+            "I SAID NO, NO, NO, NO!",
+        ]])
+        self.assertEqual(prepared[0]["lines"], ["I said no, no, no, no!"])
+
+    def test_missing_spaces_after_punctuation_are_restored(self):
+        self.assertEqual(
+            storyteller.normalise_line("THE HUNTERS ASSOCIATION.HOW MAY I ASSIST YOU?"),
+            "The hunters association. How may I assist you?",
+        )
+        self.assertEqual(storyteller.normalise_line("HERE,NOW YOU CARRY MY BAG!"), "Here, now you carry my bag!")
+
+    def test_words_hyphenated_across_lines_are_joined(self):
+        self.assertEqual(storyteller.normalise_line("EVERY- ONE, GET BACK!"), "Everyone, get back!")
+        self.assertEqual(storyteller.normalise_line("WE MUST VET THEIR CHAR- ACTER."), "We must vet their character.")
+        self.assertEqual(storyteller.normalise_line("A WELL-KNOWN NAME"), "A well-known name")
+
 
 class JobTests(unittest.TestCase):
     def setUp(self):

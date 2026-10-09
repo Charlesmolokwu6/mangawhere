@@ -423,3 +423,63 @@ class ImageCheckTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(await main.image_loads("https://cdn.example.com/1.png"))
             # A look-alike host doesn't get the MangaDex pass.
             self.assertFalse(await main.image_loads("https://evilmangadex.network/1.png"))
+
+
+class PhoneNarrationTests(MainTestCase):
+    WEBP = b"RIFF\x00\x00\x00\x00WEBPVP8 data"
+
+    def test_page_comes_from_the_scraped_chapter_only(self):
+        import main
+
+        chapter = {"images": ["https://cdn.example.com/1.webp", "https://cdn.example.com/2.webp"]}
+        with patch.object(main, "scrape_cached", AsyncMock(return_value=chapter)), \
+             patch("server.storyteller.fetch_image", AsyncMock(return_value=self.WEBP)) as fetch:
+            r = self.client.get("/api/narrate/page", params={"chapter_url": "https://comizy.io/x/chapter-1", "n": 1})
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.headers["content-type"], "image/webp")
+            self.assertIn("max-age", r.headers["cache-control"])
+            self.assertEqual(fetch.call_args.args[1], "https://cdn.example.com/2.webp")
+            self.assertEqual(self.client.get("/api/narrate/page", params={
+                "chapter_url": "https://comizy.io/x/chapter-1", "n": 2}).status_code, 404)
+            self.assertEqual(self.client.get("/api/narrate/page", params={
+                "chapter_url": "https://comizy.io/x/chapter-1", "n": -1}).status_code, 422)
+
+    def test_page_errors(self):
+        import main
+
+        with patch.object(main, "scrape_cached", AsyncMock(return_value={"images": []})):
+            self.assertEqual(self.client.get("/api/narrate/page", params={
+                "chapter_url": "https://unknown.example/c/1", "n": 0}).status_code, 404)
+        with patch.object(main, "scrape_cached", AsyncMock(return_value={"images": ["https://a/1.png"]})), \
+             patch("server.storyteller.fetch_image", AsyncMock(return_value=None)):
+            self.assertEqual(self.client.get("/api/narrate/page", params={
+                "chapter_url": "https://comizy.io/x/chapter-1", "n": 0}).status_code, 502)
+
+    def test_lines_become_speakable_bubbles(self):
+        def line(y, text, x=100):
+            return [[[x, y], [x + 300, y], [x + 300, y + 30], [x, y + 30]], text, 0.95]
+
+        r = self.client.post("/api/narrate/lines", json={"lines": [
+            line(100, "MY GOD, THISGUY CAN'T STOP"),
+            line(135, "GETTING HIMSELF HURT."),
+            line(600, "WHAT DO YOU WANT?"),
+            line(900, "KRR", x=20),
+        ]})
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["lines"], [
+            {"text": "My god, this guy can't stop getting himself hurt.", "delivery": "says"},
+            {"text": "What do you want?", "delivery": "asks"},
+        ])
+        self.assertTrue(body["effects"])
+
+    def test_bad_lines_are_rejected(self):
+        for body in ({"lines": "x"}, {"lines": [["box", "t", 1]]}, {"lines": [[[[0, 0]] * 4, "x" * 301, 1]]},
+                     {"lines": [[[[0, 0]] * 4, "ok", 1]] * 801}, ["not", "a", "dict"]):
+            self.assertEqual(self.client.post("/api/narrate/lines", json=body).status_code, 400, body)
+
+    def test_worker_and_config(self):
+        r = self.client.get("/ocr-worker.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("javascript", r.headers["content-type"])
+        self.assertTrue(self.client.get("/api/config").json()["phone_narration"])
