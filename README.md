@@ -184,9 +184,10 @@ on the phone instead:
 - `ocr-worker.js` (a Web Worker) runs the same PP-OCRv4 models in the
   browser with onnxruntime-web, both loaded from jsDelivr and kept in the
   phone's Cache API after the first ~17MB download (the runtime too). Webtoon strips are
-  read in overlapping 1600px slices. Measured in Chromium: the first line
-  is spoken ~15-30s after tapping Start, and a chapter is read faster than
-  it's spoken.
+  read in overlapping 1600px slices. Lines are sent a slice at a time, so the voice
+  starts on a strip's first bubbles rather than after the whole strip:
+  measured in Chromium, the first line is spoken ~6s after tapping Start
+  (~20s before), and a chapter is read faster than it's spoken.
 - `GET /api/narrate/page?chapter_url=&n=` hands the phone page *n* of a
   chapter the scrapers support (image sites don't let a browser read their
   pixels). `POST /api/narrate/lines` turns a page's raw OCR lines into

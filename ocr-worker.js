@@ -15,9 +15,14 @@
 
    Messages in:  {type:"init"}, {type:"ocr", id, url}
    Messages out: {type:"progress", label}, {type:"ready"},
-                 {type:"result", id, lines:[[box, text, score], ...], ms},
+                 {type:"lines", id, lines:[[box, text, score], ...], frontier, last}
+                   after each slice: the lines it found, and how far down
+                   the page has been read (everything above is final),
+                 {type:"result", id, ms} once the page is done,
                  {type:"error", id?, message}
-   Each box is four [x, y] corners in the page image's own pixels. */
+   Each box is four [x, y] corners in the page image's own pixels. Lines
+   come slice by slice so the voice can start on the first bubbles of a
+   tall strip instead of waiting for all of it (~20s). */
 
 var ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
 var MODEL_BASE = "https://cdn.jsdelivr.net/npm/@gutenye/ocr-models@1.4.2/assets/";
@@ -234,7 +239,7 @@ function recBatch(bmp, batch, out) {
 
 // ---- a whole page ----------------------------------------------------------
 
-function ocrPage(blob) {
+function ocrPage(blob, onSlice) {
   return createImageBitmap(blob).then(function (bmp) {
     var W = bmp.width, H = bmp.height, scale = Math.min(DET_SCALE, MAX_DET_WIDTH / W);
     var lines = [], top = 0;
@@ -246,6 +251,7 @@ function ocrPage(blob) {
       slice.ctx.drawImage(bmp, 0, top, W, sh, 0, 0, slice.c.width, slice.c.height);
       var t0 = Date.now(), t1;
       var lo = top + (top > 0 ? OVERLAP / 2 : 0), hi = bottom < H ? bottom - OVERLAP / 2 : H + 1;
+      var last = bottom >= H;
       return detect(slice).then(function (boxes) {
         t1 = Date.now(); timing.det += t1 - t0;
         // Into the page's own pixels; only the lines this slice owns.
@@ -255,11 +261,13 @@ function ocrPage(blob) {
         return recognize(bmp, boxes);
       }).then(function (found) {
         timing.rec += Date.now() - t1; timing.slices++;
-        found.forEach(function (f) {
+        var fresh = found.map(function (f) {
           var b = f.box;
-          lines.push([[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]], f.text, f.score]);
+          return [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]], f.text, f.score];
         });
-        if (bottom >= H) { if (bmp.close) bmp.close(); return lines; }
+        lines = lines.concat(fresh);
+        onSlice(fresh, last ? H : hi, last);
+        if (last) { if (bmp.close) bmp.close(); return lines; }
         top = bottom - OVERLAP;
         return next();
       });
@@ -278,8 +286,12 @@ onmessage = function (e) {
     init().then(function () { return fetch(m.url); }).then(function (res) {
       if (!res.ok) throw new Error("Couldn't load page (" + res.status + ").");
       return res.blob();
-    }).then(ocrPage).then(function (lines) {
-      postMessage({type: "result", id: m.id, lines: lines, ms: Date.now() - started, timing: timing});
+    }).then(function (blob) {
+      return ocrPage(blob, function (lines, frontier, last) {
+        postMessage({type: "lines", id: m.id, lines: lines, frontier: frontier, last: last});
+      });
+    }).then(function () {
+      postMessage({type: "result", id: m.id, ms: Date.now() - started, timing: timing});
     }, function (err) {
       postMessage({type: "error", id: m.id, message: String(err && err.message || err)});
     });
