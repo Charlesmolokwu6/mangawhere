@@ -3402,6 +3402,10 @@ function pollNarration(base, job, el, token){
    page rather than after the whole chapter. */
 var PHONE_VOICE_KEY="mw-phone-voice", PHONE_RATE_KEY="mw-phone-rate";
 var PHONE_READ_AHEAD=2;   // pages read ahead of the one being spoken
+/* Lines arrive a slice of the page at a time; ones this close (in page
+   pixels) to how far down the page has been read wait for the next slice,
+   since the rest of their speech bubble may be just below. */
+var PHONE_HOLD_PX=300, PHONE_BUBBLE_GAP=80;   // lines in one bubble sit closer than this
 /* Optional: the address of cloudflare/page-cache-worker.js once deployed
    (e.g. "https://mangawhere-pages.NAME.workers.dev"). Cloudflare then
    keeps each page it hands out, so Render sends a page once rather than
@@ -3499,17 +3503,16 @@ function makeOcrWorker(st){
     var m=e.data||{};
     if(st.stopped) return;
     if(m.type==="progress"){ if(!st.read) phoneStatus(st, m.label); return; }
+    if(m.type==="lines"){ st.read++; phonePageLines(st, m.id, m.lines||[], m.frontier, m.last); return; }
     if(m.type!=="result" && m.type!=="error") return;
     var page=w.page; w.page=-1;
-    if(m.type==="result"){ st.read++; tidyPhonePage(st, page, m.lines||[]); }
-    else {
+    if(m.type==="error"){
       st.errors++;
-      st.pages[page]={lines:[]};
       // Nothing read and pages keep failing: the reader itself didn't load.
       if(!st.read && st.errors>=2){
         endPhoneNarration(st, "Couldn’t start the text reader: "+(m.message||"unknown error")); return;
       }
-      if(st.cur===page) speakNextPhoneLine(st);
+      phonePageLines(st, page, [], 0, true);   // skip what's left of it
     }
     feedOcrWorkers(st);
   };
@@ -3527,26 +3530,51 @@ function feedOcrWorkers(st){
   });
 }
 
-function tidyPhonePage(st, page, lines){
-  function done(spoken){
-    if(st.stopped) return;
-    st.pages[page]={lines:spoken};
-    if(st.cur===page) speakNextPhoneLine(st);
+/* A slice's worth of a page's lines. Those safely above how far the page
+   has been read go to be tidied and spoken now; tidying is chained so a
+   page's lines are always spoken in order. */
+function phonePageLines(st, n, lines, frontier, last){
+  var page=st.pages[n]||(st.pages[n]={lines:[], held:[], done:false, chain:Promise.resolve()});
+  var held=page.held.concat(lines), limit=last ? Infinity : frontier-PHONE_HOLD_PX;
+  var ready=held.filter(function(l){ return l[0][2][1]<limit; });
+  var wait=held.filter(function(l){ return l[0][2][1]>=limit; });
+  // Never split a bubble: a line ending within PHONE_BUBBLE_GAP of one
+  // that's waiting may be part of it, so it waits too.
+  for(var moved=true; moved && wait.length;){
+    var top=Math.min.apply(null, wait.map(function(l){ return l[0][0][1]; }));
+    moved=false;
+    ready=ready.filter(function(l){
+      if(l[0][2][1] > top-PHONE_BUBBLE_GAP){ wait.push(l); moved=true; return false; }
+      return true;
+    });
   }
-  if(!lines.length){ done([]); return; }
-  fetch(READER_BASE+"/api/narrate/lines",{method:"POST", headers:{"Content-Type":"application/json"},
+  page.held=wait;
+  if(ready.length) page.chain=page.chain.then(function(){ return tidyPhoneLines(ready); }).then(function(spoken){
+    page.lines=page.lines.concat(spoken);
+    if(st.cur===n) speakNextPhoneLine(st);
+  });
+  if(last) page.chain=page.chain.then(function(){
+    page.done=true;
+    if(st.cur===n) speakNextPhoneLine(st);
+  });
+}
+
+function tidyPhoneLines(lines){
+  return fetch(READER_BASE+"/api/narrate/lines",{method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({lines:lines})})
     .then(function(r){ return r.ok ? r.json() : Promise.reject(); })
-    .then(function(d){ done(d.lines||[]); })
-    // Server unreachable: the raw text is better than skipping the page.
-    .catch(function(){ done(lines.map(function(l){ return {text:l[1], delivery:"says"}; })); });
+    .then(function(d){ return d.lines||[]; })
+    // Server unreachable: the raw text is better than skipping the lines.
+    .catch(function(){ return lines.map(function(l){ return {text:l[1], delivery:"says"}; }); });
 }
 
 function speakNextPhoneLine(st){
   if(st.stopped || st.paused || st.talking) return;
   if(st.cur>=st.total){ endPhoneNarration(st, "Finished this chapter."); return; }
   var page=st.pages[st.cur];
-  if(!page){ phoneStatus(st, "Reading page "+(st.cur+1)+" of "+st.total+"…"); return; }
+  if(!page || (st.line>=page.lines.length && !page.done)){
+    phoneStatus(st, "Reading page "+(st.cur+1)+" of "+st.total+"…"); return;
+  }
   if(st.line>=page.lines.length){
     st.cur++; st.line=0;
     feedOcrWorkers(st);
