@@ -153,3 +153,25 @@ class TrimTests(unittest.IsolatedAsyncioTestCase):
         conn.close()
         r = await self.trim("https://comizy.io/other/chapter-3")
         self.assertAlmostEqual(r["top"]["px"], 480, delta=10)
+
+    async def test_a_chapter_with_nothing_found_is_looked_at_again_later(self):
+        url = "https://comizy.io/other/chapter-3"
+        self.assertIsNone((await self.trim(url))["top"])     # nothing known yet, no neighbours
+        await self.trim("https://comizy.io/s/chapter-49")    # now the banner is learned
+        self.assertIsNone((await self.trim(url))["top"])     # a recent answer still stands
+        when, result = banners._results[url]
+        banners._results[url] = (when - banners.RECHECK_AFTER - 1, result)
+        self.assertAlmostEqual((await self.trim(url))["top"]["px"], 480, delta=10)
+
+    async def test_banners_kept_without_a_shape_gain_one_when_matched(self):
+        mark = banners.fingerprint(page(top=banner()), 480)
+        conn = db.get_connection()
+        conn.execute("INSERT INTO promo_banners (hash, created_at) VALUES (?, 0)", (f"{mark:032x}",))
+        conn.commit()
+        conn.close()
+        await self.trim("https://comizy.io/other/chapter-3")
+        joined = banner(66, 800, 1250)
+        joined.paste(banner(1), (0, 0))
+        self.pages["https://comizy.io/s/chapter-45"] = [joined, page(story_seed=450)]
+        r = await self.trim("https://comizy.io/s/chapter-45")
+        self.assertAlmostEqual(r["top"]["px"], 480, delta=10)

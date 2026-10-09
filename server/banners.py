@@ -38,6 +38,7 @@ MAX_BLOCK_RATIO = 1.1    # a banner is wide: no taller than this times the width
 MATCH_BITS = 14          # fingerprints this close (of 128 bits) are the same banner
 NEIGHBOURS = 2           # chapters either side checked for a repeat
 CACHE_SIZE = 3000
+RECHECK_AFTER = 600      # seconds before a chapter with no banner found is looked at again
 CANDIDATES = 5000        # blocks remembered from chapters read, to spot a repeat later
 MAX_SHAPES = 200         # known banner shapes tried on an image with no gap after its banner
 
@@ -47,7 +48,7 @@ _lock = threading.Lock()
 _known: List[Tuple[int, Optional[float]]] = []   # (fingerprint, block height / width)
 _candidates: Deque[Tuple[int, str]] = deque(maxlen=CANDIDATES)   # (fingerprint, chapter url)
 _loaded = False
-_results: Dict[str, Dict[str, Any]] = {}
+_results: Dict[str, Tuple[float, Dict[str, Any]]] = {}   # chapter url -> (when, result)
 _busy = asyncio.Semaphore(2)   # decoding images is the heaviest thing the free server does
 _added = 0
 
@@ -253,6 +254,8 @@ async def _find(client, scrape: Scrape, chapter_url: str, last: bool) -> Optiona
 
     for end, mark in mine:
         if is_known(mark):
+            # Keeps its shape too, for banners kept before shapes were.
+            await asyncio.to_thread(_remember, mark, end / image.width)
             return result(end)
     end = _known_shape(image, last)
     if end is not None:
@@ -277,26 +280,41 @@ async def _find(client, scrape: Scrape, chapter_url: str, last: bool) -> Optiona
     return None
 
 
+def _cached(chapter_url: str) -> Optional[Dict[str, Any]]:
+    """A recent answer. One with no banner is looked at again after a
+    while: the banner may have been learned since."""
+    hit = _results.get(chapter_url)
+    if not hit:
+        return None
+    when, result = hit
+    if not (result["top"] or result["bottom"]) and time.time() - when > RECHECK_AFTER:
+        return None
+    return result
+
+
 async def trim_for(chapter_url: str, scrape: Scrape) -> Dict[str, Any]:
     """{"top": {"px", "width", "height"} or None, "bottom": ...}: rows of the
     first image's top and the last image's bottom that are a banner."""
-    if chapter_url in _results:
-        return _results[chapter_url]
+    cached = _cached(chapter_url)
+    if cached is not None:
+        return cached
     if not _loaded:
         try:
             await asyncio.to_thread(_load)
         except Exception as e:
             print(f"[banners] couldn't load known banners: {e!r}")
     async with _busy:
-        if chapter_url in _results:
-            return _results[chapter_url]
+        cached = _cached(chapter_url)
+        if cached is not None:
+            return cached
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             top = await _find(client, scrape, chapter_url, last=False)
             bottom = await _find(client, scrape, chapter_url, last=True)
     result = {"top": top, "bottom": bottom}
+    _results.pop(chapter_url, None)
     if len(_results) >= CACHE_SIZE:
         _results.pop(next(iter(_results)))
-    _results[chapter_url] = result
+    _results[chapter_url] = (time.time(), result)
     return result
 
 
