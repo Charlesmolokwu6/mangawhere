@@ -23,7 +23,9 @@ import io
 import re
 import threading
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections import deque
+from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 
@@ -36,14 +38,22 @@ MAX_BLOCK_RATIO = 1.1    # a banner is wide: no taller than this times the width
 MATCH_BITS = 14          # fingerprints this close (of 128 bits) are the same banner
 NEIGHBOURS = 2           # chapters either side checked for a repeat
 CACHE_SIZE = 3000
+CANDIDATES = 5000        # blocks remembered from chapters read, to spot a repeat later
+MAX_SHAPES = 200         # known banner shapes tried on an image with no gap after its banner
 
 Scrape = Callable[[str], Awaitable[Optional[Dict[str, Any]]]]
 
 _lock = threading.Lock()
-_known: List[int] = []
+_known: List[Tuple[int, Optional[float]]] = []   # (fingerprint, block height / width)
+_candidates: Deque[Tuple[int, str]] = deque(maxlen=CANDIDATES)   # (fingerprint, chapter url)
 _loaded = False
 _results: Dict[str, Dict[str, Any]] = {}
 _busy = asyncio.Semaphore(2)   # decoding images is the heaviest thing the free server does
+_added = 0
+
+
+def _close(a: int, b: int) -> bool:
+    return bin(a ^ b).count("1") <= MATCH_BITS
 
 
 def _load() -> None:
@@ -52,23 +62,53 @@ def _load() -> None:
         return
     conn = db.get_connection()
     try:
-        rows = conn.execute("SELECT hash FROM promo_banners").fetchall()
+        known = conn.execute("SELECT hash FROM promo_banners").fetchall()
+        seen = conn.execute("SELECT hash, chapter_url FROM banner_candidates "
+                            "ORDER BY created_at DESC LIMIT ?", (CANDIDATES,)).fetchall()
     finally:
         conn.close()
     with _lock:
-        _known[:] = [int(r[0], 16) for r in rows]
+        _known[:] = []
+        for (text,) in ((r[0],) for r in known):
+            mark, _, shape = text.partition(":")
+            _known.append((int(mark, 16), float(shape) if shape else None))
+        _candidates.clear()
+        _candidates.extend((int(r[0], 16), r[1]) for r in reversed(seen))
         _loaded = True
 
 
-def _remember(fingerprint: int) -> None:
+def _remember(fingerprint: int, shape: float) -> None:
+    """Keep a banner, stored as "<hash>:<height/width>"."""
     with _lock:
-        if any(bin(fingerprint ^ k).count("1") <= MATCH_BITS for k in _known):
+        if any(_close(fingerprint, k) and s is not None for k, s in _known):
             return
-        _known.append(fingerprint)
+        _known.append((fingerprint, shape))
     conn = db.get_connection()
     try:
         conn.execute("INSERT OR IGNORE INTO promo_banners (hash, created_at) VALUES (?, ?)",
-                     (format(fingerprint, "032x"), time.time()))
+                     (f"{fingerprint:032x}:{shape:.4f}", time.time()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _note(marks: List[int], chapter_url: str) -> None:
+    """Remember a chapter's edge blocks, to recognise them if they repeat."""
+    global _added
+    with _lock:
+        _candidates.extend((m, chapter_url) for m in marks)
+        _added += len(marks)
+        prune = _added >= 200
+        if prune:
+            _added = 0
+    conn = db.get_connection()
+    try:
+        for m in marks:
+            conn.execute("INSERT OR REPLACE INTO banner_candidates (hash, chapter_url, created_at) "
+                         "VALUES (?, ?, ?)", (f"{m:032x}", chapter_url, time.time()))
+        if prune:
+            conn.execute("DELETE FROM banner_candidates WHERE hash NOT IN (SELECT hash FROM "
+                         "banner_candidates ORDER BY created_at DESC LIMIT ?)", (CANDIDATES,))
         conn.commit()
     finally:
         conn.close()
@@ -76,7 +116,21 @@ def _remember(fingerprint: int) -> None:
 
 def is_known(fingerprint: int) -> bool:
     with _lock:
-        return any(bin(fingerprint ^ k).count("1") <= MATCH_BITS for k in _known)
+        return any(_close(fingerprint, k) for k, _ in _known)
+
+
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def seen_elsewhere(fingerprint: int, chapter_url: str) -> bool:
+    """Whether another chapter on the same site, of any series, had this
+    block. Only the same site: the same chapter from another site shares
+    its story art, and must not count as a repeat."""
+    host = _host(chapter_url)
+    with _lock:
+        return any(_close(fingerprint, m) and url != chapter_url and _host(url) == host
+                   for m, url in _candidates)
 
 
 def edge_block(image, from_bottom: bool = False) -> Optional[int]:
@@ -162,25 +216,64 @@ async def _edge_image(client, scrape: Scrape, chapter_url: str, last: bool):
         return None
 
 
+def blocks(image, last: bool) -> List[Tuple[int, int]]:
+    """(rows from the edge, fingerprint) of each block at the image's edge
+    that might be a banner: the whole image when it's banner-shaped, and
+    the artwork up to the first gap."""
+    out = []
+    if MIN_BLOCK <= image.height <= MAX_BLOCK_RATIO * image.width:
+        out.append((image.height, fingerprint(image, image.height, from_bottom=last)))
+    end = edge_block(image, from_bottom=last)
+    if end is not None and end < image.height:
+        out.append((end, fingerprint(image, end, from_bottom=last)))
+    return out
+
+
+def _known_shape(image, last: bool) -> Optional[int]:
+    """Rows of a known banner at the edge, found by its shape: for a
+    banner the art runs straight on from, with no gap to find."""
+    with _lock:
+        shapes = sorted({round(s, 3) for _, s in _known if s})[:MAX_SHAPES]
+    for shape in shapes:
+        end = round(shape * image.width)
+        if MIN_BLOCK <= end <= image.height and is_known(fingerprint(image, end, from_bottom=last)):
+            return end
+    return None
+
+
 async def _find(client, scrape: Scrape, chapter_url: str, last: bool) -> Optional[Dict[str, int]]:
     image = await _edge_image(client, scrape, chapter_url, last)
     if image is None:
         return None
-    end = edge_block(image, from_bottom=last)
-    if end is None:
+    image.load()
+    mine = blocks(image, last)
+
+    def result(end):
+        return {"px": end, "width": image.width, "height": image.height}
+
+    for end, mark in mine:
+        if is_known(mark):
+            return result(end)
+    end = _known_shape(image, last)
+    if end is not None:
+        return result(end)
+    if not mine:
         return None
-    mark = fingerprint(image, end, from_bottom=last)
-    result = {"px": end, "width": image.width, "height": image.height}
-    if is_known(mark):
-        return result
+    for end, mark in mine:
+        if seen_elsewhere(mark, chapter_url):
+            await asyncio.to_thread(_remember, mark, end / image.width)
+            return result(end)
+    await asyncio.to_thread(_note, [m for _, m in mine], chapter_url)
     for other in neighbour_urls(chapter_url):
         theirs = await _edge_image(client, scrape, other, last)
         if theirs is None:
             continue
-        their_end = edge_block(theirs, from_bottom=last)
-        if their_end is not None and bin(fingerprint(theirs, their_end, from_bottom=last) ^ mark).count("1") <= MATCH_BITS:
-            await asyncio.to_thread(_remember, mark)
-            return result
+        theirs.load()
+        their_marks = [m for _, m in blocks(theirs, last)]
+        for end, mark in mine:
+            if any(_close(mark, m) for m in their_marks):
+                await asyncio.to_thread(_remember, mark, end / image.width)
+                return result(end)
     return None
 
 
@@ -212,5 +305,6 @@ def reset() -> None:
     global _loaded
     with _lock:
         _known.clear()
+        _candidates.clear()
         _loaded = False
     _results.clear()
