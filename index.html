@@ -295,6 +295,37 @@ padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);font-size:14px}
 .narr-panel audio{width:100%;margin-top:8px}
 .narr-panel .err{color:var(--bad);margin:6px 0 0}
 .narr-row{display:flex;gap:8px}
+/* Phone storyteller player: one round button, plus settings and stop. */
+.narr-btns{display:flex;align-items:center;gap:10px}
+.narr-play{width:58px;height:58px;border-radius:50%;border:none;background:var(--mint);color:#0d2b26;
+display:grid;place-items:center;position:relative;box-shadow:0 6px 18px rgba(0,0,0,.35);padding:0}
+.narr-play svg,.narr-mini svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.narr-play svg{width:27px;height:27px}
+.narr-play svg .fill{fill:currentColor;stroke:none}
+.narr-play[data-state="loading"]::after{content:"";position:absolute;inset:-5px;border-radius:50%;
+border:3px solid transparent;border-top-color:var(--mint);border-right-color:var(--mint);animation:narrspin .9s linear infinite}
+.narr-play[data-state="playing"]{animation:narrpulse 1.6s ease-out infinite}
+@keyframes narrspin{to{transform:rotate(360deg)}}
+@keyframes narrpulse{0%{box-shadow:0 0 0 0 rgba(63,224,200,.55),0 6px 18px rgba(0,0,0,.35)}
+100%{box-shadow:0 0 0 16px rgba(63,224,200,0),0 6px 18px rgba(0,0,0,.35)}}
+@media (prefers-reduced-motion: reduce){.narr-play[data-state]{animation:none}.narr-play::after{animation:none}}
+.narr-mini{width:42px;height:42px;border-radius:50%;background:var(--surf2);border:1px solid var(--line);
+color:var(--text);display:grid;place-items:center;padding:0;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+.narr-mini svg{width:19px;height:19px}
+.narr-cap{width:min(300px,calc(100vw - 32px));background:var(--surf2);border:1px solid var(--line);border-radius:12px;
+padding:8px 12px;font-size:13.5px;line-height:1.4;box-shadow:0 6px 18px rgba(0,0,0,.3)}
+.narr-cap small{display:block;color:var(--dim);font-size:11px;margin-bottom:2px}
+.narr-cap span{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.narr-sheet{width:min(300px,calc(100vw - 32px));background:var(--surf2);border:1px solid var(--line);border-radius:14px;
+padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.narr-sheet h4{margin:0 0 8px;font-size:15px;display:flex;justify-content:space-between;align-items:center}
+.narr-sheet h4 button{background:none;border:none;color:var(--dim);font-size:20px;line-height:1;padding:0 2px}
+.narr-sheet select{width:100%;border-radius:10px;padding:10px;font:inherit;font-size:14px;margin-bottom:8px;
+background:var(--surf);color:var(--text);border:1px solid var(--line)}
+.narr-sheet .sub{margin:2px 0 0;color:var(--dim);font-size:12px}
+.narr-topad{position:fixed;left:0;right:0;top:0;z-index:19;display:flex;justify-content:center;
+background:var(--bg);padding:4px 0;border-bottom:1px solid var(--line);transition:top .25s ease}
+.narr-topad .adslot{margin:0}
 .narr-row select{flex:1;min-width:0}
 .narr-ctl{display:flex;gap:8px;margin-top:8px}
 .narr-ctl button{flex:1;border-radius:10px;padding:9px;font:inherit;font-size:14px;font-weight:600;cursor:pointer;
@@ -543,6 +574,7 @@ var AMAZON_TAG = "";
      detailChapters - a title's page, just above its chapter list
      detail    - a title's page, below its chapter list
      readerTop - top of a chapter, above Back and the chapter picker
+     narration - pinned to the top of the screen while storyteller mode reads
      readerPages - between a chapter's pages, after every AD_EVERY_PAGES pages
      readerEnd - end of a chapter, just above Prev / Next
    AD_HOST is adhost/ad.html deployed as its own Render static site. Being a
@@ -562,6 +594,7 @@ var ADS = {
   detailChapters: "320x50",
   detail: "300x250",
   readerTop: "320x50",
+  narration: "320x50",   // pinned to the top of the screen while storyteller mode reads
   readerPages: ["320x50", "320x50"],   // two thin strips together between pages
   readerEnd: "320x50"
 };
@@ -3294,6 +3327,10 @@ function getNarrationConfig(){
 
 function stopNarration(){
   stopPhoneNarration();
+  if(phonePlayer){
+    (phonePlayer.workers||[]).forEach(function(w){ w.terminate(); });
+    phonePlayer=null;
+  }
   if(narration.timer){ clearTimeout(narration.timer); narration.timer=null; }
   if(narration.audio){ narration.audio.pause(); narration.audio=null; }
   var old=document.getElementById("narr");
@@ -3397,9 +3434,13 @@ function pollNarration(base, job, el, token){
    Where the server can't narrate (Render's free plan; see README), the
    listener's own phone does it: ocr-worker.js reads each page's speech
    bubbles, /api/narrate/lines tidies the text (milliseconds of work for
-   the server), and the phone's built-in voice reads it aloud. Pages are
-   read a little ahead of the voice, so it starts talking after the first
-   page rather than after the whole chapter. */
+   the server), and the phone's built-in voice reads it aloud while the
+   page scrolls along with it.
+
+   The player is one round button: headphones to start, pause while it
+   reads (with a pulse to show it's live), play while paused. Next to it,
+   voice settings and stop. The text reader starts loading as soon as a
+   chapter opens, so a tap starts reading at once. */
 var PHONE_VOICE_KEY="mw-phone-voice", PHONE_RATE_KEY="mw-phone-rate";
 var PHONE_READ_AHEAD=2;   // pages read ahead of the one being spoken
 /* Lines arrive a slice of the page at a time; ones this close (in page
@@ -3411,7 +3452,22 @@ var PHONE_HOLD_PX=300, PHONE_BUBBLE_GAP=80;   // lines in one bubble sit closer 
    keeps each page it hands out, so Render sends a page once rather than
    once per listener. Empty: pages come straight from READER_BASE. */
 var NARRATION_PAGE_BASE="https://mangawhere-pages.pineapplegodfather.workers.dev";
-var phoneNarr=null;
+// One of the files ocr-worker.js keeps after its first download: if it's
+// there, warming the reader up costs no data.
+var PHONE_OCR_PROBE="https://cdn.jsdelivr.net/npm/@gutenye/ocr-models@1.4.2/assets/ch_PP-OCRv4_det_infer.onnx";
+var PHONE_USER_SCROLL_MS=8000;   // after the reader scrolls themselves, don't pull the page back for this long
+var phoneNarr=null, phonePlayer=null;
+
+var PHONE_ICONS={
+  idle:'<svg viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>',
+  playing:'<svg viewBox="0 0 24 24"><rect class="fill" x="6" y="4.5" width="4" height="15" rx="1.2"/><rect class="fill" x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>',
+  paused:'<svg viewBox="0 0 24 24"><path class="fill" d="M8 4.8v14.4a1 1 0 0 0 1.5.86l11.5-7.2a1 1 0 0 0 0-1.72L9.5 3.94A1 1 0 0 0 8 4.8z"/></svg>',
+  settings:'<svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
+  stop:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>'
+};
+PHONE_ICONS.loading=PHONE_ICONS.idle;
+var PHONE_FAB_LABEL={idle:"Listen to this chapter", loading:"Getting ready — tap to pause",
+  playing:"Pause", paused:"Resume"};
 
 function phoneNarrationSupported(){
   return typeof Worker!=="undefined" && typeof OffscreenCanvas!=="undefined" &&
@@ -3419,92 +3475,154 @@ function phoneNarrationSupported(){
     "speechSynthesis" in window && typeof SpeechSynthesisUtterance!=="undefined";
 }
 
+// ---- voices: a male voice unless the listener picked another ----------------
+var PHONE_MALE_NAME=/\b(male|man|guy|david|mark|daniel|alex|fred|tom|oliver|arthur|aaron|rishi|james|george|ryan|eric|brian|matthew|christopher|roger|andrew|thomas|paul|jacob|kevin)\b/i;
+// Android's Google voices are named by code rather than gender.
+var PHONE_MALE_CODE=/en-(us|gb)-x-(iom|tpd|rjs|gbd)/i;
+function isMaleVoice(v){ return PHONE_MALE_NAME.test(v.name) || PHONE_MALE_CODE.test(v.voiceURI+" "+v.name); }
+
 function englishVoices(){
   var all=window.speechSynthesis.getVoices()||[];
   var en=all.filter(function(v){ return /^en([-_]|$)/i.test(v.lang); });
-  return en.length?en:all;
+  return (en.length?en:all).slice().sort(function(a,b){ return isMaleVoice(b)-isMaleVoice(a); });
+}
+function savedPhoneSetting(key, fallback){
+  try{ return localStorage.getItem(key)||fallback; }catch(e){ return fallback; }
+}
+// The voice to use: the one picked in settings, else a male one, else the
+// phone's default spoken a little deeper.
+function phoneVoice(){
+  var voices=englishVoices(), saved=savedPhoneSetting(PHONE_VOICE_KEY, "");
+  var picked=voices.filter(function(v){ return v.voiceURI===saved; })[0];
+  if(picked) return {voice:picked, pitch:1};
+  var male=voices.filter(isMaleVoice);
+  var local=male.filter(function(v){ return v.localService; });
+  if(male.length) return {voice:(local[0]||male[0]), pitch:1};
+  return {voice:voices.filter(function(v){ return v.default; })[0]||voices[0]||null, pitch:0.8};
 }
 function phoneVoiceOptions(){
-  var saved=null; try{ saved=localStorage.getItem(PHONE_VOICE_KEY); }catch(e){}
-  var voices=englishVoices();
+  var voices=englishVoices(), current=phoneVoice().voice;
   if(!voices.length) return '<option value="">Phone’s own voice</option>';
-  var chosen=voices.some(function(v){ return v.voiceURI===saved; }) ? saved
-    : (voices.filter(function(v){ return v.default; })[0]||voices[0]).voiceURI;
   return voices.map(function(v){
-    return '<option value="'+esc(v.voiceURI)+'"'+(v.voiceURI===chosen?' selected':'')+'>'+esc(v.name)+'</option>';
+    return '<option value="'+esc(v.voiceURI)+'"'+(current&&v.voiceURI===current.voiceURI?' selected':'')+'>'+
+      esc(v.name)+(isMaleVoice(v)?" (male)":"")+'</option>';
   }).join("");
 }
 function phoneRateOptions(){
-  var saved="1"; try{ saved=localStorage.getItem(PHONE_RATE_KEY)||"1"; }catch(e){}
-  return [["0.85","Slower"],["1","Normal"],["1.15","Faster"],["1.3","Fastest"]].map(function(o){
+  var saved=savedPhoneSetting(PHONE_RATE_KEY, "1");
+  return [["0.85","Slower"],["1","Normal speed"],["1.15","Faster"],["1.3","Fastest"]].map(function(o){
     return '<option value="'+o[0]+'"'+(o[0]===saved?' selected':'')+'>'+o[1]+'</option>';
   }).join("");
 }
 
+// ---- the player ---------------------------------------------------------------
 function mountPhoneNarration(chapterUrl, token){
   var box=document.createElement("div");
   box.className="narr"; box.id="narr";
-  box.innerHTML='<div class="narr-panel" hidden></div>'+
-    '<button class="narr-fab" aria-label="Listen to this chapter">🎧 Listen</button>';
+  box.innerHTML=
+    '<div class="narr-sheet" hidden>'+
+      '<h4>Voice <button class="narr-done" aria-label="Close">×</button></h4>'+
+      '<select class="pv" aria-label="Voice">'+phoneVoiceOptions()+'</select>'+
+      '<select class="pr" aria-label="Speed">'+phoneRateOptions()+'</select>'+
+      '<p class="sub">Your phone’s own voices. More can be added in its text-to-speech settings.</p>'+
+    '</div>'+
+    '<div class="narr-cap" hidden aria-live="polite"><small></small><span></span></div>'+
+    '<div class="narr-btns">'+
+      '<button class="narr-mini narr-set" aria-label="Voice settings">'+PHONE_ICONS.settings+'</button>'+
+      '<button class="narr-mini narr-x" aria-label="Stop reading" hidden>'+PHONE_ICONS.stop+'</button>'+
+      '<button class="narr-play"></button>'+
+    '</div>';
   document.body.appendChild(box);
-  var panel=box.querySelector(".narr-panel"), fab=box.querySelector(".narr-fab");
-  panel.innerHTML='<h4>Storyteller mode <button aria-label="Close">×</button></h4>'+
-    '<p class="sub">Reads the chapter’s speech bubbles aloud, right on this phone. '+
-    'The first time, it downloads its text reader (about 17MB, kept for next time).</p>'+
-    '<div class="narr-row"><select class="pv" aria-label="Voice">'+phoneVoiceOptions()+'</select>'+
-    '<select class="pr" aria-label="Speed" style="flex:0 0 auto;width:auto">'+phoneRateOptions()+'</select></div>'+
-    '<button class="go">Start reading</button>'+
-    '<div class="narr-status"></div>';
+  var player=phonePlayer={box:box, chapterUrl:chapterUrl, token:token, workers:null,
+    fab:box.querySelector(".narr-play"), cap:box.querySelector(".narr-cap"), sheet:box.querySelector(".narr-sheet")};
+  setPhoneFab(player, "idle");
   // Phones list their voices a moment after the page loads.
   window.speechSynthesis.onvoiceschanged=function(){
-    var sel=panel.querySelector(".pv");
-    if(sel && !sel.disabled) sel.innerHTML=phoneVoiceOptions();
+    var sel=player.sheet.querySelector(".pv"); if(sel) sel.innerHTML=phoneVoiceOptions();
   };
-  panel.querySelector("h4 button").onclick=function(){ panel.hidden=true; fab.hidden=false; };
-  fab.onclick=function(){ panel.hidden=false; fab.hidden=true; };
-  panel.querySelector(".go").onclick=function(){
-    var voice=panel.querySelector(".pv").value, rate=panel.querySelector(".pr").value;
-    try{ localStorage.setItem(PHONE_VOICE_KEY, voice); localStorage.setItem(PHONE_RATE_KEY, rate); }catch(e){}
-    this.hidden=true;
-    panel.querySelector(".pv").disabled=panel.querySelector(".pr").disabled=true;
-    startPhoneNarration(chapterUrl, voice, parseFloat(rate)||1, panel, token);
+  player.sheet.querySelector(".pv").onchange=function(){
+    try{ localStorage.setItem(PHONE_VOICE_KEY, this.value); }catch(e){}
   };
+  player.sheet.querySelector(".pr").onchange=function(){
+    try{ localStorage.setItem(PHONE_RATE_KEY, this.value); }catch(e){}
+  };
+  player.sheet.querySelector(".narr-done").onclick=function(){ player.sheet.hidden=true; };
+  box.querySelector(".narr-set").onclick=function(){ player.sheet.hidden=!player.sheet.hidden; };
+  box.querySelector(".narr-x").onclick=function(){ if(phoneNarr) endPhoneNarration(phoneNarr, ""); };
+  player.fab.onclick=function(){
+    var st=phoneNarr;
+    if(!st) startPhoneNarration(player);
+    else togglePhonePause(st);
+  };
+  warmPhoneReader(player);
 }
 
-function startPhoneNarration(chapterUrl, voiceURI, rate, panel, token){
+function setPhoneFab(player, state){
+  player.fab.setAttribute("data-state", state);
+  player.fab.setAttribute("aria-label", PHONE_FAB_LABEL[state]);
+  player.fab.innerHTML=PHONE_ICONS[state];
+  player.box.querySelector(".narr-x").hidden=(state==="idle");
+}
+
+/* Start the text reader loading as soon as the chapter opens, so a tap
+   starts reading at once. Free when it's already on the phone; the first
+   download (~17MB) waits for the tap on mobile data or data saver. */
+function warmPhoneReader(player){
+  var conn=navigator.connection;
+  var cached=window.caches
+    ? caches.open("mw-ocr-v1").then(function(c){ return c.match(PHONE_OCR_PROBE); }).then(Boolean, function(){ return false; })
+    : Promise.resolve(false);
+  cached.then(function(isCached){
+    if(phonePlayer!==player || player.workers || phoneNarr) return;
+    if(!isCached && conn && (conn.saveData || conn.type==="cellular")) return;
+    player.workers=newOcrWorkers();
+  });
+}
+
+function newOcrWorkers(){
+  var n=(navigator.hardwareConcurrency||2)>=6 ? 2 : 1, workers=[];   // two pages at once on faster phones
+  for(var i=0;i<n;i++){
+    var w=new Worker("ocr-worker.js");
+    w.page=-1;
+    w.postMessage({type:"init"});
+    workers.push(w);
+  }
+  return workers;
+}
+
+function startPhoneNarration(player){
   stopPhoneNarration();
+  player.sheet.hidden=true;
   var total=document.querySelectorAll("#rpages .rpage").length;
-  var el=panel.querySelector(".narr-status");
-  if(!total){ el.innerHTML='<p class="err">This chapter’s pages haven’t loaded yet.</p>'; return; }
-  var st=phoneNarr={token:token, chapterUrl:chapterUrl, total:total, panel:panel, el:el,
-    pages:[], next:0, cur:0, line:0, workers:[], talking:false, paused:false, stopped:false,
-    errors:0, read:0, rate:rate, watchdog:null,
-    voice:englishVoices().filter(function(v){ return v.voiceURI===voiceURI; })[0]||null};
-  el.innerHTML='<div class="narr-bar"><i></i></div><p class="sub ps" style="margin:0"></p>'+
-    '<p class="narr-now"></p><div class="narr-ctl"><button class="pp">Pause</button><button class="pstop">Stop</button></div>';
-  el.querySelector(".pp").onclick=function(){ togglePhonePause(st, this); };
-  el.querySelector(".pstop").onclick=function(){ endPhoneNarration(st, "Stopped."); };
+  if(!total){ showPhoneCaption(player, "", "This chapter’s pages haven’t loaded yet."); return; }
+  var st=phoneNarr={player:player, chapterUrl:player.chapterUrl, total:total,
+    pages:[], next:0, cur:0, line:0, workers:player.workers||newOcrWorkers(),
+    talking:false, paused:false, stopped:false, errors:0, read:0, watchdog:null, userUntil:0};
+  player.workers=null;
+  st.workers.forEach(function(w){ bindOcrWorker(st, w); });
+  // Leave the page alone for a while after the reader scrolls it themselves.
+  st.onUser=function(){ st.userUntil=Date.now()+PHONE_USER_SCROLL_MS; };
+  ["touchstart","wheel","keydown"].forEach(function(ev){ window.addEventListener(ev, st.onUser, {passive:true}); });
+  showPhoneTopAd(st);
+  setPhoneFab(player, "loading");
+  showPhoneCaption(player, "Storyteller mode", "Getting the first page ready…");
   // Some phones only allow speech that a tap started, so the voice starts
   // now, while the first page is still being read.
   st.talking=true;
-  speakPhoneLine(st, {text:"Storyteller mode. Getting the first page ready.", delivery:"says"}, function(){
+  speakPhoneLine(st, {text:"Storyteller mode.", delivery:"says"}, function(){
     st.talking=false; speakNextPhoneLine(st);
   });
-  phoneStatus(st, "Getting the text reader ready…");
-  var n=(navigator.hardwareConcurrency||2)>=6 ? 2 : 1;   // two pages at once on faster phones
-  for(var i=0;i<n;i++) st.workers.push(makeOcrWorker(st));
   feedOcrWorkers(st);
 }
 
-function makeOcrWorker(st){
-  var w=new Worker("ocr-worker.js");
-  w.page=-1;
+function bindOcrWorker(st, w){
   w.onmessage=function(e){
     var m=e.data||{};
     if(st.stopped) return;
-    if(m.type==="progress"){ if(!st.read) phoneStatus(st, m.label); return; }
+    if(m.type==="progress"){ if(!st.read) showPhoneCaption(st.player, "Storyteller mode", m.label); return; }
     if(m.type==="lines"){ st.read++; phonePageLines(st, m.id, m.lines||[], m.frontier, m.last); return; }
     if(m.type!=="result" && m.type!=="error") return;
+    if(m.type==="error" && w.page<0) return;   // the warm-up's own failure; the first page will retry
     var page=w.page; w.page=-1;
     if(m.type==="error"){
       st.errors++;
@@ -3517,7 +3635,6 @@ function makeOcrWorker(st){
     feedOcrWorkers(st);
   };
   w.onerror=function(){ if(!st.stopped && !st.read) endPhoneNarration(st, "This browser couldn’t start the text reader."); };
-  return w;
 }
 
 function feedOcrWorkers(st){
@@ -3565,7 +3682,7 @@ function tidyPhoneLines(lines){
     .then(function(r){ return r.ok ? r.json() : Promise.reject(); })
     .then(function(d){ return d.lines||[]; })
     // Server unreachable: the raw text is better than skipping the lines.
-    .catch(function(){ return lines.map(function(l){ return {text:l[1], delivery:"says"}; }); });
+    .catch(function(){ return lines.map(function(l){ return {text:l[1], delivery:"says", y:l[0][0][1]}; }); });
 }
 
 function speakNextPhoneLine(st){
@@ -3573,7 +3690,9 @@ function speakNextPhoneLine(st){
   if(st.cur>=st.total){ endPhoneNarration(st, "Finished this chapter."); return; }
   var page=st.pages[st.cur];
   if(!page || (st.line>=page.lines.length && !page.done)){
-    phoneStatus(st, "Reading page "+(st.cur+1)+" of "+st.total+"…"); return;
+    setPhoneFab(st.player, "loading");
+    showPhoneCaption(st.player, "Page "+(st.cur+1)+" of "+st.total, "Reading the page…");
+    return;
   }
   if(st.line>=page.lines.length){
     st.cur++; st.line=0;
@@ -3581,21 +3700,22 @@ function speakNextPhoneLine(st){
     speakNextPhoneLine(st);
     return;
   }
-  if(st.line===0) followPhonePage(st.cur);
   var item=page.lines[st.line++];
-  phoneStatus(st, "Page "+(st.cur+1)+" of "+st.total, item.text);
+  followPhoneLine(st, st.cur, item.y);
+  setPhoneFab(st.player, "playing");
+  showPhoneCaption(st.player, "Page "+(st.cur+1)+" of "+st.total, item.text);
   st.talking=true;
   speakPhoneLine(st, item, function(){ st.talking=false; speakNextPhoneLine(st); });
 }
 
 function speakPhoneLine(st, item, onend){
-  var u=new SpeechSynthesisUtterance(item.text);
+  var u=new SpeechSynthesisUtterance(item.text), v=phoneVoice();
   u.lang="en-US";
-  if(st.voice){ try{ u.voice=st.voice; u.lang=st.voice.lang; }catch(e){} }
-  var rate=st.rate, pitch=1, volume=1;
-  if(item.delivery==="shouts"){ rate*=1.06; pitch=1.12; }
-  else if(item.delivery==="asks"){ pitch=1.06; }
-  else if(item.delivery==="mutters"||item.delivery==="whispers"){ rate*=0.92; pitch=0.92; volume=0.85; }
+  if(v.voice){ try{ u.voice=v.voice; u.lang=v.voice.lang; }catch(e){} }
+  var rate=parseFloat(savedPhoneSetting(PHONE_RATE_KEY, "1"))||1, pitch=v.pitch, volume=1;
+  if(item.delivery==="shouts"){ rate*=1.06; pitch*=1.12; }
+  else if(item.delivery==="asks"){ pitch*=1.06; }
+  else if(item.delivery==="mutters"||item.delivery==="whispers"){ rate*=0.92; pitch*=0.92; volume=0.85; }
   u.rate=rate; u.pitch=pitch; u.volume=volume;
   var finished=false;
   function end(){
@@ -3611,40 +3731,70 @@ function speakPhoneLine(st, item, onend){
 
 // Pausing cancels the line being spoken (phones' own pause is unreliable)
 // and says it again on resume.
-function togglePhonePause(st, btn){
+function togglePhonePause(st){
   if(st.stopped) return;
   st.paused=!st.paused;
-  btn.textContent=st.paused?"Resume":"Pause";
   if(st.paused){
     if(st.talking && st.line>0) st.line--;
     window.speechSynthesis.cancel();
-    phoneStatus(st, "Paused");
-  } else speakNextPhoneLine(st);
+    setPhoneFab(st.player, "paused");
+    showPhoneCaption(st.player, "Paused", "Tap play to carry on.");
+  } else {
+    setPhoneFab(st.player, "playing");
+    speakNextPhoneLine(st);
+  }
 }
 
-function followPhonePage(i){
-  var img=document.querySelectorAll("#rpages .rpage")[i];
+/* Keep the bubble being read in view: about a third of the way down the
+   screen, below the pinned ad. Not while the reader is scrolling. */
+function followPhoneLine(st, n, y){
+  if(Date.now()<st.userUntil) return;
+  var img=document.querySelectorAll("#rpages .rpage")[n];
   if(!img) return;
   var r=img.getBoundingClientRect();
-  if(r.bottom<0 || r.top>window.innerHeight) img.scrollIntoView({behavior:"smooth", block:"start"});
+  if(typeof y!=="number" || !img.naturalHeight){
+    if(r.bottom<0 || r.top>window.innerHeight) img.scrollIntoView({behavior:"smooth", block:"start"});
+    return;
+  }
+  var target=window.scrollY+r.top+y*(r.height/img.naturalHeight)-window.innerHeight*0.33;
+  window.scrollTo({top:Math.max(0, target), behavior:"smooth"});
 }
 
-function phoneStatus(st, label, now){
-  if(st.stopped || !st.el.isConnected) return;
-  var bar=st.el.querySelector(".narr-bar i"), ps=st.el.querySelector(".ps"), np=st.el.querySelector(".narr-now");
-  if(bar) bar.style.width=Math.round(100*st.cur/st.total)+"%";
-  if(ps) ps.textContent=label;
-  if(np && now!==undefined) np.textContent="“"+now+"”";
+function showPhoneCaption(player, label, text){
+  if(!player.box.isConnected) return;
+  player.cap.hidden=!text;
+  player.cap.querySelector("small").textContent=label||"";
+  player.cap.querySelector("span").textContent=text||"";
+}
+
+/* While it reads, a small ad stays pinned to the top of the screen, just
+   under the header when that's showing. */
+function showPhoneTopAd(st){
+  var html=adFrame(ADS.narration);
+  if(!html) return;
+  var bar=document.createElement("div");
+  bar.className="narr-topad";
+  bar.innerHTML=html;
+  document.body.appendChild(bar);
+  var timer=null;
+  function place(){
+    var top=document.querySelector(".top");
+    bar.style.top=Math.max(0, top ? top.getBoundingClientRect().bottom : 0)+"px";
+  }
+  st.adBar=bar;
+  st.onAdScroll=function(){ place(); clearTimeout(timer); timer=setTimeout(place, 300); };   // after the header slides
+  window.addEventListener("scroll", st.onAdScroll, {passive:true});
+  place();
 }
 
 function endPhoneNarration(st, message){
-  var panel=st.panel;
+  var player=st.player;
   stopPhoneNarration();
-  if(!panel.isConnected) return;
-  panel.querySelector(".narr-status").innerHTML='<p class="sub" style="margin:8px 0 0">'+esc(message)+'</p>';
-  panel.querySelector(".go").hidden=false;
-  panel.querySelector(".go").textContent="Read again";
-  panel.querySelector(".pv").disabled=panel.querySelector(".pr").disabled=false;
+  if(!player.box.isConnected) return;
+  setPhoneFab(player, "idle");
+  showPhoneCaption(player, "", message);
+  if(message) setTimeout(function(){ if(!phoneNarr && player.cap.querySelector("span").textContent===message) showPhoneCaption(player, "", ""); }, 5000);
+  warmPhoneReader(player);
 }
 
 function stopPhoneNarration(){
@@ -3654,6 +3804,9 @@ function stopPhoneNarration(){
   st.stopped=true;
   clearTimeout(st.watchdog);
   st.workers.forEach(function(w){ w.terminate(); });
+  ["touchstart","wheel","keydown"].forEach(function(ev){ window.removeEventListener(ev, st.onUser); });
+  if(st.onAdScroll) window.removeEventListener("scroll", st.onAdScroll);
+  if(st.adBar) st.adBar.remove();
   try{ window.speechSynthesis.cancel(); }catch(e){}
 }
 

@@ -662,7 +662,8 @@ async def api_narrate_page(
 async def api_narrate_lines(request: Request):
     """One page's raw OCR lines ([box, text, score], from the phone) as the
     lines to speak: grouped into speech bubbles, run-together words split,
-    sound effects and scan credits dropped. Text only: milliseconds."""
+    sound effects and scan credits dropped, each with the top of its bubble
+    on the page (y) to scroll to. Text only: milliseconds."""
     try:
         payload = await request.json()
     except Exception:
@@ -680,11 +681,7 @@ async def api_narrate_lines(request: Request):
             lines.append([box, text, float(score)])
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Each line is [box, text, score].")
-    page = storyteller.prepare_pages([storyteller.group_into_bubbles(lines)])[0]
-    return {
-        "lines": [{"text": t, "delivery": storyteller.delivery_by_punctuation(t)} for t in page["lines"]],
-        "effects": page["effects"],
-    }
+    return storyteller.speakable_lines(lines)
 
 
 @app.get("/api/narrate/{job}")
