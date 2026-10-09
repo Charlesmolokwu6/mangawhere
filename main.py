@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
 from scrapers import ytpost
-from server import auth, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
+from server import auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -633,6 +633,20 @@ def _image_type(data: bytes) -> str:
     if data[:4] == b"GIF8":
         return "image/gif"
     return "application/octet-stream"
+
+
+@app.get("/api/trim")
+async def api_trim(chapter_url: str = Query(..., description="Chapter to look for scanlation banners in")):
+    """Rows of a chapter's first image (top) and last image (bottom) that are
+    a scanlation group's banner rather than story (server/banners.py). The
+    reader hides them once this answers."""
+    _require_absolute_url(chapter_url)
+    try:
+        result = await banners.trim_for(chapter_url, scrape_cached)
+    except Exception as e:
+        print(f"[banners] trim failed for {chapter_url}: {e!r}")
+        result = {"top": None, "bottom": None}
+    return _cacheable(JSONResponse(content=result), 3600)
 
 
 @app.get("/api/narrate/page")
