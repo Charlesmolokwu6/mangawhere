@@ -194,6 +194,11 @@ on the phone instead:
   effects and credits dropped. Text only, milliseconds.
 - The phone's own voice (`speechSynthesis`) reads the lines, a page or two
   behind the reading.
+- Pages go through a free Cloudflare Worker
+  ([`cloudflare/page-cache-worker.js`](cloudflare/page-cache-worker.js),
+  deployed as `mangawhere-pages`; `NARRATION_PAGE_BASE` in index.html)
+  that keeps each page a day, so Render sends a page once, not once per
+  listener. Set `NARRATION_PAGE_BASE` to "" to go straight to Render.
 
 For the recorded Kokoro voices instead, point narration somewhere else:
 
