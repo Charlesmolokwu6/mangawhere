@@ -316,13 +316,12 @@ color:var(--text);display:grid;place-items:center;padding:0;box-shadow:0 4px 12p
 padding:8px 12px;font-size:13.5px;line-height:1.4;box-shadow:0 6px 18px rgba(0,0,0,.3)}
 .narr-cap small{display:block;color:var(--dim);font-size:11px;margin-bottom:2px}
 .narr-cap span{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.narr-sheet{width:min(300px,calc(100vw - 32px));background:var(--surf2);border:1px solid var(--line);border-radius:14px;
-padding:12px 14px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
-.narr-sheet h4{margin:0 0 8px;font-size:15px;display:flex;justify-content:space-between;align-items:center}
-.narr-sheet h4 button{background:none;border:none;color:var(--dim);font-size:20px;line-height:1;padding:0 2px}
-.narr-sheet select{width:100%;border-radius:10px;padding:10px;font:inherit;font-size:14px;margin-bottom:8px;
-background:var(--surf);color:var(--text);border:1px solid var(--line)}
-.narr-sheet .sub{margin:2px 0 0;color:var(--dim);font-size:12px}
+.voicecard{margin-top:14px}
+.voicecard h4{margin:0 0 4px}
+.voicecard .t{color:var(--dim);font-size:13px;margin:0 0 10px}
+.voicecard select{width:100%;border-radius:10px;padding:10px;font:inherit;font-size:14px;margin-bottom:8px;
+background:var(--surf2);color:var(--text);border:1px solid var(--line)}
+.voicecard .linkish{margin:2px 0 10px}
 .narr-topad{position:fixed;left:0;right:0;top:0;z-index:19;display:flex;justify-content:center;
 background:var(--bg);padding:4px 0;border-bottom:1px solid var(--line);transition:top .25s ease}
 .narr-topad .adslot{margin:0}
@@ -3438,9 +3437,10 @@ function pollNarration(base, job, el, token){
    page scrolls along with it.
 
    The player is one round button: headphones to start, pause while it
-   reads (with a pulse to show it's live), play while paused. Next to it,
-   voice settings and stop. The text reader starts loading as soon as a
-   chapter opens, so a tap starts reading at once. */
+   reads (with a pulse to show it's live), play while paused, and a stop
+   button beside it while it's on. Voice and speed are chosen on the
+   Account page (storytellerSettingsHtml). The text reader starts loading
+   as soon as a chapter opens, so a tap starts reading at once. */
 var PHONE_VOICE_KEY="mw-phone-voice", PHONE_RATE_KEY="mw-phone-rate";
 var PHONE_READ_AHEAD=2;   // pages read ahead of the one being spoken
 /* Lines arrive a slice of the page at a time; ones this close (in page
@@ -3462,7 +3462,6 @@ var PHONE_ICONS={
   idle:'<svg viewBox="0 0 24 24"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>',
   playing:'<svg viewBox="0 0 24 24"><rect class="fill" x="6" y="4.5" width="4" height="15" rx="1.2"/><rect class="fill" x="14" y="4.5" width="4" height="15" rx="1.2"/></svg>',
   paused:'<svg viewBox="0 0 24 24"><path class="fill" d="M8 4.8v14.4a1 1 0 0 0 1.5.86l11.5-7.2a1 1 0 0 0 0-1.72L9.5 3.94A1 1 0 0 0 8 4.8z"/></svg>',
-  settings:'<svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>',
   stop:'<svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>'
 };
 PHONE_ICONS.loading=PHONE_ICONS.idle;
@@ -3520,34 +3519,15 @@ function mountPhoneNarration(chapterUrl, token){
   var box=document.createElement("div");
   box.className="narr"; box.id="narr";
   box.innerHTML=
-    '<div class="narr-sheet" hidden>'+
-      '<h4>Voice <button class="narr-done" aria-label="Close">×</button></h4>'+
-      '<select class="pv" aria-label="Voice">'+phoneVoiceOptions()+'</select>'+
-      '<select class="pr" aria-label="Speed">'+phoneRateOptions()+'</select>'+
-      '<p class="sub">Your phone’s own voices. More can be added in its text-to-speech settings.</p>'+
-    '</div>'+
     '<div class="narr-cap" hidden aria-live="polite"><small></small><span></span></div>'+
     '<div class="narr-btns">'+
-      '<button class="narr-mini narr-set" aria-label="Voice settings">'+PHONE_ICONS.settings+'</button>'+
       '<button class="narr-mini narr-x" aria-label="Stop reading" hidden>'+PHONE_ICONS.stop+'</button>'+
       '<button class="narr-play"></button>'+
     '</div>';
   document.body.appendChild(box);
   var player=phonePlayer={box:box, chapterUrl:chapterUrl, token:token, workers:null,
-    fab:box.querySelector(".narr-play"), cap:box.querySelector(".narr-cap"), sheet:box.querySelector(".narr-sheet")};
+    fab:box.querySelector(".narr-play"), cap:box.querySelector(".narr-cap")};
   setPhoneFab(player, "idle");
-  // Phones list their voices a moment after the page loads.
-  window.speechSynthesis.onvoiceschanged=function(){
-    var sel=player.sheet.querySelector(".pv"); if(sel) sel.innerHTML=phoneVoiceOptions();
-  };
-  player.sheet.querySelector(".pv").onchange=function(){
-    try{ localStorage.setItem(PHONE_VOICE_KEY, this.value); }catch(e){}
-  };
-  player.sheet.querySelector(".pr").onchange=function(){
-    try{ localStorage.setItem(PHONE_RATE_KEY, this.value); }catch(e){}
-  };
-  player.sheet.querySelector(".narr-done").onclick=function(){ player.sheet.hidden=true; };
-  box.querySelector(".narr-set").onclick=function(){ player.sheet.hidden=!player.sheet.hidden; };
   box.querySelector(".narr-x").onclick=function(){ if(phoneNarr) endPhoneNarration(phoneNarr, ""); };
   player.fab.onclick=function(){
     var st=phoneNarr;
@@ -3592,7 +3572,6 @@ function newOcrWorkers(){
 
 function startPhoneNarration(player){
   stopPhoneNarration();
-  player.sheet.hidden=true;
   var total=document.querySelectorAll("#rpages .rpage").length;
   if(!total){ showPhoneCaption(player, "", "This chapter’s pages haven’t loaded yet."); return; }
   var st=phoneNarr={player:player, chapterUrl:player.chapterUrl, total:total,
@@ -4797,7 +4776,9 @@ function accountView(){
       '<div class="form">'+
         '<button class="primary" id="go-signup">Create an account</button>'+
         '<button class="danger" id="go-login">I already have one</button>'+
-      '</div>';
+      '</div>'+
+      storytellerSettingsHtml();
+    wireStorytellerSettings();
     document.getElementById("ab").onclick=function(){ setTab("home"); };
     document.getElementById("go-signup").onclick=function(){ authView("signup"); };
     document.getElementById("go-login").onclick=function(){ authView("login"); };
@@ -4831,10 +4812,12 @@ function accountView(){
         '<p class="t" id="nsub">checking…</p></div>'+
       '<button class="nbtn" id="nbtn" hidden>Turn on</button>'+
     '</div>'+
+    storytellerSettingsHtml()+
     '<p class="hint">Sign in with the same email on any other phone or laptop '+
       'and your list is there.</p>'+
     '<button class="danger" id="signout">Sign out</button>';
 
+  wireStorytellerSettings();
   document.getElementById("ab").onclick=function(){ setTab("home"); };
   document.getElementById("signout").onclick=signOut;
   wireAvatarUpload();
@@ -4860,6 +4843,38 @@ function accountView(){
     console.log("[mangawhere] /api/me unreachable:", e.message);
   });
   window.scrollTo(0,0);
+}
+
+/* Storyteller mode's voice and speed (saved on this phone, so no sign-in
+   needed), with a sample to hear a voice before picking it. */
+function storytellerSettingsHtml(){
+  if(!phoneNarrationSupported()) return "";
+  return '<div class="card voicecard">'+
+    '<h4>Storyteller voice</h4>'+
+    '<p class="t">The voice that reads chapters aloud when you tap the headphones in the reader.</p>'+
+    '<select id="st-voice" aria-label="Voice">'+phoneVoiceOptions()+'</select>'+
+    '<select id="st-rate" aria-label="Speed">'+phoneRateOptions()+'</select>'+
+    '<button class="linkish" id="st-test">▶ Test voice</button>'+
+    '<p class="t">More voices can be added in your phone’s text-to-speech settings.</p>'+
+  '</div>';
+}
+function wireStorytellerSettings(){
+  var voice=document.getElementById("st-voice"), rate=document.getElementById("st-rate");
+  if(!voice) return;
+  // Phones list their voices a moment after the page loads.
+  window.speechSynthesis.onvoiceschanged=function(){
+    if(document.getElementById("st-voice")) voice.innerHTML=phoneVoiceOptions();
+  };
+  voice.onchange=function(){ try{ localStorage.setItem(PHONE_VOICE_KEY, voice.value); }catch(e){} };
+  rate.onchange=function(){ try{ localStorage.setItem(PHONE_RATE_KEY, rate.value); }catch(e){} };
+  document.getElementById("st-test").onclick=function(){
+    var v=phoneVoice(), u=new SpeechSynthesisUtterance("This is how I'll read your chapters.");
+    u.lang="en-US";
+    if(v.voice){ try{ u.voice=v.voice; u.lang=v.voice.lang; }catch(e){} }
+    u.pitch=v.pitch; u.rate=parseFloat(savedPhoneSetting(PHONE_RATE_KEY, "1"))||1;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  };
 }
 
 /* Custom-styled "Change photo" button driving a hidden file input —
