@@ -21,7 +21,7 @@
 
 var ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
 var MODEL_BASE = "https://cdn.jsdelivr.net/npm/@gutenye/ocr-models@1.4.2/assets/";
-var MODEL_CACHE = "mw-ocr-v1";
+var MODEL_CACHE = "mw-ocr-v1";   // models and runtime, kept after the first download
 
 var SLICE = 1600;          // slice height, in the page's own pixels
 var OVERLAP = 240;         // taller than any line, so each line is whole in some slice
@@ -63,13 +63,17 @@ function check(res) {
 
 function init() {
   if (ready) return ready;
-  say("Getting the text reader ready (first time only)…");
+  say(self.caches ? "Getting the text reader ready…" : "Downloading the text reader…");
   var opts = {executionProviders: ["wasm"], graphOptimizationLevel: "all"};
   ready = Promise.all([
     cachedFetch(MODEL_BASE + "ch_PP-OCRv4_det_infer.onnx").then(function (r) { return r.arrayBuffer(); }),
     cachedFetch(MODEL_BASE + "ch_PP-OCRv4_rec_infer.onnx").then(function (r) { return r.arrayBuffer(); }),
-    cachedFetch(MODEL_BASE + "ppocr_keys_v1.txt").then(function (r) { return r.text(); })
+    cachedFetch(MODEL_BASE + "ppocr_keys_v1.txt").then(function (r) { return r.text(); }),
+    // The 11MB runtime too: left to the browser's own cache, a phone short
+    // on space drops it and downloads it again.
+    cachedFetch(ORT_BASE + "ort-wasm-simd-threaded.wasm").then(function (r) { return r.arrayBuffer(); })
   ]).then(function (files) {
+    ort.env.wasm.wasmBinary = files[3];
     // RapidOCR's character list: the keys file, then a space; index 0 is
     // the CTC blank.
     chars = ["blank"].concat(files[2].replace(/\r/g, "").split("\n").filter(function (c, i, a) {
