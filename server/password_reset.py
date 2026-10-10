@@ -14,6 +14,7 @@ Gmail with an app password, Resend, Amazon SES...) — see README.md.
 """
 import hashlib
 import hmac
+import html
 import os
 import secrets
 import smtplib
@@ -92,17 +93,47 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def _send_email(to: str, link: str) -> None:
-    settings = _smtp_settings()
+# The HTML version shows a button instead of the long link (email apps
+# show HTML when they can; the plain text is for those that can't). Inline
+# styles only: most email apps drop <style> blocks. Colours match the site.
+_EMAIL_HTML = """\
+<!doctype html>
+<html><body style="margin:0;padding:0;background:#14101a">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#14101a">
+<tr><td align="center" style="padding:32px 16px">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#1e1826;border-radius:14px">
+<tr><td style="padding:28px 24px;font-family:Arial,Helvetica,sans-serif;color:#f0ebf5">
+<div style="font-size:22px;font-weight:bold;margin:0 0 18px">manga<span style="color:#3fe0c8">where</span></div>
+<p style="font-size:16px;line-height:1.5;margin:0 0 22px">Someone asked to reset the password for your MangaWhere account.</p>
+<table role="presentation" cellpadding="0" cellspacing="0"><tr>
+<td style="border-radius:10px;background:#3fe0c8">
+<a href="{link}" style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:bold;color:#14101a;text-decoration:none;border-radius:10px">Reset password</a>
+</td></tr></table>
+<p style="font-size:14px;line-height:1.5;color:#a094ad;margin:22px 0 0">The button works for the next hour, once.
+If that wasn't you, ignore this email. Your password won't change.</p>
+</td></tr></table>
+</td></tr></table>
+</body></html>
+"""
+
+
+def build_message(sender: str, to: str, link: str) -> EmailMessage:
     message = EmailMessage()
     message["Subject"] = "Reset your MangaWhere password"
-    message["From"] = settings["sender"]
+    message["From"] = sender
     message["To"] = to
     message.set_content(
         "Someone asked to reset the password for your MangaWhere account.\n\n"
         f"To choose a new password, open this link within the next hour:\n{link}\n\n"
         "If that wasn't you, ignore this email. Your password won't change."
     )
+    message.add_alternative(_EMAIL_HTML.replace("{link}", html.escape(link, quote=True)), subtype="html")
+    return message
+
+
+def _send_email(to: str, link: str) -> None:
+    settings = _smtp_settings()
+    message = build_message(settings["sender"], to, link)
     context = ssl.create_default_context()
     if settings["security"] == "ssl":
         server = smtplib.SMTP_SSL(settings["host"], settings["port"], context=context, timeout=20)
