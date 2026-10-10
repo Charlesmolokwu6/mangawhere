@@ -12,7 +12,9 @@
 //                    each is kept for a week (chapter images never change).
 //
 // Deployed as a Cloudflare Worker (free plan: 100,000 requests a day). To use
-// it, set NARRATION_PAGE_BASE in index.html to this Worker's address.
+// it, set NARRATION_PAGE_BASE in index.html to this Worker's address. Once the
+// Worker is connected to this repository (Settings > Builds, root directory
+// "cloudflare", see wrangler.jsonc), every change here deploys itself.
 
 const ORIGIN = "https://mangawhere.onrender.com";
 const PAGE_PATH = "/api/narrate/page";
