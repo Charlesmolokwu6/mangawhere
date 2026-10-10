@@ -1,0 +1,8 @@
+// Cloudflare Workers Builds deploys cloudflare/page-cache-worker.js from
+// this folder whenever main changes (Worker settings > Builds, root
+// directory "cloudflare"). The name must match the Worker in the dashboard.
+{
+  "name": "mangawhere-pages",
+  "main": "page-cache-worker.js",
+  "compatibility_date": "2026-09-01"
+}
