@@ -254,7 +254,9 @@ verified, so the emails don't land in spam.
 
 Set these in Render's environment variables, then redeploy:
 - `SMTP_HOST`, e.g. `smtp-relay.brevo.com` or `smtp.gmail.com`
-- `SMTP_PORT`, usually `587` (or `465`)
+- `SMTP_PORT`, usually `587` (or `465`). On Render's free plan those
+  two are blocked (sending just times out), so use the provider's
+  alternative port: `2525` for Brevo, which is what MangaWhere uses
 - `SMTP_USERNAME`, `SMTP_PASSWORD`: from the provider (for Gmail, an app
   password, never your normal one)
 - `MAIL_FROM`, e.g. `MangaWhere <no-reply@yourdomain.com>`; it must be a
