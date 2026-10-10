@@ -1,0 +1,9 @@
+// Cloudflare Workers Builds: the mangawhere-pages Worker (storyteller pages
+// and Comizy images, see cloudflare/page-cache-worker.js) deploys from this
+// repository whenever main changes. cloudflare/wrangler.jsonc is the same
+// Worker for a build whose root directory is "cloudflare".
+{
+  "name": "mangawhere-pages",
+  "main": "cloudflare/page-cache-worker.js",
+  "compatibility_date": "2026-09-01"
+}
