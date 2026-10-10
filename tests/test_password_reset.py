@@ -69,6 +69,17 @@ class RequestResetTests(ResetTestCase):
             conn.close()
         self.assertNotEqual(stored, token)  # only a hash is stored
 
+    def test_the_email_has_a_button_and_a_plain_text_link(self):
+        link = SITE + "#reset=abc_DEF-123"
+        message = password_reset.build_message("MangaWhere <no-reply@example.com>", "reader@example.com", link)
+        plain = message.get_body(("plain",)).get_content()
+        html_part = message.get_body(("html",)).get_content()
+        self.assertIn(link, plain)                       # for email apps that can't show HTML
+        self.assertIn(f'href="{link}"', html_part)
+        self.assertIn(">Reset password</a>", html_part)
+        self.assertEqual(html_part.count(link), 1)       # only behind the button, not written out
+        self.assertEqual(message["To"], "reader@example.com")
+
     def test_an_unknown_email_gets_the_same_answer_and_no_email(self):
         result = password_reset.request_reset("nobody@example.com", SITE)
         self.assertEqual(result, {"message": password_reset.SENT_MESSAGE})
