@@ -200,6 +200,9 @@ on the phone instead:
   deployed as `mangawhere-pages`; `NARRATION_PAGE_BASE` in index.html)
   that keeps each page a day, so Render sends a page once, not once per
   listener. Set `NARRATION_PAGE_BASE` to "" to go straight to Render.
+  The Worker is connected to this repository (Cloudflare Workers Builds,
+  configured by `wrangler.jsonc`), so a change to it deploys itself when
+  it reaches `main`.
 
 For the recorded Kokoro voices instead, point narration somewhere else:
 
