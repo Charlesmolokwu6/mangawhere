@@ -2020,6 +2020,9 @@ function pickSuggest(i){
 }
 
 function hideSuggest(){
+  // Also drop suggestions still on their way, so they can't pop up over a
+  // search that has already started.
+  clearTimeout(sugTimer); sugSeq++;
   var box=document.getElementById("suggest");
   if(box){ box.hidden=true; box.innerHTML=""; }
   sugRows=[]; sugIndex=-1;
@@ -2183,6 +2186,7 @@ function exitReaderChrome(){
 
 function run(){
   var raw=document.getElementById("q").value.trim(); if(!raw) return;
+  hideSuggest();
   stopRail();
   var out=document.getElementById("out"), btn=document.getElementById("go");
   var tr=document.getElementById("trend"); if(tr) tr.style.display="none";
@@ -2237,6 +2241,7 @@ function run(){
   job.then(render).then(function(){
     if(!fromPost) return;
     postBack=fromPost;
+    var plain=document.getElementById("sbk"); if(plain) plain.remove();
     out.insertAdjacentHTML("afterbegin",
       '<button class="postback" id="postback">&larr; Back to the list</button>');
     document.getElementById("postback").onclick=function(){ render(fromPost); };
@@ -2396,8 +2401,15 @@ function render(r){
                  .sort(function(a,b){return b.s-a.s;});
   var top=scored[0], next=scored[1]?scored[1].s:0;
   var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
+  // A title opened from a search gets a Back button like every other page:
+  // to the home page, or from a "Which one is it?" pick, back to that list.
+  function searchBack(onBack){
+    out.insertAdjacentHTML("afterbegin", '<button class="back" id="sbk">← Back</button>');
+    document.getElementById("sbk").onclick=function(){ onBack(); window.scrollTo(0,0); };
+  }
   if(sure){ out.innerHTML=head+detailHtml(top.m,r.parsed.chapter);
-            fillChapters(top.m,r.parsed.chapter); return; }
+            fillChapters(top.m,r.parsed.chapter);
+            searchBack(function(){ setTab(curTab); }); return; }
   var picks=scored.slice(0,5);
   out.innerHTML=head+'<div class="note"><p><strong>Which one is it?</strong>Not certain — '+
     'pick the right title.</p></div>'+
@@ -2412,7 +2424,9 @@ function render(r){
   for(var i=0;i<els.length;i++)
     els[i].onclick=(function(m){return function(){
       out.innerHTML=head+detailHtml(m,r.parsed.chapter);
-      fillChapters(m,r.parsed.chapter); window.scrollTo(0,0);};})(scored[+els[i].dataset.i].m);
+      fillChapters(m,r.parsed.chapter);
+      searchBack(function(){ render(r); });
+      window.scrollTo(0,0);};})(scored[+els[i].dataset.i].m);
 
   // Jikan/AniList/MangaDex only know the title exists — whether it's
   // actually scanned on one of our three reading sources is a separate,
