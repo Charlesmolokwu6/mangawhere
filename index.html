@@ -336,8 +336,10 @@ background:var(--surf);color:var(--text);border:1px solid var(--line)}
 .narr-now{margin:8px 0 0;font-size:13px;color:var(--text);font-style:italic;max-height:3.9em;overflow:hidden}
 /* Reader pages: placeholder height until loaded, so lazy loading can tell
    which pages are actually near the screen. */
-.rpage{width:100%;display:block;margin:0 0 4px;min-height:30vh;background:var(--surf)}
-.rpage.loaded{min-height:0;background:none}
+.rpage{width:100%;display:block;margin:0 0 4px;min-height:30vh;background:var(--surf);
+animation:pagepulse 1.6s ease-in-out infinite}
+@keyframes pagepulse{50%{background-color:var(--surf2)}}
+.rpage.loaded{min-height:0;background:none;animation:none}
 /* A page with a scanlation banner clipped off its top or bottom. */
 .rclip{overflow:hidden;width:100%;margin:0 0 4px}
 .rclip .rpage{margin:0;min-height:0}
@@ -429,6 +431,24 @@ background:var(--surf2)}
 .watchwrap .frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .skel{width:100%;aspect-ratio:2/3;border-radius:9px;background:var(--surf2);animation:p 1.3s infinite}
 @keyframes p{0%,100%{opacity:.45}50%{opacity:.8}}
+/* Loading never looks frozen: a spinner beside anything being fetched
+   (.spin blocks, .ldg lines, buttons marked .busy), and a thin moving bar
+   along the top of the screen while any of them is on screen (watchLoading). */
+.spin::before,.ldg::before,button.busy::before{content:"";display:inline-block;width:14px;height:14px;
+margin-right:8px;vertical-align:-2px;border:2px solid var(--line);border-top-color:var(--mint);
+border-radius:50%;animation:narrspin .8s linear infinite}
+.spin::before{display:block;width:26px;height:26px;margin:0 auto 10px;border-width:3px}
+button.busy::before{border-color:rgba(0,0,0,.2);border-top-color:currentColor}
+#loadbar{position:fixed;top:0;left:0;right:0;height:3px;z-index:9999;overflow:hidden;
+pointer-events:none;opacity:0;transition:opacity .25s}
+#loadbar.on{opacity:1}
+#loadbar::before{content:"";position:absolute;top:0;bottom:0;left:-40%;width:40%;
+background:var(--mint);animation:loadslide 1.1s ease-in-out infinite}
+@keyframes loadslide{to{left:100%}}
+@media (prefers-reduced-motion: reduce){
+  .spin::before,.ldg::before,button.busy::before{animation-duration:2.4s}
+  #loadbar::before{animation:none;left:0;width:100%;opacity:.6}
+}
 .chips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px}
 /* Fourteen genres would wrap to four rows, so this one scrolls sideways. */
 .chips.genres{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;
@@ -516,6 +536,7 @@ padding:6px 0 0;cursor:pointer}
 </div>
 
 <main>
+  <div id="loadbar" aria-hidden="true"></div>
   <div id="app"></div>
 </main>
 
@@ -2498,7 +2519,7 @@ function detailHtml(m,videoCh){
     '</div>'+
     adFrame(ADS.detailChapters)+
     '<h3>Chapters</h3>'+
-    '<div id="detailchapters"><p class="sub" style="margin:0">Looking for a chapter list…</p></div>'+
+    '<div id="detailchapters"><p class="sub ldg" style="margin:0">Looking for a chapter list…</p></div>'+
     buyRow(m)+adSlot();
 }
 
@@ -3228,7 +3249,7 @@ function readerView(url, exclude){
       '<button class="back" id="rbk" style="margin:0">← Back</button>'+
       (hasChapters?chapterPickerHtml():'')+
     '</div>'+
-    '<p class="sub" id="rstatus">Loading…</p>'+
+    '<p class="sub" id="rstatus"><span class="ldg">Loading…</span></p>'+
     '<div id="rpages"></div>'+
     '<div id="radend"></div>'+
     '<div class="readernavslot"></div>'+
@@ -4266,7 +4287,7 @@ function openFromUrl(){
   var id=new URLSearchParams(location.search).get("m");
   if(!id) return false;
   var host=document.getElementById("app");
-  if(host) host.innerHTML='<p class="hint">Loading…</p>';
+  if(host) host.innerHTML='<p class="hint ldg">Loading…</p>';
   fetchById(id).then(function(m){
     if(m){ showDetail(m, null, true); return; }
     if(host) host.innerHTML='<div class="note"><p><strong>Couldn\'t find that one</strong>'+
@@ -4382,6 +4403,45 @@ function api(path, opts){
     return r.json();
   });
 }
+
+/* The thin bar along the top shows while anything on screen is still
+   loading: a spinner line (.spin/.ldg), skeleton tiles (.skel), a chapter
+   page in view that hasn't arrived yet, or a button showing it's busy. A disabled button whose label ends in "…"
+   ("Finding…", "Saving…") is busy, and gets its spinner from that. It's
+   re-checked whenever the page changes, so every loading state anywhere
+   on the site shows it without each one having to remember to. Short
+   loads (under 0.2s) don't flash it. */
+function watchLoading(){
+  var bar=document.getElementById("loadbar");
+  if(!bar || typeof MutationObserver==="undefined") return;
+  var queued=false, showTimer=null;
+  function shown(el){ return el.getClientRects().length>0; }
+  function inView(el){
+    var r=el.getBoundingClientRect();
+    return r.height>0 && r.bottom>0 && r.top<window.innerHeight;
+  }
+  function check(){
+    queued=false;
+    Array.prototype.forEach.call(document.querySelectorAll("button"), function(b){
+      var busy=b.disabled && /…\s*$/.test(b.textContent||"");
+      if(b.classList.contains("busy")!==busy) b.classList.toggle("busy", busy);
+    });
+    var loading=Array.prototype.some.call(document.querySelectorAll(".spin,.ldg,.skel,button.busy"), shown) ||
+      Array.prototype.some.call(document.querySelectorAll("#rpages .rpage:not(.loaded)"), inView);
+    if(loading && !bar.classList.contains("on") && !showTimer){
+      showTimer=setTimeout(function(){ showTimer=null; bar.classList.add("on"); }, 200);
+    } else if(!loading){
+      clearTimeout(showTimer); showTimer=null;
+      bar.classList.remove("on");
+    }
+  }
+  function queue(){ if(!queued){ queued=true; requestAnimationFrame(check); } }
+  new MutationObserver(queue).observe(document.body, {childList:true, subtree:true, characterData:true,
+    attributes:true, attributeFilter:["disabled","class"]});
+  window.addEventListener("scroll", queue, {passive:true});
+  check();
+}
+watchLoading();
 
 /* Standard eye / eye-slash glyphs -- inline SVG rather than a Unicode
    character, since there's no crossed-out-eye character that renders
