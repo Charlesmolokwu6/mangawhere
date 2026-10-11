@@ -348,7 +348,8 @@ if __name__ == "__main__":
 
 class PublicFilesTests(MainTestCase):
     def test_frontend_files_are_served(self):
-        for path in ("/", "/index.html", "/sw.js"):
+        for path in ("/", "/index.html", "/sw.js", "/manifest.json",
+                     "/icons/favicon.svg", "/icons/icon-192.png"):
             self.assertEqual(self.client.get(path).status_code, 200, path)
 
     def test_project_files_are_not_served(self):
@@ -362,6 +363,8 @@ class PublicFilesTests(MainTestCase):
             "/requirements.txt",
             "/.git/HEAD",
             "/render.yaml",
+            "/icons/../main.py",
+            "/icons/..%2Fmain.py",
         ):
             self.assertEqual(self.client.get(path).status_code, 404, path)
 
