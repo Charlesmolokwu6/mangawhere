@@ -9,8 +9,8 @@ self.addEventListener("push", function (event) {
   var title = data.title || "Manga Where";
   var options = {
     body: data.body || "A new chapter is out.",
-    icon: data.icon || "/static/icon-192.png",
-    badge: "/static/badge.png",
+    icon: data.icon || "icons/icon-192.png",
+    badge: "icons/badge-96.png",
     // Same tag replaces an earlier alert for the same series instead of
     // stacking three notifications for one manga.
     tag: data.tag || "mangawhere",

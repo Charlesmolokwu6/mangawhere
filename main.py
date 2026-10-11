@@ -831,6 +831,21 @@ async def serve_service_worker():
     return FileResponse(BASE_DIR / "sw.js", media_type="application/javascript")
 
 
+@app.get("/manifest.json")
+async def serve_manifest():
+    return FileResponse(BASE_DIR / "manifest.json", media_type="application/manifest+json")
+
+
+ICON_FILES = {p.name for p in (BASE_DIR / "icons").glob("*") if p.suffix in (".png", ".svg")}
+
+
+@app.get("/icons/{name}")
+async def serve_icon(name: str):
+    if name not in ICON_FILES:
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(BASE_DIR / "icons" / name)
+
+
 @app.get("/ocr-worker.js")
 async def serve_ocr_worker():
     return FileResponse(BASE_DIR / "ocr-worker.js", media_type="application/javascript")
