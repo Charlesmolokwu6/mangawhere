@@ -233,6 +233,9 @@ opacity:0;transition:opacity .18s;backdrop-filter:blur(4px)}
 
 /* Automatic fallback: if the marquee can't lay out, this turns it back
    into the grid that was already working. */
+.browseall{display:block;margin:14px auto 0;background:none;border:1px solid var(--line);
+color:var(--mint);font-size:13px;font-weight:600;padding:9px 18px;border-radius:20px}
+.chips.sorts{margin-top:2px}
 .rail.grid{overflow:visible}
 .rail.grid .track{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));
 gap:16px 12px;width:auto}
@@ -1249,6 +1252,17 @@ var alTrending=function(country,genre){
   return alCall("query{Page(perPage:40){media(type:MANGA,sort:TRENDING_DESC,status:RELEASING"+
     filter+"){"+AL_FIELDS+"}}}");};
 
+/* The whole catalogue for a filter, a page at a time (Browse). The
+   chosen order comes first and popularity breaks ties, so titles with no
+   trending score this week still come in a sensible order. */
+var BROWSE_PAGE=30;
+var alBrowse=function(country,genre,sort,page){
+  var filter = country ? ',countryOfOrigin:"'+country+'"' : "";
+  if(genre) filter += ',genre_in:["'+genre.replace(/"/g,"")+'"]';
+  var order = sort==="POPULARITY_DESC" ? sort : sort+",POPULARITY_DESC";
+  return alCall("query{Page(page:"+(+page||1)+",perPage:"+BROWSE_PAGE+"){media(type:MANGA,sort:["+order+"]"+
+    filter+"){"+AL_FIELDS+"}}}");};
+
 /* --- MangaDex ---
    Jikan and AniList are both anime-encyclopedia sites first — their manga
    coverage leans toward titles that also have an anime, or at least a
@@ -1833,11 +1847,16 @@ function reportUnreadable(m){
     .catch(function(){});
 }
 
+/* Each filter change bumps this, so rows still on their way for a filter
+   the reader has already left don't land on top of the new one. */
+var trendToken=0;
 function loadTrending(country,genre){
   curFilter=country||"";
   if(genre!==undefined) curGenre=genre||"";
   var el=document.getElementById("trend");
   if(!el) return;
+  var token=++trendToken;
+  if(curFilter || curGenre || browseAll){ loadBrowse(); return; }
   el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
     ['a','b'].map(function(){ return '<div class="railwrap"><div class="rail"><div class="track">'+
     Array(8).fill('<div class="tile"><div class="skel"></div></div>').join("")+
@@ -1845,6 +1864,7 @@ function loadTrending(country,genre){
   wireChips();
   wireGenreToggle();
   trending(curFilter,curGenre).then(healthFilter).then(function(rows){
+    if(token!==trendToken) return;
     setDiag("source: "+sourceUsed);
     var el=document.getElementById("trend");
     if(!el) return;
@@ -1882,15 +1902,20 @@ function loadTrending(country,genre){
     }
 
     el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
-      railHtml(rowA,"a",false)+railHtml(rowB,"b",true);
+      railHtml(rowA,"a",false)+railHtml(rowB,"b",true)+
+      '<button class="browseall" id="browseall">Browse all comics &rsaquo;</button>';
     railData={a:rowA,b:rowB};
     wireChips();
+    document.getElementById("browseall").onclick=function(){
+      browseAll=true; loadBrowse(); window.scrollTo(0, el.offsetTop-60);
+    };
     startRail();
     var t=el.querySelectorAll(".tile");
     for(var k=0;k<t.length;k++)
       t[k].onclick=(function(m){return function(){showDetail(m,null);};})(
         railData[t[k].dataset.row][+t[k].dataset.i]);
   }).catch(function(e){
+    if(token!==trendToken) return;
     setDiag("both sources down: "+e.message);
     var el=document.getElementById("trend");
     if(el){ el.innerHTML='<h3>Trending now</h3>'+chips(curFilter)+
@@ -1899,6 +1924,141 @@ function loadTrending(country,genre){
       'commitment. This is the argument for caching results in your own database.</p></div>';
       wireChips(); }
   });
+}
+
+/* ---- Browse ----
+   A type tab (Manhwa, Manga, Manhua), a genre, or "Browse all comics"
+   opens the whole catalogue for it as a grid, not just this week's
+   trending: it keeps loading more as you scroll, in the order chosen at
+   the top. Opening a title and coming Back returns to the same place. */
+var BROWSE_SORTS=[["POPULARITY_DESC","Popular"],["TRENDING_DESC","Trending"],
+  ["SCORE_DESC","Top rated"],["START_DATE_DESC","Newest"]];
+var browseAll=false;
+var browse={key:"", sort:"POPULARITY_DESC", page:0, done:false, busy:false,
+  rows:[], seen:{}, token:0, scrollY:0, io:null};
+
+function browseTitle(){
+  var kind={KR:"Manhwa",JP:"Manga",CN:"Manhua"}[curFilter]||"Comics";
+  return curGenre ? curGenre+" "+kind.toLowerCase() : (curFilter ? kind : "All comics");
+}
+
+function browseTile(m,i){
+  return '<button class="tile" data-i="'+i+'">'+
+    (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'" referrerpolicy="no-referrer">':'<div class="ph"></div>')+
+    '<h4>'+esc(m.title)+'</h4><p class="meta">'+esc(m.kind||"")+
+    (m.chapters?" · "+m.chapters+" ch":"")+
+    (statusInfo(m.status).key==="complete"?' · done':"")+'</p></button>';
+}
+
+function wireBrowseTiles(from){
+  var grid=document.getElementById("browsegrid");
+  if(!grid) return;
+  var tiles=grid.querySelectorAll(".tile");
+  for(var k=from;k<tiles.length;k++)
+    tiles[k].onclick=(function(m){return function(){
+      // Where the reader was, measured from the top of the grid: the rows
+      // above it (recently viewed, updates) can change height while away.
+      browse.scrollY=-grid.getBoundingClientRect().top;
+      showDetail(m,null);
+    };})(browse.rows[+tiles[k].dataset.i]);
+}
+
+function loadBrowse(){
+  stopRail();
+  trendToken++;
+  var el=document.getElementById("trend");
+  if(!el) return;
+  var key=curFilter+"|"+curGenre+"|"+browse.sort;
+  var back = key===browse.key && browse.rows.length;   // returning from a title
+  if(!back){
+    if(browse.io) browse.io.disconnect();
+    browse={key:key, sort:browse.sort, page:0, done:false, busy:false, rows:[], seen:{},
+      token:browse.token+1, scrollY:0, io:null};
+  }
+  el.innerHTML='<h3>'+esc(browseTitle())+'</h3>'+
+    (browseAll && !curFilter && !curGenre
+      ? '<button class="more" id="totrend" style="margin:-6px 0 10px">&lsaquo; Back to trending</button>' : '')+
+    chips(curFilter)+
+    '<div class="chips sorts">'+BROWSE_SORTS.map(function(o){
+      return '<button class="chip s" data-s="'+o[0]+'" aria-pressed="'+(browse.sort===o[0])+'">'+o[1]+'</button>';
+    }).join("")+'</div>'+
+    '<div class="rail grid"><div class="track" id="browsegrid">'+
+      (back ? browse.rows.map(browseTile).join("")
+            : Array(9).fill('<div class="tile"><div class="skel"></div></div>').join(""))+
+    '</div></div>'+
+    '<p class="sub" id="browsemore" style="text-align:center;margin:16px 0"></p>';
+  wireChips();
+  var tt=document.getElementById("totrend");
+  if(tt) tt.onclick=function(){ browseAll=false; loadTrending("", ""); };
+  Array.prototype.forEach.call(el.querySelectorAll(".chip.s"), function(b){
+    b.onclick=function(){ browse.sort=b.dataset.s; browse.key=""; loadBrowse(); };
+  });
+  if(back){
+    wireBrowseTiles(0);
+    if(browse.done) browseEnd();
+    var restore=function(){
+      var grid=document.getElementById("browsegrid");
+      if(grid) window.scrollTo(0, grid.getBoundingClientRect().top+window.scrollY+browse.scrollY);
+    };
+    // Again once the rows above have settled.
+    requestAnimationFrame(restore);
+    setTimeout(restore, 400);
+  }
+  // Keep loading as the bottom comes near.
+  var more=document.getElementById("browsemore");
+  if(typeof IntersectionObserver!=="undefined"){
+    browse.io=new IntersectionObserver(function(entries){
+      if(entries.some(function(e){ return e.isIntersecting; })) browseNext();
+    }, {rootMargin:"900px 0px"});
+    browse.io.observe(more);
+  }
+  if(!back) browseNext();
+}
+
+function browseEnd(){
+  var more=document.getElementById("browsemore");
+  if(more){ more.className="sub"; more.textContent=browse.rows.length
+    ? "That's everything here — "+browse.rows.length+" titles."
+    : "Nothing here yet. Try another filter."; }
+}
+
+function browseNext(){
+  if(browse.busy || browse.done) return;
+  browse.busy=true;
+  var token=browse.token, page=browse.page+1;
+  var more=document.getElementById("browsemore");
+  if(more){ more.className="sub ldg"; more.textContent="Loading more…"; }
+  withRetry(function(){ return alBrowse(curFilter, curGenre, browse.sort, page); })
+    .then(function(rows){
+      var full = rows.length>=BROWSE_PAGE;
+      return healthFilter(dropAdult(rows)).then(function(kept){ return {kept:kept, full:full}; });
+    })
+    .then(function(r){
+      if(token!==browse.token) return;
+      browse.busy=false; browse.page=page;
+      var fresh=r.kept.filter(function(m){
+        var id=m.id||m.title; if(browse.seen[id]) return false; browse.seen[id]=1; return true;
+      });
+      var grid=document.getElementById("browsegrid");
+      if(!grid) return;
+      if(page===1) grid.innerHTML="";
+      var start=browse.rows.length;
+      browse.rows=browse.rows.concat(fresh);
+      grid.insertAdjacentHTML("beforeend", fresh.map(function(m,i){ return browseTile(m,start+i); }).join(""));
+      wireBrowseTiles(start);
+      if(!r.full){ browse.done=true; browseEnd(); return; }
+      var m=document.getElementById("browsemore");
+      if(m){ m.className="sub"; m.textContent=""; }
+      // A page that the filters emptied: go straight on to the next.
+      if(!fresh.length) browseNext();
+    })
+    .catch(function(){
+      if(token!==browse.token) return;
+      browse.busy=false;
+      var m=document.getElementById("browsemore");
+      if(m){ m.className="sub"; m.innerHTML='Couldn\'t load more. <button class="more" id="browseretry">Try again</button>';
+        document.getElementById("browseretry").onclick=browseNext; }
+    });
 }
 
 /* Search-as-you-type. Typing "over" should offer Overgeared, not tell
@@ -2036,8 +2196,9 @@ function wireChips(){
       el.onclick=function(){
         // Origin chips carry data-c, genre chips data-g. Changing one
         // leaves the other alone, so the two filters combine.
+        if(el.dataset.s!==undefined) return;   // Browse order, wired by loadBrowse
         if(el.dataset.g!==undefined) loadTrending(curFilter, el.dataset.g);
-        else loadTrending(el.dataset.c, curGenre);
+        else { if(!el.dataset.c) browseAll=false; loadTrending(el.dataset.c, curGenre); }
       };
     })(cs[i]);
   }
