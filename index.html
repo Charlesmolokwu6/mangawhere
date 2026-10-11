@@ -1970,6 +1970,7 @@ function loadBrowse(){
   if(!el) return;
   var key=curFilter+"|"+curGenre+"|"+browse.sort;
   var back = key===browse.key && browse.rows.length;   // returning from a title
+  navPush("browse", function(){ browseAll=false; curFilter=""; curGenre=""; loadTrending("", ""); });
   if(!back){
     if(browse.io) browse.io.disconnect();
     browse={key:key, sort:browse.sort, page:0, done:false, busy:false, rows:[], seen:{},
@@ -1989,7 +1990,7 @@ function loadBrowse(){
     '<p class="sub" id="browsemore" style="text-align:center;margin:16px 0"></p>';
   wireChips();
   var tt=document.getElementById("totrend");
-  if(tt) tt.onclick=function(){ browseAll=false; loadTrending("", ""); };
+  if(tt) tt.onclick=function(){ navBack(function(){ browseAll=false; loadTrending("", ""); }); };
   Array.prototype.forEach.call(el.querySelectorAll(".chip.s"), function(b){
     b.onclick=function(){ browse.sort=b.dataset.s; browse.key=""; loadBrowse(); };
   });
@@ -2198,7 +2199,10 @@ function wireChips(){
         // leaves the other alone, so the two filters combine.
         if(el.dataset.s!==undefined) return;   // Browse order, wired by loadBrowse
         if(el.dataset.g!==undefined) loadTrending(curFilter, el.dataset.g);
-        else { if(!el.dataset.c) browseAll=false; loadTrending(el.dataset.c, curGenre); }
+        else {
+          if(!el.dataset.c){ browseAll=false; if(!curGenre) navDrop("browse"); }
+          loadTrending(el.dataset.c, curGenre);
+        }
       };
     })(cs[i]);
   }
@@ -2564,13 +2568,16 @@ function render(r){
   var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
   // A title opened from a search gets a Back button like every other page:
   // to the home page, or from a "Which one is it?" pick, back to that list.
-  function searchBack(onBack){
+  function searchBack(onBack, kind){
+    navPush(kind||"search", onBack);
     out.insertAdjacentHTML("afterbegin", '<button class="back" id="sbk">← Back</button>');
-    document.getElementById("sbk").onclick=function(){ onBack(); window.scrollTo(0,0); };
+    document.getElementById("sbk").onclick=function(){ navBack(onBack); window.scrollTo(0,0); };
   }
   if(sure){ out.innerHTML=head+detailHtml(top.m,r.parsed.chapter);
             fillChapters(top.m,r.parsed.chapter);
             searchBack(function(){ setTab(curTab); }); return; }
+  // The phone's Back from this list goes home, like Back from a result.
+  navPush("search", function(){ setTab(curTab); });
   var picks=scored.slice(0,5);
   out.innerHTML=head+'<div class="note"><p><strong>Which one is it?</strong>Not certain — '+
     'pick the right title.</p></div>'+
@@ -2586,7 +2593,7 @@ function render(r){
     els[i].onclick=(function(m){return function(){
       out.innerHTML=head+detailHtml(m,r.parsed.chapter);
       fillChapters(m,r.parsed.chapter);
-      searchBack(function(){ render(r); });
+      searchBack(function(){ render(r); }, "pick");
       window.scrollTo(0,0);};})(scored[+els[i].dataset.i].m);
 
   // Jikan/AniList/MangaDex only know the title exists — whether it's
@@ -2622,13 +2629,15 @@ function showDetail(m,ch,solo){
   host.innerHTML='<button class="back" id="bk">← Back</button>'+detailHtml(m,ch);
   fillChapters(m,ch);
   // Back should return where they came from, the way an app does.
-  document.getElementById("bk").onclick=function(){
+  var back=function(){
     // Drop ?m= so Back doesn't bounce straight back into this page.
     if(location.search.indexOf("m=")>-1 && history.replaceState){
-      history.replaceState({}, "", location.pathname);
+      history.replaceState(history.state, "", location.pathname);
     }
     setTab(from);
   };
+  navPush("detail", back);
+  document.getElementById("bk").onclick=function(){ navBack(back); };
   window.scrollTo(0,0);
 }
 
@@ -3443,7 +3452,8 @@ function readerView(url, exclude){
     '<div class="readernavslot"></div>'+
     commentsHtml()+
     recommendationsHtml();
-  document.getElementById("rbk").onclick=readerState.back;
+  navPush("reader", readerState.back);
+  document.getElementById("rbk").onclick=function(){ navBack(readerState.back); };
   if(hasChapters) wireChapterPicker();
   window.scrollTo(0,0);
   renderReaderNav();
@@ -4713,7 +4723,7 @@ function authView(mode, thenTrack){
       ? 'New here? <button class="linkish" id="au-swap">Create an account</button>'
       : 'Already have one? <button class="linkish" id="au-swap">Sign in</button>')+'</p>';
 
-  document.getElementById("abk").onclick=function(){ setTab("home"); };
+  document.getElementById("abk").onclick=function(){ navBack(function(){ setTab("home"); }); };
   document.getElementById("au-swap").onclick=function(){
     authView(login?"signup":"login", thenTrack);
   };
@@ -5105,7 +5115,7 @@ function accountView(){
       '</div>'+
       storytellerSettingsHtml();
     wireStorytellerSettings();
-    document.getElementById("ab").onclick=function(){ setTab("home"); };
+    document.getElementById("ab").onclick=function(){ navBack(function(){ setTab("home"); }); };
     document.getElementById("go-signup").onclick=function(){ authView("signup"); };
     document.getElementById("go-login").onclick=function(){ authView("login"); };
     window.scrollTo(0,0);
@@ -5144,7 +5154,7 @@ function accountView(){
     '<button class="danger" id="signout">Sign out</button>';
 
   wireStorytellerSettings();
-  document.getElementById("ab").onclick=function(){ setTab("home"); };
+  document.getElementById("ab").onclick=function(){ navBack(function(){ setTab("home"); }); };
   document.getElementById("signout").onclick=signOut;
   wireAvatarUpload();
 
@@ -5288,7 +5298,7 @@ function listView(){
         '<p class="hint">Already have one? '+
           '<button class="linkish" id="llogin">Sign in</button></p>'+
       '</div>';
-    document.getElementById("lb").onclick=function(){ setTab("home"); };
+    document.getElementById("lb").onclick=function(){ navBack(function(){ setTab("home"); }); };
     document.getElementById("lsignup").onclick=function(){ authView("signup"); };
     document.getElementById("llogin").onclick=function(){ authView("login"); };
     window.scrollTo(0,0);
@@ -5305,7 +5315,7 @@ function listView(){
         'the moment a new chapter is out.</p>'+
         '<button class="primary" id="lfind">Find something to read</button>'+
       '</div>';
-    document.getElementById("lb").onclick=function(){ setTab("home"); };
+    document.getElementById("lb").onclick=function(){ navBack(function(){ setTab("home"); }); };
     document.getElementById("lfind").onclick=function(){ setTab("search"); };
     window.scrollTo(0,0);
     return;
@@ -5322,7 +5332,7 @@ function listView(){
       l.map(function(x,i){ return listRow(x,i); }).join("")+
     '</div>';
 
-  document.getElementById("lb").onclick=function(){ setTab("home"); };
+  document.getElementById("lb").onclick=function(){ navBack(function(){ setTab("home"); }); };
   wireListRows();
   refreshList(l);
   window.scrollTo(0,0);
@@ -5412,6 +5422,55 @@ function latestFor(x){
    were opened from lit, the way a native app does. */
 var curTab="home";
 
+/* ---- the phone's Back button ----
+   The site swaps screens without loading new pages, so the phone's Back
+   button found nothing to go back to and closed the site. Every screen
+   with a "← Back" now also adds a step to the browser's history holding
+   what that Back does, and the phone's Back runs it. The on-screen Back
+   goes through the same history (navBack), so the two never disagree.
+   Screens of the same kind (the next chapter, another sort order) replace
+   their step instead of piling up. */
+var navStack=[], navReplaying=false, navSkip=0, navLater=0;
+function navPush(kind, back){
+  if(navReplaying) return;
+  var top=navStack[navStack.length-1];
+  if(top && top.kind===kind){ top.back=back; return; }
+  navStack.push({kind:kind, back:back});
+  // Still stepping back from navDrop/navClear: add the entry once that lands,
+  // or the step back would swallow it.
+  if(navSkip){ navLater++; return; }
+  try{ history.pushState({mw:navStack.length}, ""); }catch(e){}
+}
+function navBack(fallback){
+  if(navStack.length) history.back();
+  else if(fallback) fallback();
+}
+// Leave a screen without its Back (e.g. Everything instead of Back): drop its step.
+function navDrop(kind){
+  var top=navStack[navStack.length-1];
+  if(navReplaying || !top || top.kind!==kind) return;
+  navStack.pop(); navSkip++;
+  history.back();
+}
+// Home tab: back at the start, so drop every step (one popstate for all of them).
+function navClear(){
+  var n=navStack.length;
+  if(navReplaying || !n) return;
+  navStack=[]; navSkip++;
+  history.go(-n);
+}
+window.addEventListener("popstate", function(){
+  if(navSkip){
+    if(--navSkip) return;
+    for(; navLater>0; navLater--) try{ history.pushState({mw:navStack.length}, ""); }catch(e){}
+    return;
+  }
+  var top=navStack.pop();
+  if(!top) return;
+  navReplaying=true;
+  try{ top.back(); window.scrollTo(0,0); } finally { navReplaying=false; }
+});
+
 function setTab(tab){
   curTab=tab;
   var els=document.querySelectorAll(".tab");
@@ -5446,7 +5505,11 @@ function wireGenreToggle(){
 (function wireTabs(){
   var els=document.querySelectorAll(".tab");
   for(var i=0;i<els.length;i++)
-    els[i].onclick=(function(t){ return function(){ setTab(t); }; })(els[i].dataset.tab);
+    els[i].onclick=(function(t){ return function(){
+      if(t!=="home") navPush("tab", function(){ setTab("home"); });
+      else navClear();
+      setTab(t);
+    }; })(els[i].dataset.tab);
 })();
 
 /* ---- install prompt ----
