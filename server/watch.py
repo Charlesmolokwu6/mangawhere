@@ -5,11 +5,12 @@ from typing import Any, Dict, List
 from . import db
 
 
-def upsert(user_id: int, payload: Dict[str, Any]) -> None:
-    title = payload.get("title") or {}
-    key = str(title.get("key") or "")
+def upsert(user_id: int, payload: Dict[str, Any]) -> bool:
+    """Save a tracked title; False (nothing saved) when it has no key."""
+    title = payload.get("title")
+    key = str(title.get("key") or "") if isinstance(title, dict) else ""
     if not key:
-        return
+        return False
 
     conn = db.get_connection()
     try:
@@ -44,6 +45,7 @@ def upsert(user_id: int, payload: Dict[str, Any]) -> None:
         conn.commit()
     finally:
         conn.close()
+    return True
 
 
 def remove(user_id: int, key: str) -> None:

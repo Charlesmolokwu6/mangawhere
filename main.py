@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -13,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
+from scrapers.core import NotAPublicSite
 from scrapers import reddit, ytpost
 from server import auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
 
@@ -125,6 +127,72 @@ def _require_user(authorization: Optional[str]):
     if not user:
         raise HTTPException(status_code=401, detail="Sign in required")
     return user
+
+
+# ---- per-address limits on the costly endpoints ----
+#
+# Without them one script could keep the server scraping, hashing
+# passwords or posting comments as fast as it can send. They're generous
+# on purpose: whole neighbourhoods on one mobile network often share one
+# address (carrier NAT), so the aim is to stop hammering, not real readers.
+# Limits are per minute, per address, per group of endpoints.
+RATE_LIMITS = {
+    "scrape": (120, ("/api/find", "/api/scrape", "/api/series", "/api/trim", "/api/narrate/")),
+    "lookup": (60, ("/api/video-lookup", "/api/post-lookup", "/api/reddit-", "/api/post-image-title")),
+    "pictures": (240, ("/api/post-picture-title",)),
+    "account": (20, ("/api/register", "/api/login", "/api/forgot-password", "/api/reset-password",
+                     "/api/oauth/", "/api/avatar")),
+    "write": (30, ("/api/comments", "/api/client-log")),
+}
+_RATE_WINDOW = 60.0
+_rate_counts: dict = {}
+
+
+def _rate_group(method: str, path: str) -> Optional[str]:
+    for group, (_, prefixes) in RATE_LIMITS.items():
+        if path.startswith(prefixes):
+            # Reading comments and photos is cheap; only writing them counts.
+            if group in ("write", "account") and method == "GET":
+                return None
+            return group
+    return None
+
+
+@app.middleware("http")
+async def _rate_limit(request: Request, call_next):
+    group = _rate_group(request.method, request.url.path)
+    if group is None or request.method == "OPTIONS":
+        return await call_next(request)
+    address = request.client.host if request.client else "?"
+    now = time.monotonic()
+    key = (address, group)
+    started, count = _rate_counts.get(key, (now, 0))
+    if now - started >= _RATE_WINDOW:
+        started, count = now, 0
+    count += 1
+    _rate_counts[key] = (started, count)
+    if len(_rate_counts) > 50_000:   # forget finished windows
+        for k in [k for k, (t, _) in _rate_counts.items() if now - t >= _RATE_WINDOW]:
+            _rate_counts.pop(k, None)
+    if count > RATE_LIMITS[group][0]:
+        wait = max(1, int(_RATE_WINDOW - (now - started)))
+        # This layer sits outside the CORS one, so the page can only read
+        # the answer if it carries the CORS header itself.
+        return JSONResponse({"detail": "Too many requests. Wait a minute and try again."},
+                            status_code=429,
+                            headers={"Retry-After": str(wait), "Access-Control-Allow-Origin": "*"})
+    return await call_next(request)
+
+
+async def _json_object(request: Request) -> dict:
+    """The request's JSON body as an object; a 400, not a 500, for anything else."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Expected JSON.")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object.")
+    return payload
 
 
 def _require_absolute_url(url: str) -> None:
@@ -282,6 +350,8 @@ async def api_scrape(url: str = Query(..., description="Chapter URL to scrape"))
 
     try:
         payload = await scrape_cached(url)
+    except NotAPublicSite:
+        raise HTTPException(status_code=400, detail="That isn't a link to a public site.")
     except Exception:
         raise HTTPException(
             status_code=502, detail="Couldn't reach that page — the site may be blocking us."
@@ -308,6 +378,8 @@ async def api_series(url: str = Query(..., description="Series page URL to list 
             "series", url, SERIES_TTL, lambda: scrape_series(url),
             keep=lambda p: bool(p and p.get("chapters")),
         )
+    except NotAPublicSite:
+        raise HTTPException(status_code=400, detail="That isn't a link to a public site.")
     except Exception:
         raise HTTPException(
             status_code=502, detail="Couldn't reach that page — the site may be blocking us."
@@ -582,13 +654,16 @@ def _attach_endpoint_from_payload(result: dict, payload: dict) -> None:
 
 @app.post("/api/register")
 async def api_register(request: Request):
-    payload = await request.json()
+    payload = await _json_object(request)
     turnstile_configured = turnstile.is_configured()
     turnstile_ok = (
         await turnstile.verify(payload.get("turnstile_token")) if turnstile_configured else True
     )
-    result = auth.register(
-        payload, captcha.verify, skip_captcha=turnstile_configured, turnstile_ok=turnstile_ok
+    # Password hashing (PBKDF2, ~0.1s of CPU) runs off the event loop, or
+    # every sign-up and log-in stalls every other request while it hashes.
+    result = await asyncio.to_thread(
+        auth.register, payload, captcha.verify,
+        skip_captcha=turnstile_configured, turnstile_ok=turnstile_ok,
     )
     _attach_endpoint_from_payload(result, payload)
     return JSONResponse(result)
@@ -604,21 +679,23 @@ async def api_forgot_password(payload: dict):
 
 @app.post("/api/reset-password")
 async def api_reset_password(payload: dict):
-    result = password_reset.reset_password(str(payload.get("token") or ""), str(payload.get("password") or ""))
+    result = await asyncio.to_thread(
+        password_reset.reset_password, str(payload.get("token") or ""), str(payload.get("password") or "")
+    )
     return JSONResponse(result, status_code=200 if "token" in result else 400)
 
 
 @app.post("/api/login")
 async def api_login(request: Request):
-    payload = await request.json()
-    result = auth.login(payload)
+    payload = await _json_object(request)
+    result = await asyncio.to_thread(auth.login, payload)
     _attach_endpoint_from_payload(result, payload)
     return JSONResponse(result)
 
 
 @app.post("/api/oauth/google")
 async def api_oauth_google(request: Request):
-    payload = await request.json()
+    payload = await _json_object(request)
     if not oauth.google_configured():
         raise HTTPException(status_code=503, detail="Google sign-in isn't set up on this server.")
     profile = await oauth.verify_google(payload.get("id_token") or "")
@@ -631,7 +708,7 @@ async def api_oauth_google(request: Request):
 
 @app.post("/api/oauth/facebook")
 async def api_oauth_facebook(request: Request):
-    payload = await request.json()
+    payload = await _json_object(request)
     if not oauth.facebook_configured():
         raise HTTPException(status_code=503, detail="Facebook sign-in isn't set up on this server.")
     profile = await oauth.verify_facebook(payload.get("access_token") or "")
@@ -798,7 +875,7 @@ async def api_narrate_lines(request: Request):
     sound effects and scan credits dropped, each with the top of its bubble
     on the page (y) to scroll to. Text only: milliseconds."""
     try:
-        payload = await request.json()
+        payload = await _json_object(request)
     except Exception:
         raise HTTPException(status_code=400, detail="Expected JSON.")
     raw = payload.get("lines") if isinstance(payload, dict) else None
@@ -837,7 +914,7 @@ async def api_narrate_audio(job: str):
 
 @app.post("/api/subscribe")
 async def api_subscribe(request: Request, authorization: Optional[str] = Header(default=None)):
-    payload = await request.json()
+    payload = await _json_object(request)
     endpoint = payload.get("endpoint")
     keys = payload.get("keys") or {}
     if not endpoint or not keys.get("p256dh") or not keys.get("auth"):
@@ -849,7 +926,7 @@ async def api_subscribe(request: Request, authorization: Optional[str] = Header(
 
 @app.post("/api/test-push")
 async def api_test_push(request: Request):
-    payload = await request.json()
+    payload = await _json_object(request)
     endpoint = payload.get("endpoint")
     if not endpoint:
         return {"ok": False, "error": "no endpoint"}
@@ -874,8 +951,9 @@ async def api_captcha():
 @app.post("/api/watch")
 async def api_watch(request: Request, authorization: Optional[str] = Header(default=None)):
     user = _require_user(authorization)
-    payload = await request.json()
-    watch.upsert(user["id"], payload)
+    payload = await _json_object(request)
+    if not watch.upsert(user["id"], payload):
+        raise HTTPException(status_code=400, detail="That title couldn't be tracked (no title key).")
     # If this browser already has push enabled, attach it for delivery —
     # tracking works without it, but a device that's already subscribed
     # shouldn't need a separate step to start actually receiving alerts.
@@ -886,7 +964,7 @@ async def api_watch(request: Request, authorization: Optional[str] = Header(defa
 @app.post("/api/unwatch")
 async def api_unwatch(request: Request, authorization: Optional[str] = Header(default=None)):
     user = _require_user(authorization)
-    payload = await request.json()
+    payload = await _json_object(request)
     watch.remove(user["id"], payload.get("key") or "")
     return {"ok": True}
 
@@ -894,7 +972,7 @@ async def api_unwatch(request: Request, authorization: Optional[str] = Header(de
 @app.post("/api/mark-read")
 async def api_mark_read(request: Request, authorization: Optional[str] = Header(default=None)):
     user = _require_user(authorization)
-    payload = await request.json()
+    payload = await _json_object(request)
     watch.mark_read(user["id"], payload.get("key") or "")
     return {"ok": True}
 
@@ -918,7 +996,7 @@ async def api_comments_list(
 @app.post("/api/comments")
 async def api_comments_post(request: Request, authorization: Optional[str] = Header(default=None)):
     user = _require_user(authorization)
-    payload = await request.json()
+    payload = await _json_object(request)
     title_key = str(payload.get("title") or "")
     chapter_key = str(payload.get("chapter") or "")
     body = str(payload.get("body") or "")
