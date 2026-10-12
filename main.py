@@ -676,11 +676,24 @@ async def api_avatar(
 
     try:
         avatar_url = await media.upload_avatar(user["id"], content, file.filename or "avatar")
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"[avatar] upload failed for user {user['id']}: {e!r}")
+        raise HTTPException(status_code=503, detail="Couldn't save your photo right now. Try again.")
 
     auth.set_avatar(user["id"], avatar_url)
     return {"avatar_url": avatar_url}
+
+
+@app.get("/api/avatar/{user_id}")
+async def api_avatar_image(user_id: int):
+    image = await asyncio.to_thread(media.load_avatar, user_id)
+    if not image:
+        raise HTTPException(status_code=404, detail="Not found")
+    # The address carries ?v=<time saved>, so a new photo gets a new one.
+    return Response(image, media_type="image/webp",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @app.get("/api/config")

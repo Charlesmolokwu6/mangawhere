@@ -323,14 +323,40 @@ class AvatarApiTests(MainTestCase):
         )
         self.assertEqual(r.status_code, 400)
 
-    def test_upload_without_cloudinary_configured_is_a_clear_503(self):
+    def test_without_cloudinary_the_photo_is_kept_here_small_and_square(self):
+        import io
+
+        from PIL import Image
+
+        token = self._token()
+        photo = io.BytesIO()
+        Image.new("RGB", (1200, 800), (200, 40, 40)).save(photo, "JPEG")
+        r = self.client.post(
+            "/api/avatar",
+            files={"file": ("me.jpg", photo.getvalue(), "image/jpeg")},
+            headers={"Authorization": "Bearer " + token},
+        )
+        self.assertEqual(r.status_code, 200)
+        url = r.json()["avatar_url"]
+        self.assertRegex(url, r"^/api/avatar/\d+\?v=\d+$")
+        me = self.client.get("/api/me", headers={"Authorization": "Bearer " + token}).json()
+        self.assertEqual(me["avatar_url"], url)
+        served = self.client.get(url)
+        self.assertEqual(served.headers["content-type"], "image/webp")
+        self.assertIn("immutable", served.headers["cache-control"])
+        self.assertEqual(Image.open(io.BytesIO(served.content)).size, (256, 256))
+        self.assertLess(len(served.content), 30_000)
+        self.assertEqual(self.client.get("/api/avatar/999").status_code, 404)
+
+    def test_a_broken_picture_is_a_clear_400(self):
         token = self._token()
         r = self.client.post(
             "/api/avatar",
             files={"file": ("a.png", b"\x89PNG", "image/png")},
             headers={"Authorization": "Bearer " + token},
         )
-        self.assertEqual(r.status_code, 503)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("couldn't be read", r.json()["detail"])
 
     def test_me_reports_avatar_url(self):
         token = self._token()

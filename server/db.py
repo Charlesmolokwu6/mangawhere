@@ -121,6 +121,12 @@ CREATE TABLE IF NOT EXISTS title_health (
 CREATE INDEX IF NOT EXISTS idx_title_health_status ON title_health (status, checked_at);
 DROP TABLE IF EXISTS promo_banners;
 DROP TABLE IF EXISTS banner_candidates;
+CREATE TABLE IF NOT EXISTS avatars (
+    user_id INTEGER PRIMARY KEY,
+    image TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS promo_notices (
     profile TEXT PRIMARY KEY,
     created_at REAL NOT NULL

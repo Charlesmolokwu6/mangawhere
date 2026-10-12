@@ -1764,6 +1764,8 @@ function avatarHtml(name, email, avatarUrl, size){
   var sizeStyle = size===44 ? "" :
     "width:"+size+"px;height:"+size+"px;font-size:"+Math.round(size*0.41)+"px;";
   if(avatarUrl){
+    // Photos kept by our own server come as a path on it.
+    if(/^\/api\/avatar\//.test(avatarUrl)) avatarUrl=API_BASE+avatarUrl;
     return '<img class="avatar" style="'+sizeStyle+'object-fit:cover" '+
       'src="'+esc(avatarUrl)+'" referrerpolicy="no-referrer" alt="">';
   }
