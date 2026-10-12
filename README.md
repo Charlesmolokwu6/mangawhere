@@ -91,6 +91,20 @@ Optional: set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` and
 `CLOUDINARY_API_SECRET` and photos go to [Cloudinary](https://cloudinary.com)
 instead, with only its URL stored in `users.avatar_url`.
 
+## YouTube video details (YOUTUBE_API_KEY)
+
+YouTube refuses yt-dlp and even its own pages to server addresses ("Sign
+in to confirm you're not a bot"), so a video with embedding turned off
+can't be read that way. With `YOUTUBE_API_KEY` set, the server asks
+YouTube's official Data API for the title and full description instead
+(free: 10,000 lookups a day, 1 per video).
+
+1. console.cloud.google.com → create a project (any name).
+2. APIs & Services → Library → **YouTube Data API v3** → Enable.
+3. APIs & Services → Credentials → Create credentials → API key. Restrict
+   it to the YouTube Data API v3.
+4. Set it as `YOUTUBE_API_KEY` in Render's environment variables.
+
 ## Video-link audio transcription
 
 When someone pastes a TikTok/YouTube link and the caption alone doesn't

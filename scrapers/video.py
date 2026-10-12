@@ -219,12 +219,57 @@ async def youtube_page_metadata(url: str) -> dict:
     return {}
 
 
+# YouTube's official Data API: title and full description for any public
+# video, never refused as a bot, free up to 10,000 lookups a day (one
+# lookup costs 1). Used first for YouTube links when YOUTUBE_API_KEY is set.
+YOUTUBE_API = "https://www.googleapis.com/youtube/v3/videos"
+_DURATION = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
+
+
+def _iso_seconds(value: str) -> int:
+    m = _DURATION.fullmatch(value or "")
+    if not m:
+        return 0
+    h, mi, se = (int(x or 0) for x in m.groups())
+    return h * 3600 + mi * 60 + se
+
+
+async def youtube_api_metadata(url: str) -> dict:
+    key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    video_id = youtube_id(url)
+    if not key or not video_id:
+        return {}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.get(YOUTUBE_API, params={"part": "snippet,contentDetails", "id": video_id, "key": key})
+        r.raise_for_status()
+    items = r.json().get("items") or []
+    if not items:
+        return {}
+    snippet = items[0].get("snippet") or {}
+    return {
+        "title": snippet.get("title") or "",
+        "description": snippet.get("description") or "",
+        "duration": _iso_seconds((items[0].get("contentDetails") or {}).get("duration", "")),
+    }
+
+
 async def lookup(url: str) -> dict:
     """Everything yt-dlp/whisper can pull for a video link: title,
     description, and (when short enough) a spoken-audio transcript. Never
     raises — a failed metadata fetch just means an empty result, which the
     caller treats the same as "nothing extra found"."""
     blocked = False
+    official = {}
+    if youtube_id(url):
+        try:
+            official = await youtube_api_metadata(url)
+        except Exception as e:
+            print(f"[video] YouTube Data API failed for {url}: {e}")
+    if official.get("title") or official.get("description"):
+        # The audio is still worth a try for short clips: some only say it.
+        transcript = await transcribe_audio(url, official.get("duration") or 0)
+        return {"title": official.get("title", ""), "description": official.get("description", ""),
+                "transcript": transcript or ""}
     try:
         meta = await fetch_metadata(url)
     except Exception as e:
@@ -234,6 +279,8 @@ async def lookup(url: str) -> dict:
         if youtube_id(url):
             try:
                 meta = await youtube_page_metadata(url) or meta
+                if not (meta.get("title") or meta.get("description")):
+                    print(f"[video] watch page had no video details for {url} (bot check page?)")
             except Exception as page_error:
                 print(f"[video] watch page fallback failed for {url}: {page_error}")
 
