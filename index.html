@@ -2706,11 +2706,11 @@ function render(r){
       // The embed player enforces the exact same restriction as oEmbed —
       // offering it here would just be a second, slower way to fail.
       (code==="embeddisabled" ? "" : watchHtml(r))+
-      '<div class="note"><p><strong>Test the matching anyway</strong>'+
-      'Copy the video\'s caption text and paste it here — everything after the caption '+
-      'fetch is identical, so this still proves the parser and matcher work.</p></div>'+
-      '<div class="paste"><input id="capin" placeholder="Paste the video caption text">'+
-      '<button id="capgo">Parse</button></div><div id="capout"></div>';
+      '<div class="note"><p><strong>Paste the video\u2019s caption instead</strong>'+
+      'Copy the text under the video (its caption or description) and paste it here, '+
+      'and we\u2019ll look for the manga name in it.</p></div>'+
+      '<div class="paste"><input id="capin" placeholder="Paste the caption text">'+
+      '<button id="capgo">Find</button></div><div id="capout"></div>';
     var ci=document.getElementById("capin");
     function capRun(){
       var text=ci.value.trim(); if(!text) return;
@@ -5176,6 +5176,12 @@ function getServerConfig(){
   }
   return serverConfig;
 }
+// The Turnstile site key alone doesn't switch sign-up over: the server
+// needs its secret too. Until it says it has one, show the built-in
+// captcha, or every sign-up would fail its check.
+getServerConfig().then(function(cfg){
+  if(cfg && cfg.turnstile===false) TURNSTILE_SITE_KEY="";
+});
 
 function forgotView(prefill){
   stopRail();

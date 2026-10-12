@@ -16,11 +16,14 @@ returns whatever it already has rather than raising — the caller falls
 back to the manual-paste box either way.
 """
 import asyncio
+import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Optional
 
+import httpx
 import yt_dlp
 
 # Shorts and clips are the target here — a full episode's audio would take
@@ -152,18 +155,90 @@ async def transcribe_audio(url: str, duration_seconds: int) -> Optional[str]:
         return None
 
 
+# YouTube refuses yt-dlp from server addresses ("Sign in to confirm you're
+# not a bot") but still serves the video's own page, whose player data has
+# the title and the full description, where uploaders write
+# "Manhwa Name: ...". Only ever fetched from www.youtube.com, by video id.
+_YT_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\.be/)([A-Za-z0-9_-]{11})")
+_PLAYER_RESPONSE = re.compile(r"ytInitialPlayerResponse\s*=\s*(\{.*?\});\s*(?:var |</script>)", re.S)
+
+
+def youtube_id(url: str) -> Optional[str]:
+    m = _YT_ID.search(url or "")
+    return m.group(1) if m else None
+
+
+def parse_watch_page(html: str) -> dict:
+    m = _PLAYER_RESPONSE.search(html or "")
+    if not m:
+        return {}
+    try:
+        details = json.loads(m.group(1)).get("videoDetails") or {}
+    except ValueError:
+        return {}
+    try:
+        duration = int(details.get("lengthSeconds") or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    return {
+        "title": details.get("title") or "",
+        "description": details.get("shortDescription") or "",
+        "duration": duration,
+    }
+
+
+async def youtube_page_metadata(url: str) -> dict:
+    video_id = youtube_id(url)
+    if not video_id:
+        return {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    # SOCS skips the EU cookie-consent page, which has no video data. The
+    # Shorts page and the watch page carry the same data, and one is
+    # sometimes rate-limited when the other isn't, so both are tried.
+    pages = [f"https://www.youtube.com/shorts/{video_id}", f"https://www.youtube.com/watch?v={video_id}"]
+    if "/shorts/" not in url:
+        pages.reverse()
+    last_error: Optional[Exception] = None
+    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, cookies={"SOCS": "CAI"}) as client:
+        for page in pages:
+            try:
+                r = await client.get(page, headers=headers)
+                r.raise_for_status()
+            except httpx.HTTPError as e:
+                last_error = e
+                continue
+            meta = parse_watch_page(r.text)
+            if meta.get("title") or meta.get("description"):
+                return meta
+    if last_error:
+        raise last_error
+    return {}
+
+
 async def lookup(url: str) -> dict:
     """Everything yt-dlp/whisper can pull for a video link: title,
     description, and (when short enough) a spoken-audio transcript. Never
     raises — a failed metadata fetch just means an empty result, which the
     caller treats the same as "nothing extra found"."""
+    blocked = False
     try:
         meta = await fetch_metadata(url)
     except Exception as e:
         print(f"[video] metadata fetch failed for {url}: {e}")
+        blocked = True
         meta = {"title": "", "description": "", "duration": 0}
+        if youtube_id(url):
+            try:
+                meta = await youtube_page_metadata(url) or meta
+            except Exception as page_error:
+                print(f"[video] watch page fallback failed for {url}: {page_error}")
 
-    transcript = await transcribe_audio(url, meta.get("duration") or 0)
+    # When yt-dlp was refused, downloading the audio would be refused too.
+    transcript = None if blocked else await transcribe_audio(url, meta.get("duration") or 0)
 
     return {
         "title": meta.get("title", ""),
