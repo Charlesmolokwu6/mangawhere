@@ -50,16 +50,19 @@ function say(label) { postMessage({type: "progress", label: label}); }
 
 // Model files are kept in the Cache API after the first download, so a
 // phone fetches the ~15MB only once.
+// If the phone's browser storage refuses (short on space, a private
+// window), the files are simply downloaded instead of kept.
 function cachedFetch(url) {
-  if (!self.caches) return fetch(url).then(check);
+  function plain() { return fetch(url).then(check); }
+  if (!self.caches) return plain();
   return caches.open(MODEL_CACHE).then(function (cache) {
     return cache.match(url).then(function (hit) {
       if (hit) return hit;
-      return fetch(url).then(check).then(function (res) {
+      return plain().then(function (res) {
         return cache.put(url, res.clone()).then(function () { return res; }, function () { return res; });
       });
     });
-  });
+  }, plain);
 }
 function check(res) {
   if (!res.ok) throw new Error("Couldn't download the text reader (" + res.status + ").");

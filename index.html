@@ -544,6 +544,8 @@ overflow:hidden}
 .more{background:none;border:none;color:var(--mint);font-size:13px;font-weight:600;
 padding:6px 0 0;cursor:pointer}
 .adultflag{color:#ff8fa8}
+.postpics{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:12px}
+.postpics img{width:100%;border-radius:9px;background:var(--surf)}
 .back{background:none;border:none;color:var(--dim);font-size:13px;padding:0;margin-bottom:14px}
 </style>
 </head>
@@ -2446,6 +2448,10 @@ function postLookup(url){
             return {kind:"postList", titles:found, author:d.author||"", caption:d.text||"",
                     heading:"This post shows "+found.length+" titles"};
           if(found.length===1) return postSearch(d, found[0], {title:found[0], chapter:null, confidence:"high"});
+          // Couldn't read them: show the pictures, so the titles can at
+          // least be read by eye and typed in.
+          if(d.images && d.images.length)
+            return {kind:"postPictures", images:d.images, author:d.author||"", reason:readerError};
           // A heading like "Manhwa recommendation - Apocalyptic" isn't a
           // title; searching it only finds junk.
           var p=parseCaption(d.text||"");
@@ -2455,6 +2461,23 @@ function postLookup(url){
     });
 }
 var POST_HEADING=/\brecommend|\brecs?\b|\btop\s*\d+|\btier\b|\bmust[- ]read/i;
+// A phone-only failure, sent to the server's log so it can be seen there.
+function clientLog(what, message){
+  try{
+    fetch(API_BASE+"/api/client-log", {method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({what:what, message:String(message||"").slice(0,300),
+                           agent:(navigator.userAgent||"").slice(0,160)})}).catch(function(){});
+  }catch(e){}
+}
+function postPicturesHtml(r){
+  return (r.author?'<div class="cap">YouTube post · '+esc(r.author)+'</div>':"")+
+    '<div class="note"><p><strong>Couldn\u2019t read the titles on these pictures</strong>'+
+    'Type the title you see on one of them in the box above.'+
+    (r.reason?'<br><span class="sub">('+esc(r.reason)+')</span>':"")+'</p></div>'+
+    '<div class="postpics">'+r.images.map(function(u){
+      return '<img src="'+esc(u+"=s400")+'" alt="" loading="lazy" referrerpolicy="no-referrer">';
+    }).join("")+'</div>';
+}
 function postSearch(d, title, parsed){
   return search(title).then(function(rows){
     return {kind:"results", rows:rows, parsed:parsed, caption:d.text||"",
@@ -2471,10 +2494,13 @@ function postSearch(d, title, parsed){
    Names show up as they're found; a picture that can't be read is
    skipped. */
 var POST_PICTURE_SIZE="=s640";
+var readerError="";
 function readPostPictures(d, out){
   var found=[], n=d.images.length, label="";
+  readerError="";
   var worker=null;
-  try{ worker=new Worker("ocr-worker.js"); worker.postMessage({type:"init"}); }catch(e){ worker=null; }
+  try{ worker=new Worker("ocr-worker.js"); worker.postMessage({type:"init"}); }
+  catch(e){ worker=null; readerError=String(e&&e.message||e); clientLog("post-picture-reader", readerError); }
   function progress(i){
     if(!out || !document.body.contains(out)) throw new Error("superseded");
     out.innerHTML=(d.author?'<div class="cap">YouTube post · '+esc(d.author)+'</div>':"")+
@@ -2494,6 +2520,10 @@ function readPostPictures(d, out){
         if(m.type==="lines"){ label=""; lines=lines.concat(m.lines||[]); return; }
         if(m.type==="result"){ clearTimeout(timer); resolve(lines); }
         if(m.type==="error"){ clearTimeout(timer); reject(new Error(m.message||"reader failed")); }
+      };
+      worker.onerror=function(e){
+        clearTimeout(timer);
+        reject(new Error("The text reader didn\u2019t start"+(e&&e.message?" ("+e.message+")":"")));
       };
       worker.postMessage({type:"ocr", id:i, url:url+POST_PICTURE_SIZE});
     });
@@ -2515,7 +2545,11 @@ function readPostPictures(d, out){
       var job = worker
         ? titleFromPhone(url, i).catch(function(e){
             // The reader itself won't run on this phone: let the server try.
-            if(i===0 && !found.length){ try{ worker.terminate(); }catch(x){} worker=null; }
+            if(i===0 && !found.length){
+              readerError=String(e&&e.message||e);
+              clientLog("post-picture-reader", readerError);
+              try{ worker.terminate(); }catch(x){} worker=null;
+            }
             return worker ? {} : titleFromServer(url);
           })
         : titleFromServer(url);
@@ -2649,6 +2683,7 @@ function render(r){
     });
     return;
   }
+  if(r.kind==="postPictures"){ out.innerHTML=postPicturesHtml(r); return; }
   if(r.kind==="unsupported"){
     out.innerHTML='<div class="note"><p><strong>Link not supported</strong>Only TikTok, '+
       'YouTube and Reddit links can be read. Type the manga name instead.</p></div>'; return;}
