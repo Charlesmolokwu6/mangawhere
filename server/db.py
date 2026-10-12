@@ -219,9 +219,16 @@ def get_connection():
         )
         return _LibsqlConnectionAdapter(conn)
 
-    conn = sqlite3.connect(DB_PATH)
+    # busy_timeout: a write that meets another waits up to 5s instead of
+    # failing with "database is locked"; WAL lets reads carry on during it.
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.DatabaseError:
+        pass
     return conn
 
 

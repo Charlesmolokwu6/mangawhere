@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import struct
 import json
 import re
@@ -922,7 +923,9 @@ async def scrape_mangadex_chapter_list(url: str) -> List[Dict[str, Any]]:
 
 
 def _detect_domain(url: str) -> str:
-    lowered = (url or "").lower()
+    # The site's own name only: matching the whole address let
+    # "http://127.0.0.1/x?toongod" pass as ToonGod and be fetched.
+    lowered = (urlparse(url or "").hostname or "").lower()
     if "toongod" in lowered:
         return "toongod"
     if "asurascans" in lowered or "asura" in lowered:
@@ -948,8 +951,32 @@ def _detect_domain(url: str) -> str:
     return "unknown"
 
 
+class NotAPublicSite(ValueError):
+    """A link whose site is this server, its private network or the cloud
+    host's metadata service, never fetched."""
+
+
+async def ensure_public_site(url: str) -> None:
+    """Refuse a link that isn't plain http(s) to a site on the public
+    internet. Every address the name resolves to has to be public, so a
+    look-alike name pointing at 127.0.0.1 or 169.254.169.254 is refused too."""
+    parsed = urlparse(url or "")
+    host = parsed.hostname
+    if parsed.scheme not in ("http", "https") or not host:
+        raise NotAPublicSite("not an http(s) link")
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, parsed.port or 443)
+    except OSError:
+        raise NotAPublicSite(f"{host} doesn't resolve")
+    for info in infos:
+        address = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not address.is_global or address.is_multicast:
+            raise NotAPublicSite(f"{host} is not a public site")
+
+
 async def scrape_series(url: str) -> Dict[str, Any]:
     """Auto-detect the site and return the series' chapter list."""
+    await ensure_public_site(url)
     domain = _detect_domain(url)
 
     if domain == "toongod":
@@ -1525,6 +1552,7 @@ async def drop_promo_pages(images: List[str], chapter_url: str) -> List[str]:
 
 async def scrape_chapter(url: str) -> Dict[str, Any]:
     """Auto-detect the site and return the normalized chapter payload."""
+    await ensure_public_site(url)
     domain = _detect_domain(url)
 
     if domain == "toongod":
