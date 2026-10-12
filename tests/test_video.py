@@ -99,11 +99,39 @@ class VideoLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["transcript"], "someone stop her")
 
     async def test_lookup_survives_metadata_failure(self):
+        # Refused metadata means the audio would be refused too: not tried.
         with patch.object(video, "fetch_metadata", side_effect=RuntimeError("404")), \
              patch.object(video, "transcribe_audio", return_value=None) as mock_transcribe:
             result = await video.lookup("https://example.com/v")
         self.assertEqual(result, {"title": "", "description": "", "transcript": ""})
-        mock_transcribe.assert_called_once_with("https://example.com/v", 0)
+        mock_transcribe.assert_not_called()
+
+    async def test_a_blocked_youtube_video_is_read_from_its_own_page(self):
+        page = ('<script>var ytInitialPlayerResponse = {"videoDetails": {"title": "His Ancestor STOLE His Body...", '
+                '"shortDescription": "A ghost.\\n\\nManhwa Name: Annihilation of the Heavenly Way", '
+                '"lengthSeconds": "58"}};var meta = 1;</script>')
+        fetched = []
+
+        class Response:
+            text = page
+            def raise_for_status(self): pass
+
+        async def get(self, url, **kw):
+            fetched.append(url)
+            return Response()
+
+        with patch.object(video, "fetch_metadata", side_effect=RuntimeError("Sign in to confirm you're not a bot")), \
+             patch("httpx.AsyncClient.get", get):
+            result = await video.lookup("https://youtube.com/shorts/I-ggXNUEVfU?si=x")
+        self.assertEqual(result["title"], "His Ancestor STOLE His Body...")
+        self.assertIn("Manhwa Name: Annihilation of the Heavenly Way", result["description"])
+        self.assertEqual(fetched, ["https://www.youtube.com/shorts/I-ggXNUEVfU"])
+
+    def test_youtube_ids(self):
+        for url in ("https://youtube.com/shorts/I-ggXNUEVfU?si=x", "https://www.youtube.com/watch?v=I-ggXNUEVfU",
+                    "https://youtu.be/I-ggXNUEVfU", "https://m.youtube.com/watch?feature=x&v=I-ggXNUEVfU"):
+            self.assertEqual(video.youtube_id(url), "I-ggXNUEVfU", url)
+        self.assertIsNone(video.youtube_id("https://www.tiktok.com/@a/video/123"))
 
 
 if __name__ == "__main__":
