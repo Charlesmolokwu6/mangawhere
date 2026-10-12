@@ -2456,15 +2456,38 @@ function postLookup(url){
 function isReddit(url){
   return /^https?:\/\/((www|old|new|m|np|sh)\.)?(reddit\.com|redd\.it)\//i.test(url);
 }
+function redditPostId(url){
+  var m=/redd\.it\/([a-z0-9]{4,12})(?:[\/?#]|$)/i.exec(url) ||
+        /\/(?:comments|gallery)\/([a-z0-9]{4,12})(?:[\/?#]|$)/i.exec(url);
+  return m ? m[1].toLowerCase() : null;
+}
+function apiJson(r){
+  return r.json().catch(function(){ return {}; }).then(function(d){
+    if(!r.ok) throw new Error(d.detail||"Couldn't read that post right now.");
+    return d;
+  });
+}
+/* Reddit refuses our server but answers phones, so the phone fetches the
+   post itself and the server only reads it (/api/reddit-read). If that
+   fails (or it's a share link, which only the server can follow), the
+   server tries Reddit on its own. */
+function redditFromPhone(url){
+  var id=redditPostId(url);
+  if(!id) return Promise.reject(new Error("share link"));
+  return fetchTimeout("https://www.reddit.com/comments/"+id+".json?sort=top&limit=25&depth=1&raw_json=1", null, 15000)
+    .then(function(r){ if(!r.ok) throw new Error("reddit "+r.status); return r.text(); })
+    .then(function(body){
+      return fetchTimeout(API_BASE+"/api/reddit-read", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body:body}, 30000);
+    })
+    .then(apiJson);
+}
 function redditLookup(url){
   var out=document.getElementById("out");
   if(out) out.innerHTML='<div class="spin">Reading the post and its comments…</div>';
-  return fetchTimeout(API_BASE+"/api/reddit-lookup?url="+encodeURIComponent(url), null, 40000)
-    .then(function(r){
-      return r.json().catch(function(){ return {}; }).then(function(d){
-        if(!r.ok) throw new Error(d.detail||"Couldn't read that post right now.");
-        return d;
-      });
+  return redditFromPhone(url)
+    .catch(function(){
+      return fetchTimeout(API_BASE+"/api/reddit-lookup?url="+encodeURIComponent(url), null, 40000).then(apiJson);
     })
     .then(function(d){
       var caption=[d.title||"", d.text||""].join("\n").trim();
