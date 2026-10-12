@@ -461,7 +461,7 @@ async def api_post_lookup(url: str = Query(..., description="YouTube community p
     except Exception as e:
         print(f"[post] lookup failed for {post_id}: {e!r}")
         raise HTTPException(status_code=502, detail="Couldn't read that post right now.")
-    if not result["text"]:
+    if not result["text"] and not result.get("images"):
         raise HTTPException(status_code=404, detail="That post is private, deleted, or has no text.")
     response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -513,6 +513,20 @@ async def api_reddit_read(request: Request):
     if not result:
         raise HTTPException(status_code=400, detail="That isn't a Reddit post.")
     return JSONResponse(content=result, headers={"Referrer-Policy": "no-referrer"})
+
+
+@app.get("/api/post-image-title")
+async def api_post_image_title(url: str = Query(..., description="A YouTube post picture (yt3.ggpht.com)")):
+    """The title written on one picture of a YouTube post, read with OCR and
+    checked against AniList. The app asks for the pictures one by one."""
+    if not ytpost.image_base(url):
+        raise HTTPException(status_code=400, detail="That isn't a YouTube post picture")
+    try:
+        result = await ytpost.title_from_image(url)
+    except Exception as e:
+        print(f"[post] picture read failed for {url}: {e!r}")
+        raise HTTPException(status_code=502, detail="Couldn't read that picture right now.")
+    return JSONResponse(content=result, headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _attach_endpoint_from_payload(result: dict, payload: dict) -> None:

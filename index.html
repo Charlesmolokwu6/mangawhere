@@ -2414,6 +2414,7 @@ function run(){
       '<button class="postback" id="postback">&larr; Back to the list</button>');
     document.getElementById("postback").onclick=function(){ render(fromPost); };
   }).catch(function(e){
+    if(e.message==="superseded") return;   // they left this screen while it was working
     out.innerHTML='<div class="note bad"><p><strong>Error</strong>'+esc(e.message)+'</p></div>';
   }).then(function(){btn.disabled=false; setDiag("source: "+(sourceUsed||"-"));});
 }
@@ -2439,13 +2440,57 @@ function postLookup(url){
     .then(function(d){
       if(d.titles && d.titles.length>1)
         return {kind:"postList", titles:d.titles, author:d.author||"", caption:d.text||""};
-      var p=parseCaption(d.text||"");
-      if(!p.title) return {kind:"noTitle", caption:d.text||""};
-      return search(p.title).then(function(rows){
-        return {kind:"results", rows:rows, parsed:p, caption:d.text||"",
-                author:d.author||"", platform:"YouTube post"};
-      });
+      return (d.images && d.images.length ? readPostPictures(d, out) : Promise.resolve([]))
+        .then(function(found){
+          if(found.length>1)
+            return {kind:"postList", titles:found, author:d.author||"", caption:d.text||"",
+                    heading:"This post shows "+found.length+" titles"};
+          if(found.length===1) return postSearch(d, found[0], {title:found[0], chapter:null, confidence:"high"});
+          // A heading like "Manhwa recommendation - Apocalyptic" isn't a
+          // title; searching it only finds junk.
+          var p=parseCaption(d.text||"");
+          if(!p.title || POST_HEADING.test(d.text||"")) return {kind:"noTitle", caption:d.text||""};
+          return postSearch(d, p.title, p);
+        });
     });
+}
+var POST_HEADING=/\brecommend|\brecs?\b|\btop\s*\d+|\btier\b|\bmust[- ]read/i;
+function postSearch(d, title, parsed){
+  return search(title).then(function(rows){
+    return {kind:"results", rows:rows, parsed:parsed, caption:d.text||"",
+            author:d.author||"", platform:"YouTube post"};
+  });
+}
+/* Recommendation posts often write each title on its picture instead of
+   in the text. The server reads one picture at a time
+   (/api/post-image-title: OCR, then checked against AniList), so the
+   names show up as they're found. A picture that can't be read is
+   skipped. */
+function readPostPictures(d, out){
+  var found=[], n=d.images.length;
+  function progress(i){
+    if(!out || !document.body.contains(out)) throw new Error("superseded");
+    out.innerHTML=(d.author?'<div class="cap">YouTube post · '+esc(d.author)+'</div>':"")+
+      '<div class="spin">Reading the titles on the pictures… '+(i+1)+' of '+n+'</div>'+
+      (found.length?'<ol class="postlist">'+found.map(function(t,k){
+        return '<li><button disabled><span class="n">'+(k+1)+'</span>'+esc(t)+'</button></li>';
+      }).join("")+'</ol>':"");
+  }
+  return d.images.reduce(function(chain, url, i){
+    return chain.then(function(){
+      progress(i);
+      return fetchTimeout(API_BASE+"/api/post-image-title?url="+encodeURIComponent(url), null, 60000)
+        .then(function(r){ return r.ok ? r.json() : {}; })
+        .catch(function(){ return {}; })
+        .then(function(t){
+          var name=t.title||t.guess;
+          if(name && found.indexOf(name)<0) found.push(name);
+        });
+    });
+  }, Promise.resolve()).then(function(){
+    if(!document.body.contains(out)) throw new Error("superseded");
+    return found;
+  });
 }
 /* Reddit: people ask "what's the name of this?" and the answer is in the
    comments. The server reads the post and its top comments and returns

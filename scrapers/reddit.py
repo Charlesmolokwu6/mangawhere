@@ -11,16 +11,15 @@ post is cached and a 429 is retried once after the wait Reddit asks for.
 """
 import asyncio
 import html as html_lib
-import json
 import re
 import xml.etree.ElementTree as ET
-from difflib import SequenceMatcher
 from typing import Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 
+from scrapers.titlecheck import _key, display_title, matches, search_many
 from server import cache
 
 REDDIT_HOSTS = {
@@ -28,7 +27,6 @@ REDDIT_HOSTS = {
     "m.reddit.com", "np.reddit.com", "sh.reddit.com", "redd.it",
 }
 POST_ID = re.compile(r"^[a-z0-9]{4,12}$")
-ANILIST = "https://graphql.anilist.co"
 UA = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Mobile Safari/537.36"
 ATOM = "{http://www.w3.org/2005/Atom}"
 POST_TTL = 30 * 60
@@ -222,10 +220,6 @@ def names_in_comment(html_fragment: str) -> List[Dict[str, object]]:
     return list(names.values())
 
 
-def _key(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
-
-
 def candidates(post: Dict[str, object]) -> List[Dict[str, object]]:
     """Possible names from the comments, most backed first: a name several
     people gave beats one only one person gave, then Reddit's top order."""
@@ -249,40 +243,6 @@ def candidates(post: Dict[str, object]) -> List[Dict[str, object]]:
     return order[:MAX_CANDIDATES]
 
 
-def _names_of(media: Dict[str, object]) -> List[str]:
-    t = media.get("title") or {}
-    return [n for n in [t.get("english"), t.get("romaji"), t.get("native")] + list(media.get("synonyms") or []) if n]
-
-
-def matches(candidate: str, media: Dict[str, object], strong: bool = True) -> bool:
-    """Whether AniList's title really is what the comment said — not just
-    the nearest thing its search could find for "give it time". A name
-    picked out of a sentence, or a single word, has to match exactly, and
-    a single word only counts when the comment stressed it (strong)."""
-    c = _key(candidate)
-    one_word = len(candidate.split()) == 1
-    if len(c) < 4 or (one_word and not strong):
-        return False
-    exact_only = one_word or not strong
-    t = media.get("title") or {}
-    names = [t.get("english"), t.get("romaji")] if one_word else _names_of(media)
-    for name in filter(None, names):
-        n = _key(name)
-        if not n:
-            continue
-        if c == n:
-            return True
-        if exact_only:
-            continue
-        # "Primal hunter" for "The Primal Hunter"; "Atsumare fushigi
-        # kenkyubu" for "Atsumare! Fushigi Kenkyuubu".
-        if len(c) >= 6 and c in n and len(c) >= 0.75 * len(n):
-            return True
-        if len(c) >= 8 and SequenceMatcher(None, c, n).ratio() >= 0.9:
-            return True
-    return False
-
-
 async def verify(client: httpx.AsyncClient, found: List[Dict[str, object]]) -> Dict[str, list]:
     """{"titles": [{title, id}], "maybe": [name]}: the candidates AniList
     confirms as real titles, in the same order (one request for all of
@@ -290,23 +250,12 @@ async def verify(client: httpx.AsyncClient, found: List[Dict[str, object]]) -> D
     looks wider than AniList) to offer only when nothing was confirmed."""
     if not found:
         return {"titles": [], "maybe": []}
-    parts = []
-    for i, c in enumerate(found):
-        parts.append(f'c{i}:Page(perPage:3){{media(search:{json.dumps(c["name"])},type:MANGA)'
-                     f'{{id title{{english romaji native}} synonyms}}}}')
-    r = await client.post(ANILIST, json={"query": "query{" + " ".join(parts) + "}"},
-                          headers={"Accept": "application/json"})
-    r.raise_for_status()
-    data = r.json().get("data") or {}
+    results = await search_many(client, [c["name"] for c in found])
     titles: List[Dict[str, object]] = []
     maybe: List[str] = []
     seen = set()
-    for i, c in enumerate(found):
-        hit = None
-        for media in ((data.get(f"c{i}") or {}).get("media") or []):
-            if matches(c["name"], media, c["strong"]):
-                hit = media
-                break
+    for c, options in zip(found, results):
+        hit = next((m for m in options if matches(c["name"], m, c["strong"])), None)
         if hit is None:
             if c["answer"] and c["first"] < 5 and len(_key(c["name"])) >= 4 and not _CHAT.search(c["name"]):
                 maybe.append(c["name"])
@@ -314,8 +263,7 @@ async def verify(client: httpx.AsyncClient, found: List[Dict[str, object]]) -> D
         if hit["id"] in seen:
             continue
         seen.add(hit["id"])
-        t = hit.get("title") or {}
-        titles.append({"title": t.get("english") or t.get("romaji") or c["name"], "id": hit["id"]})
+        titles.append({"title": display_title(hit) or c["name"], "id": hit["id"]})
     return {"titles": titles[:MAX_SUGGESTIONS], "maybe": maybe[:3]}
 
 
