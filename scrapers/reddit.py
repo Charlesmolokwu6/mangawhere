@@ -10,6 +10,7 @@ feed still answers, so that's what's read. It's rate-limited hard, so every
 post is cached and a 429 is retried once after the wait Reddit asks for.
 """
 import asyncio
+import html as html_lib
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -87,6 +88,17 @@ def _text(fragment: str) -> str:
     return " ".join(BeautifulSoup(fragment or "", "html.parser").get_text(" ").split())
 
 
+def _plain(node) -> str:
+    """Text of a post body, one line per paragraph, inline tags kept inline."""
+    if node is None:
+        return ""
+    for tag in node.find_all(["br"]):
+        tag.replace_with("\n")
+    for tag in node.find_all(["p", "li", "h1", "h2", "h3", "blockquote", "pre"]):
+        tag.append("\n")
+    return "\n".join(" ".join(l.split()) for l in node.get_text().splitlines() if l.strip())
+
+
 def parse_feed(xml_text: str) -> Dict[str, object]:
     """The post (first entry) and its comments (the rest) from the RSS feed."""
     root = ET.fromstring(xml_text)
@@ -111,7 +123,7 @@ def parse_feed(xml_text: str) -> Dict[str, object]:
         comments.append({"author": author(entry), "html": entry.findtext(f"{ATOM}content") or ""})
     return {
         "title": (post.findtext(f"{ATOM}title") or "").strip(),
-        "text": "\n".join(" ".join(l.split()) for l in body.get_text("\n").splitlines() if l.strip()) if body else "",
+        "text": _plain(body),
         "author": author(post),
         "subreddit": (category.get("label") or category.get("term") or "") if category is not None else "",
         "image": image.get("src", "") if image else "",
@@ -333,9 +345,23 @@ async def _fetch_feed(client: httpx.AsyncClient, post_id: str) -> str:
     raise RedditBusy("reddit 429")
 
 
+async def analyse(client: httpx.AsyncClient, post_id: str, post: Dict[str, object]) -> Dict[str, object]:
+    """What the app needs from a parsed post (parse_feed or parse_listing)."""
+    return {
+        "id": post_id,
+        "title": post["title"],
+        "text": post["text"],
+        "author": post["author"],
+        "subreddit": post["subreddit"],
+        "image": post.get("image", ""),
+        **(await verify(client, candidates(post))),
+        "question": looks_like_question(post),
+    }
+
+
 async def lookup(url: str) -> Dict[str, object]:
-    """{title, text, author, subreddit, suggestions, question} for a post,
-    or {} when the post doesn't exist."""
+    """{title, text, author, subreddit, titles, maybe, question} for a
+    post, or {} when the post doesn't exist."""
     async with httpx.AsyncClient(timeout=15, headers={"User-Agent": UA}) as client:
         if not post_id_from_url(url) and is_share_link(url):
             url = await resolve_share_link(client, url) or url
@@ -345,20 +371,57 @@ async def lookup(url: str) -> Dict[str, object]:
 
         async def produce():
             feed = await _fetch_feed(client, post_id)
-            if not feed:
-                return {}
-            post = parse_feed(feed)
-            if not post:
-                return {}
-            return {
-                "id": post_id,
-                "title": post["title"],
-                "text": post["text"],
-                "author": post["author"],
-                "subreddit": post["subreddit"],
-                "image": post["image"],
-                **(await verify(client, candidates(post))),
-                "question": looks_like_question(post),
-            }
+            post = parse_feed(feed) if feed else {}
+            return await analyse(client, post_id, post) if post else {}
 
         return await cache.cached("reddit", post_id, POST_TTL, produce, miss_ttl=120)
+
+
+# ---- the post as the reader's phone fetched it ----
+#
+# Reddit refuses server addresses but answers phones, so the app first
+# fetches the post's JSON itself and sends it here (/api/reddit-read) to be
+# read the same way. Only text is taken from it; nothing is fetched.
+
+def _html_of(data: Dict[str, object], html_key: str, text_key: str) -> str:
+    fragment = str(data.get(html_key) or "")
+    if fragment.startswith("&lt;"):
+        fragment = html_lib.unescape(fragment)
+    if fragment:
+        return fragment
+    # Markdown only: keep **bold** as bold, the rest as text.
+    plain = html_lib.escape(str(data.get(text_key) or ""))
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", plain)
+
+
+def parse_listing(listing: object) -> Dict[str, object]:
+    """The same shape as parse_feed, from /comments/<id>.json."""
+    try:
+        post = listing[0]["data"]["children"][0]["data"]
+        children = listing[1]["data"]["children"] if len(listing) > 1 else []
+    except (KeyError, IndexError, TypeError):
+        return {}
+    body = BeautifulSoup(_html_of(post, "selftext_html", "selftext"), "html.parser")
+    comments = []
+    for child in children[:COMMENTS]:
+        if not isinstance(child, dict) or child.get("kind") != "t1":
+            continue
+        data = child.get("data") or {}
+        comments.append({"author": str(data.get("author") or ""), "html": _html_of(data, "body_html", "body")})
+    return {
+        "id": str(post.get("id") or "").lower(),
+        "title": str(post.get("title") or "").strip(),
+        "text": _plain(body),
+        "author": str(post.get("author") or ""),
+        "subreddit": str(post.get("subreddit_name_prefixed") or ""),
+        "image": "",
+        "comments": comments,
+    }
+
+
+async def read_listing(listing: object) -> Dict[str, object]:
+    post = parse_listing(listing)
+    if not post or not POST_ID.match(post["id"]):
+        return {}
+    async with httpx.AsyncClient(timeout=15) as client:
+        return await analyse(client, post["id"], post)

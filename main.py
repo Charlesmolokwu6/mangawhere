@@ -477,7 +477,8 @@ async def api_reddit_lookup(url: str = Query(..., description="Reddit post URL")
         raise HTTPException(status_code=400, detail="That isn't a Reddit link")
     try:
         result = await reddit.lookup(url)
-    except reddit.RedditBusy:
+    except reddit.RedditBusy as e:
+        print(f"[reddit] refused for {url}: {e}")
         raise HTTPException(status_code=503, detail="Reddit is busy right now. Try again in a minute.")
     except Exception as e:
         print(f"[reddit] lookup failed for {url}: {e!r}")
@@ -487,6 +488,31 @@ async def api_reddit_lookup(url: str = Query(..., description="Reddit post URL")
     response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+REDDIT_READ_MAX_BYTES = 3_000_000
+
+
+@app.post("/api/reddit-read")
+async def api_reddit_read(request: Request):
+    """The same as /api/reddit-lookup, for a post the reader's phone fetched
+    itself (Reddit refuses this server, not phones): the body is Reddit's
+    own /comments/<id>.json."""
+    raw = await request.body()
+    if len(raw) > REDDIT_READ_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="That post is too big to read.")
+    try:
+        listing = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="That isn't a Reddit post.")
+    try:
+        result = await reddit.read_listing(listing)
+    except Exception as e:
+        print(f"[reddit] read failed: {e!r}")
+        raise HTTPException(status_code=502, detail="Couldn't read that post right now.")
+    if not result:
+        raise HTTPException(status_code=400, detail="That isn't a Reddit post.")
+    return JSONResponse(content=result, headers={"Referrer-Policy": "no-referrer"})
 
 
 def _attach_endpoint_from_payload(result: dict, payload: dict) -> None:

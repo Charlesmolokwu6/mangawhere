@@ -99,6 +99,46 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(out["maybe"], ["Primal hunter"])
 
 
+def listing():
+    def comment(author, html=None, body=None):
+        data = {"author": author}
+        if html is not None:
+            data["body_html"] = escape(f'<div class="md"><p>{html}</p></div>')
+        if body is not None:
+            data["body"] = body
+        return {"kind": "t1", "data": data}
+    return [
+        {"data": {"children": [{"kind": "t3", "data": {
+            "id": "1WTH1VM", "title": "What manga is this from?", "author": "asker",
+            "subreddit_name_prefixed": "r/manga",
+            "selftext_html": escape('<div class="md"><p>Saw this <b>panel</b>.</p></div>')}}]}},
+        {"data": {"children": [
+            comment("kein23", html="Gokurakugai"),
+            comment("markdown_only", body="**Solo Leveling** obviously"),
+            comment("asker", html="Thanks so much!"),
+            {"kind": "more", "data": {}},
+        ]}},
+    ]
+
+
+class ListingTests(unittest.TestCase):
+    def test_a_post_fetched_by_the_phone_reads_like_the_feed(self):
+        post = reddit.parse_listing(listing())
+        self.assertEqual(post["id"], "1wth1vm")
+        self.assertEqual(post["title"], "What manga is this from?")
+        self.assertEqual(post["text"], "Saw this panel.")
+        self.assertEqual(post["subreddit"], "r/manga")
+        self.assertEqual([c["author"] for c in post["comments"]], ["kein23", "markdown_only", "asker"])
+        names = [c["name"] for c in reddit.candidates(post)]
+        self.assertEqual(names[0], "Gokurakugai")
+        self.assertIn("Solo Leveling", names)
+        self.assertNotIn("Thanks so much", names)
+
+    def test_anything_else_is_not_a_post(self):
+        for junk in (None, {}, [], [{"data": {}}], "text", [{"data": {"children": []}}]):
+            self.assertEqual(reddit.parse_listing(junk), {}, junk)
+
+
 class EndpointTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -118,6 +158,18 @@ class EndpointTests(unittest.TestCase):
             r = self.client.get("/api/reddit-lookup", params={"url": "https://redd.it/1wth1vm"})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["maybe"], ["Primal hunter"])
+
+    def test_a_post_sent_by_the_phone_is_read(self):
+        verified = {"titles": [{"title": "Gokurakugai", "id": 1}], "maybe": []}
+        with patch.object(reddit, "verify", AsyncMock(return_value=verified)):
+            r = self.client.post("/api/reddit-read", json=listing())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["titles"][0]["title"], "Gokurakugai")
+        self.assertTrue(r.json()["question"])
+        self.assertEqual(self.client.post("/api/reddit-read", content=b"not json").status_code, 400)
+        self.assertEqual(self.client.post("/api/reddit-read", json={"x": 1}).status_code, 400)
+        big = b"[" + b" " * 3_000_001 + b"]"
+        self.assertEqual(self.client.post("/api/reddit-read", content=big).status_code, 413)
 
     def test_errors(self):
         url = {"url": "https://redd.it/1wth1vm"}
