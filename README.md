@@ -433,6 +433,16 @@ once the site has its own domain pointing at this server:
 The pages need the server (GitHub Pages can't build them), so the domain
 must point at the server, which also serves the app at `/`.
 
+## Pictures in YouTube posts
+
+Recommendation posts often write each title on its picture. The reader's
+phone reads the pictures with storyteller mode's text reader
+(`ocr-worker.js`) and sends the text to `/api/post-picture-title`, which
+picks the title and checks it against AniList. The free Render server ran
+out of memory reading pictures itself; a server with room (1GB+ spare)
+can set `SERVER_OCR=1` and `/api/post-image-title` reads them there, for
+phones that can't run the reader.
+
 ## Tests
 
 ```

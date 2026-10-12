@@ -2462,34 +2462,75 @@ function postSearch(d, title, parsed){
   });
 }
 /* Recommendation posts often write each title on its picture instead of
-   in the text. The server reads one picture at a time
-   (/api/post-image-title: OCR, then checked against AniList), so the
-   names show up as they're found. A picture that can't be read is
+   in the text. The phone reads the pictures, one at a time, with the same
+   text reader storyteller mode uses (ocr-worker.js; its files download
+   once, then stay); the server only picks the title out of the lines and
+   checks it against AniList (/api/post-picture-title). The free server
+   ran out of memory reading pictures itself. A server with room for it
+   (SERVER_OCR=1) is asked instead when the phone can't run the reader.
+   Names show up as they're found; a picture that can't be read is
    skipped. */
+var POST_PICTURE_SIZE="=s640";
 function readPostPictures(d, out){
-  var found=[], n=d.images.length;
+  var found=[], n=d.images.length, label="";
+  var worker=null;
+  try{ worker=new Worker("ocr-worker.js"); worker.postMessage({type:"init"}); }catch(e){ worker=null; }
   function progress(i){
     if(!out || !document.body.contains(out)) throw new Error("superseded");
     out.innerHTML=(d.author?'<div class="cap">YouTube post · '+esc(d.author)+'</div>':"")+
-      '<div class="spin">Reading the titles on the pictures… '+(i+1)+' of '+n+'</div>'+
+      '<div class="spin">'+(label ? esc(label) : 'Reading the titles on the pictures… '+(i+1)+' of '+n)+'</div>'+
       (found.length?'<ol class="postlist">'+found.map(function(t,k){
         return '<li><button disabled><span class="n">'+(k+1)+'</span>'+esc(t)+'</button></li>';
       }).join("")+'</ol>':"");
   }
+  // One picture's text lines, read on this phone.
+  function readOnPhone(url, i){
+    return new Promise(function(resolve, reject){
+      var lines=[], timer=setTimeout(function(){ reject(new Error("timeout")); }, 90000);
+      worker.onmessage=function(e){
+        var m=e.data||{};
+        if(m.type==="progress"){ label=m.label+" (first time only)"; try{ progress(i); }catch(x){} return; }
+        if(m.id!==i) return;
+        if(m.type==="lines"){ label=""; lines=lines.concat(m.lines||[]); return; }
+        if(m.type==="result"){ clearTimeout(timer); resolve(lines); }
+        if(m.type==="error"){ clearTimeout(timer); reject(new Error(m.message||"reader failed")); }
+      };
+      worker.postMessage({type:"ocr", id:i, url:url+POST_PICTURE_SIZE});
+    });
+  }
+  function titleFromPhone(url, i){
+    return readOnPhone(url, i).then(function(lines){
+      return fetchTimeout(API_BASE+"/api/post-picture-title", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body:JSON.stringify({lines:lines})}, 30000)
+        .then(function(r){ return r.ok ? r.json() : {}; });
+    });
+  }
+  function titleFromServer(url){
+    return fetchTimeout(API_BASE+"/api/post-image-title?url="+encodeURIComponent(url), null, 60000)
+      .then(function(r){ return r.ok ? r.json() : {}; });
+  }
   return d.images.reduce(function(chain, url, i){
     return chain.then(function(){
       progress(i);
-      return fetchTimeout(API_BASE+"/api/post-image-title?url="+encodeURIComponent(url), null, 60000)
-        .then(function(r){ return r.ok ? r.json() : {}; })
-        .catch(function(){ return {}; })
-        .then(function(t){
-          var name=t.title||t.guess;
-          if(name && found.indexOf(name)<0) found.push(name);
-        });
+      var job = worker
+        ? titleFromPhone(url, i).catch(function(e){
+            // The reader itself won't run on this phone: let the server try.
+            if(i===0 && !found.length){ try{ worker.terminate(); }catch(x){} worker=null; }
+            return worker ? {} : titleFromServer(url);
+          })
+        : titleFromServer(url);
+      return job.catch(function(){ return {}; }).then(function(t){
+        var name=t&&(t.title||t.guess);
+        if(name && found.indexOf(name)<0) found.push(name);
+      });
     });
   }, Promise.resolve()).then(function(){
+    if(worker) worker.terminate();
     if(!document.body.contains(out)) throw new Error("superseded");
     return found;
+  }, function(e){
+    if(worker) worker.terminate();
+    throw e;
   });
 }
 /* Reddit: people ask "what's the name of this?" and the answer is in the

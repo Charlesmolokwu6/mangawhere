@@ -521,12 +521,43 @@ async def api_post_image_title(url: str = Query(..., description="A YouTube post
     checked against AniList. The app asks for the pictures one by one."""
     if not ytpost.image_base(url):
         raise HTTPException(status_code=400, detail="That isn't a YouTube post picture")
+    if not ytpost.server_ocr_enabled():
+        raise HTTPException(status_code=503, detail="This server reads pictures on the phone instead.")
     try:
         result = await ytpost.title_from_image(url)
     except Exception as e:
         print(f"[post] picture read failed for {url}: {e!r}")
         raise HTTPException(status_code=502, detail="Couldn't read that picture right now.")
     return JSONResponse(content=result, headers={"Cache-Control": "public, max-age=86400"})
+
+
+PICTURE_LINES_MAX = 80
+
+
+@app.post("/api/post-picture-title")
+async def api_post_picture_title(payload: dict):
+    """The title on a YouTube post picture the reader's phone has read
+    (ocr-worker.js): its text lines in, the title AniList confirms out.
+    Only text is sent; nothing is fetched or read here but AniList."""
+    raw = payload.get("lines") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="Send the picture's text lines.")
+    lines = []
+    for line in raw[:PICTURE_LINES_MAX]:
+        try:
+            box, text, score = line
+            box = [[float(x), float(y)] for x, y in box][:4]
+            if len(box) != 4 or not isinstance(text, str):
+                continue
+            lines.append([box, text[:200], float(score)])
+        except (TypeError, ValueError):
+            continue
+    try:
+        result = await ytpost.title_from_lines(lines)
+    except Exception as e:
+        print(f"[post] picture lines check failed: {e!r}")
+        raise HTTPException(status_code=502, detail="Couldn't check that picture right now.")
+    return JSONResponse(content=result)
 
 
 def _attach_endpoint_from_payload(result: dict, payload: dict) -> None:

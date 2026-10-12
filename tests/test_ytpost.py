@@ -120,11 +120,31 @@ class PostLookupApiTests(unittest.TestCase):
         lookup.assert_awaited_once_with(POST_ID)
 
     def test_a_picture_title_is_read_and_only_youtube_pictures_are_accepted(self):
-        with patch("scrapers.ytpost.title_from_image", AsyncMock(return_value={"title": "Distant Sky", "id": 85879})):
+        with patch("scrapers.ytpost.title_from_image", AsyncMock(return_value={"title": "Distant Sky", "id": 85879})), \
+             patch.dict("os.environ", {"SERVER_OCR": "1"}):
             r = self.client.get("/api/post-image-title", params={"url": PIC})
         self.assertEqual(r.json(), {"title": "Distant Sky", "id": 85879})
         r = self.client.get("/api/post-image-title", params={"url": "https://example.com/" + "a" * 30})
         self.assertEqual(r.status_code, 400)
+
+    def test_this_server_only_reads_pictures_when_it_has_room(self):
+        with patch("scrapers.ytpost.title_from_image", AsyncMock()) as read, \
+             patch.dict("os.environ", {"SERVER_OCR": ""}):
+            r = self.client.get("/api/post-image-title", params={"url": PIC})
+        self.assertEqual(r.status_code, 503)
+        read.assert_not_awaited()
+
+    def test_lines_read_on_the_phone_are_checked_here(self):
+        lines = [[box(18), "117Chapters|Completed", 0.97], [box(44), "DISTANT-SKY", 0.96]]
+        sky = {"id": 85879, "title": {"english": "Distant Sky"}, "synonyms": []}
+        with patch("scrapers.titlecheck.search_many", AsyncMock(return_value=[[sky]])) as search:
+            r = self.client.post("/api/post-picture-title", json={"lines": lines})
+        self.assertEqual(r.json(), {"title": "Distant Sky", "id": 85879})
+        self.assertEqual(search.await_args.args[1], ["distant sky"])
+        # Not lines, or junk lines: nothing to check.
+        self.assertEqual(self.client.post("/api/post-picture-title", json={"x": 1}).status_code, 400)
+        r = self.client.post("/api/post-picture-title", json={"lines": [["a", 1], None, [box(9), 5, 1]]})
+        self.assertEqual(r.json(), {"none": True})
 
     def test_a_post_with_only_pictures_is_not_empty(self):
         result = {"text": "", "author": "Haiden", "titles": [], "images": [PIC]}
