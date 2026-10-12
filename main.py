@@ -10,11 +10,11 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
 from scrapers import ytpost
-from server import auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, turnstile, watch
+from server import auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -829,6 +829,54 @@ async def serve_index_file():
 @app.get("/sw.js")
 async def serve_service_worker():
     return FileResponse(BASE_DIR / "sw.js", media_type="application/javascript")
+
+
+# Title pages for Google and link previews (server/title_pages.py). Off
+# until PUBLIC_SITE_URL is set at launch: until then they say noindex and
+# there is no sitemap.
+@app.get("/manga/{al_id}")
+@app.get("/manga/{al_id}/{slug}")
+async def title_page(al_id: int, slug: str = ""):
+    if al_id <= 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        found = await title_pages.fetch_media(al_id)
+    except Exception as e:
+        print(f"[title_pages] AniList lookup failed for {al_id}: {e}")
+        return HTMLResponse("Title details are unavailable right now. Try again shortly.",
+                            status_code=503, headers={"Retry-After": "120"})
+    if not found:
+        raise HTTPException(status_code=404, detail="Not found")
+    canonical = title_pages.path_for(found)
+    if f"/manga/{al_id}/{slug}" != canonical:
+        return RedirectResponse(canonical, status_code=301)
+    return HTMLResponse(title_pages.render(found),
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+
+@app.get("/robots.txt")
+async def robots_txt():
+    return Response(title_pages.robots_txt(), media_type="text/plain")
+
+
+@app.get("/sitemap.xml")
+async def sitemap_index():
+    if not title_pages.is_live():
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(title_pages.sitemap_index(), media_type="application/xml")
+
+
+@app.get("/sitemaps/titles-{part}.xml")
+async def sitemap_part(part: int):
+    if not title_pages.is_live() or not 1 <= part <= title_pages.SITEMAP_FILES:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        titles = await title_pages.sitemap_titles(part)
+    except Exception as e:
+        print(f"[title_pages] sitemap {part} failed: {e}")
+        return Response(status_code=503, headers={"Retry-After": "600"})
+    return Response(title_pages.sitemap_file(titles), media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/manifest.json")
