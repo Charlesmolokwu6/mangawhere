@@ -82,23 +82,14 @@ existed.
 
 ## Profile pictures
 
-Uploaded avatars can't live on Render's own disk for the same reason the
-database can't — it's wiped on every redeploy. `POST /api/avatar`
-instead uploads to [Cloudinary](https://cloudinary.com) (free tier: 25GB
-storage, 25GB bandwidth/month), which is real persistent storage and
-handles image hosting for you.
+`POST /api/avatar` shrinks the photo to a 256×256 WebP (~15KB) and keeps
+it in the app's own database (`avatars` table), which with Turso survives
+redeploys. It's served from `/api/avatar/<user id>?v=<time saved>`, cached
+for a year (a new photo gets a new address). Nothing to set up.
 
-To turn it on:
-1. Create a free Cloudinary account.
-2. From its dashboard, copy the **Cloud name**, **API Key**, and **API
-   Secret**.
-3. Set them as `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
-   `CLOUDINARY_API_SECRET` in Render's environment variables for this
-   service, then redeploy.
-
-Only the URL Cloudinary returns is stored in the app's own database
-(`users.avatar_url`) — the image bytes themselves never touch the
-ephemeral disk.
+Optional: set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` and
+`CLOUDINARY_API_SECRET` and photos go to [Cloudinary](https://cloudinary.com)
+instead, with only its URL stored in `users.avatar_url`.
 
 ## Video-link audio transcription
 
