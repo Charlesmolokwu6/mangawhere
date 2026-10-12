@@ -531,6 +531,17 @@ async def api_post_image_title(url: str = Query(..., description="A YouTube post
     return JSONResponse(content=result, headers={"Cache-Control": "public, max-age=86400"})
 
 
+@app.post("/api/client-log")
+async def api_client_log(payload: dict):
+    """Something that failed on a reader's phone (the text reader not
+    starting, say), so it shows up in this server's log. Short text only."""
+    what = str((payload or {}).get("what", ""))[:40]
+    message = str((payload or {}).get("message", ""))[:300]
+    agent = str((payload or {}).get("agent", ""))[:160]
+    print(f"[client] {what}: {message} ({agent})")
+    return {"ok": True}
+
+
 PICTURE_LINES_MAX = 80
 
 

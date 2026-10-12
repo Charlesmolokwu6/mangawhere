@@ -98,6 +98,11 @@ class PictureTests(unittest.TestCase):
         ]
         self.assertEqual(ytpost.title_lines(results), ["surviving the apocalypse", "335km"])
 
+    def test_a_cover_picture_is_not_a_title(self):
+        cover = [[box(46), "UNDERRATED", 0.99], [box(26), "ManhwaRecommendations", 0.99],
+                 [box(22), "HiddenGemsYouNeed", 1.0]]
+        self.assertEqual(ytpost.title_lines(cover), [])
+
 
 class PostLookupApiTests(unittest.TestCase):
     def setUp(self):

@@ -116,6 +116,7 @@ def post_images(post: dict) -> List[str]:
     return found[:MAX_IMAGES]
 
 
+_COVER = re.compile(r"recommend|hidden\s*gems?|must\s*-?\s*reads?|you\s*need\s*to\s*read|top\s*\d+|tier\s*list", re.I)
 _NOT_A_TITLE = re.compile(r"\d+\s*chap|\bchapters?\b|ongoing|complet|hiatus|season|episode|@|www|\.com|subscribe", re.I)
 
 
@@ -125,6 +126,10 @@ def title_lines(results) -> List[str]:
     like, with the spaces OCR drops put back ("SURVIVINGTHEAPOCALYPSE")."""
     from server.storyteller import repair_word
 
+    # A post's cover picture ("UNDERRATED Manhwa Recommendations") names
+    # the list, not a title.
+    if _COVER.search(" ".join(str(r[1]) for r in results or [] if len(r) > 1)):
+        return []
     lines = []
     for box, text, score in results or []:
         letters = sum(c.isalpha() for c in text or "")
