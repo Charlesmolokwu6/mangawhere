@@ -5176,6 +5176,12 @@ function getServerConfig(){
   }
   return serverConfig;
 }
+// The Turnstile site key alone doesn't switch sign-up over: the server
+// needs its secret too. Until it says it has one, show the built-in
+// captcha, or every sign-up would fail its check.
+getServerConfig().then(function(cfg){
+  if(cfg && cfg.turnstile===false) TURNSTILE_SITE_KEY="";
+});
 
 function forgotView(prefill){
   stopRail();

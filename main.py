@@ -778,6 +778,9 @@ async def api_config():
     return {
         "vapid_public_key": push.public_key_b64(),
         "password_reset": password_reset.available(),
+        # Whether sign-up checks Cloudflare Turnstile (TURNSTILE_SECRET_KEY
+        # set) or the built-in captcha; the page shows whichever this says.
+        "turnstile": turnstile.is_configured(),
         "narration": await storyteller.availability(),
         # Storyteller mode on the listener's phone (/api/narrate/page and
         # /api/narrate/lines), wherever full narration isn't set up.
