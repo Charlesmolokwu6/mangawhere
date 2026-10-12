@@ -411,6 +411,28 @@ you have one; when you do, the setup is:
 5. Turn on **Bot Fight Mode** (free) or a **WAF** rule, under Cloudflare's
    Security settings, for the actual bot-blocking.
 
+## Title pages (Google and link previews) — switched on at launch
+
+`/manga/{AniList id}/{name}` is a plain web page for every title, built by
+the server from AniList (`server/title_pages.py`): cover, synopsis, genres,
+a "Read on MangaWhere" button into the app and links to similar titles.
+Google can read it, and a link shared on WhatsApp shows the cover and name.
+`/sitemap.xml` lists the 10,000 most popular titles.
+
+They are **off until launch**: every page says `noindex`, `robots.txt`
+keeps crawlers out of `/manga/`, and there is no sitemap. To switch on,
+once the site has its own domain pointing at this server:
+
+1. Set `PUBLIC_SITE_URL` on the server to the domain, e.g.
+   `https://mangawhere.com` (no trailing slash).
+2. In `index.html`, set `TITLE_PAGE_BASE` to the same address, so the
+   Share button hands out title-page links.
+3. Add the domain in Google Search Console and submit
+   `https://<domain>/sitemap.xml`.
+
+The pages need the server (GitHub Pages can't build them), so the domain
+must point at the server, which also serves the app at `/`.
+
 ## Tests
 
 ```

@@ -4429,7 +4429,13 @@ function wireUpdates(){
 
    ?m=al-12345 rather than a path, because GitHub Pages serves static
    files and any invented path would 404. */
+// At launch, set to the site's own domain (the server's PUBLIC_SITE_URL)
+// and shared links go to the title's own page (server/title_pages.py),
+// which shows its cover and name in WhatsApp and Google. Empty until then.
+var TITLE_PAGE_BASE="";
 function shareUrl(m){
+  var al=/^al-(\d+)$/.exec(m.id||"");
+  if(TITLE_PAGE_BASE && al) return TITLE_PAGE_BASE+"/manga/"+al[1];
   return location.origin+location.pathname+"?m="+encodeURIComponent(m.id);
 }
 
