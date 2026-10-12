@@ -127,6 +127,32 @@ class VideoLookupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Manhwa Name: Annihilation of the Heavenly Way", result["description"])
         self.assertEqual(fetched, ["https://www.youtube.com/shorts/I-ggXNUEVfU"])
 
+    async def test_the_official_api_is_used_first_when_there_is_a_key(self):
+        class Response:
+            def raise_for_status(self): pass
+            def json(self):
+                return {"items": [{"snippet": {"title": "T", "description": "Manhwa Name: X"},
+                                   "contentDetails": {"duration": "PT1M5S"}}]}
+
+        calls = []
+
+        async def get(self, url, params=None, **kw):
+            calls.append((url, params))
+            return Response()
+
+        with patch.dict(os.environ, {"YOUTUBE_API_KEY": "k"}), patch("httpx.AsyncClient.get", get), \
+             patch.object(video, "fetch_metadata") as ytdlp, \
+             patch.object(video, "transcribe_audio", return_value=None) as audio:
+            result = await video.lookup("https://youtube.com/shorts/NXUhXm7sf88?si=x")
+        self.assertEqual(result["description"], "Manhwa Name: X")
+        self.assertEqual(calls[0][1]["id"], "NXUhXm7sf88")
+        ytdlp.assert_not_called()
+        audio.assert_awaited_once_with("https://youtube.com/shorts/NXUhXm7sf88?si=x", 65)
+
+    async def test_without_a_key_the_api_is_skipped(self):
+        with patch.dict(os.environ, {"YOUTUBE_API_KEY": ""}):
+            self.assertEqual(await video.youtube_api_metadata("https://youtu.be/NXUhXm7sf88"), {})
+
     def test_youtube_ids(self):
         for url in ("https://youtube.com/shorts/I-ggXNUEVfU?si=x", "https://www.youtube.com/watch?v=I-ggXNUEVfU",
                     "https://youtu.be/I-ggXNUEVfU", "https://m.youtube.com/watch?feature=x&v=I-ggXNUEVfU"):
