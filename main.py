@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
-from scrapers import ytpost
+from scrapers import reddit, ytpost
 from server import auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -463,6 +463,27 @@ async def api_post_lookup(url: str = Query(..., description="YouTube community p
         raise HTTPException(status_code=502, detail="Couldn't read that post right now.")
     if not result["text"]:
         raise HTTPException(status_code=404, detail="That post is private, deleted, or has no text.")
+    response = JSONResponse(content=result)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.get("/api/reddit-lookup")
+async def api_reddit_lookup(url: str = Query(..., description="Reddit post URL")):
+    """A Reddit post's title and text, and the titles its comments name
+    (checked against AniList), for "what's this manga?" threads."""
+    _require_absolute_url(url)
+    if not reddit.is_reddit(url):
+        raise HTTPException(status_code=400, detail="That isn't a Reddit link")
+    try:
+        result = await reddit.lookup(url)
+    except reddit.RedditBusy:
+        raise HTTPException(status_code=503, detail="Reddit is busy right now. Try again in a minute.")
+    except Exception as e:
+        print(f"[reddit] lookup failed for {url}: {e!r}")
+        raise HTTPException(status_code=502, detail="Couldn't read that post right now.")
+    if not result:
+        raise HTTPException(status_code=404, detail="That post is deleted, private, or not a post link.")
     response = JSONResponse(content=result)
     response.headers["Referrer-Policy"] = "no-referrer"
     return response

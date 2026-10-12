@@ -2363,6 +2363,7 @@ function run(){
   var fromPost = postBack && postBack.titles.indexOf(raw)>-1 ? postBack : null;
   if(!fromPost) postBack=null;
   var job = isYtPost(raw) ? postLookup(raw)
+    : isReddit(raw) ? redditLookup(raw)
     : isLink
     ? oembed(raw).then(function(meta){
         var p=parseCaption(meta.caption);
@@ -2446,9 +2447,62 @@ function postLookup(url){
       });
     });
 }
+/* Reddit: people ask "what's the name of this?" and the answer is in the
+   comments. The server reads the post and its top comments and returns
+   the titles the comments name that AniList confirms (scrapers/reddit.py).
+   One confirmed name on a question post goes straight to its results;
+   several are a list to pick from; a post that names its own title
+   ("[DISC] Solo Leveling - Chapter 200") is read like a caption. */
+function isReddit(url){
+  return /^https?:\/\/((www|old|new|m|np|sh)\.)?(reddit\.com|redd\.it)\//i.test(url);
+}
+function redditLookup(url){
+  var out=document.getElementById("out");
+  if(out) out.innerHTML='<div class="spin">Reading the post and its comments…</div>';
+  return fetchTimeout(API_BASE+"/api/reddit-lookup?url="+encodeURIComponent(url), null, 40000)
+    .then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(d){
+        if(!r.ok) throw new Error(d.detail||"Couldn't read that post right now.");
+        return d;
+      });
+    })
+    .then(function(d){
+      var caption=[d.title||"", d.text||""].join("\n").trim();
+      var named=(d.titles||[]).map(function(t){ return t.title; });
+      var where=d.subreddit||"Reddit";
+      function pick(titles, heading, sub){
+        return {kind:"postList", titles:titles, author:d.author||"", caption:caption,
+                platform:where, heading:heading, sub:sub};
+      }
+      function find(title, parsed){
+        return search(title).then(function(rows){
+          return {kind:"results", rows:rows, parsed:parsed||{title:title,chapter:null,confidence:"high"},
+                  caption:caption, author:d.author||"", platform:where};
+        });
+      }
+      var maybe=d.maybe||[];
+      // A question post describes the story ("guy gets put into a fantasy
+      // world"); reading that as a title finds nothing. Its answer is in
+      // the comments.
+      if(d.question){
+        if(named.length===1) return find(named[0]);
+        if(named.length)
+          return pick(named, "The comments name "+named.length+" titles", "The most mentioned comes first. Tap one to find where to read it.");
+        if(maybe.length) return pick(maybe, "The comments suggest", "Tap one to search for it.");
+        return {kind:"noTitle", caption:caption};
+      }
+      var p=parseCaption(d.title||"");
+      if(!p.title) p=parseCaption(caption);
+      if(p.title) return find(p.title, p);
+      if(named.length)
+        return pick(named, "The comments name "+named.length+" title"+(named.length>1?"s":""), "Tap one to find where to read it.");
+      return {kind:"noTitle", caption:caption};
+    });
+}
+
 function postListHtml(r){
-  return '<div class="note"><p><strong>This post lists '+r.titles.length+' titles</strong>'+
-    'Tap one to find where to read it.</p></div>'+
+  return '<div class="note"><p><strong>'+esc(r.heading||("This post lists "+r.titles.length+" titles"))+'</strong>'+
+    esc(r.sub||"Tap one to find where to read it.")+'</p></div>'+
     '<ol class="postlist">'+r.titles.map(function(t,i){
       return '<li><button data-i="'+i+'"><span class="n">'+(i+1)+'</span>'+esc(t)+
         '<span class="go">Find &rsaquo;</span></button></li>';
@@ -2476,7 +2530,7 @@ function render(r){
   var out=document.getElementById("out");
   if(r.kind==="postList"){
     postBack=r;
-    out.innerHTML=(r.author?'<div class="cap">YouTube post · '+esc(r.author)+'</div>':"")+postListHtml(r);
+    out.innerHTML=(r.author?'<div class="cap">'+esc(r.platform||"YouTube post")+' · '+esc(r.author)+'</div>':"")+postListHtml(r);
     Array.prototype.forEach.call(out.querySelectorAll(".postlist button"), function(b){
       b.onclick=function(){
         document.getElementById("q").value=r.titles[+b.getAttribute("data-i")];
@@ -2487,8 +2541,8 @@ function render(r){
     return;
   }
   if(r.kind==="unsupported"){
-    out.innerHTML='<div class="note"><p><strong>Link not supported</strong>Only TikTok and '+
-      'YouTube can be read. Type the manga name instead.</p></div>'; return;}
+    out.innerHTML='<div class="note"><p><strong>Link not supported</strong>Only TikTok, '+
+      'YouTube and Reddit links can be read. Type the manga name instead.</p></div>'; return;}
   if(r.kind==="oembedFail"){
     var parts=(r.err||"").split("|");
     var code=parts[0], msg=parts[1]||r.err;
