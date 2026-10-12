@@ -10,6 +10,8 @@ import httpx
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
+from server import heavy
+
 from .matching import title_score
 
 HEADERS = {
@@ -139,21 +141,28 @@ async def fetch_html_httpx(url: str, timeout: float = 15.0) -> str:
         return response.text
 
 
+# Headless browsers are the heaviest thing this server runs; they take
+# turns with each other and with OCR (server/heavy.py).
+_BROWSER_ARGS = ["--disable-dev-shm-usage", "--disable-gpu", "--disable-extensions"]
+
+
 async def fetch_html_playwright(url: str) -> str:
     """Browser-based fallback used when anti-bot protection blocks standard HTTP requests."""
     seen = _unreachable.get(_host(url))
     if seen is not None and time.monotonic() - seen < UNREACHABLE_FOR:
         raise SiteUnreachable(f"{_host(url)} couldn't be reached; not starting a browser")
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent=HEADERS["User-Agent"])
-        page = await context.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-        await page.wait_for_timeout(2000)
-        content = await page.content()
-        await browser.close()
-        return content
+    async with heavy.SLOT, async_playwright() as p:
+        heavy.release_ocr()
+        browser = await p.chromium.launch(headless=True, args=_BROWSER_ARGS)
+        try:
+            context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+            await page.wait_for_timeout(2000)
+            return await page.content()
+        finally:
+            await browser.close()
 
 
 async def scrape_toongod(url: str) -> List[str]:
@@ -291,23 +300,25 @@ async def _fetch_html_playwright_scrolled(url: str) -> str:
     bottom rather than jumping halfway once — needed for manhuaplus.org,
     whose page images are lazy-loaded and a long chapter can run well past
     the halfway point the shared helper stops at."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent=HEADERS["User-Agent"])
-        page = await context.new_page()
-        await page.goto(url, wait_until="networkidle", timeout=30000)
-        previous_height = 0
-        for _ in range(20):
-            height = await page.evaluate("document.body.scrollHeight")
-            if height == previous_height:
-                break
-            previous_height = height
-            await page.evaluate(f"window.scrollTo(0, {height})")
-            await page.wait_for_timeout(400)
-        await page.wait_for_timeout(3000)
-        content = await page.content()
-        await browser.close()
-        return content
+    async with heavy.SLOT, async_playwright() as p:
+        heavy.release_ocr()
+        browser = await p.chromium.launch(headless=True, args=_BROWSER_ARGS)
+        try:
+            context = await browser.new_context(user_agent=HEADERS["User-Agent"])
+            page = await context.new_page()
+            await page.goto(url, wait_until="networkidle", timeout=30000)
+            previous_height = 0
+            for _ in range(20):
+                height = await page.evaluate("document.body.scrollHeight")
+                if height == previous_height:
+                    break
+                previous_height = height
+                await page.evaluate(f"window.scrollTo(0, {height})")
+                await page.wait_for_timeout(400)
+            await page.wait_for_timeout(3000)
+            return await page.content()
+        finally:
+            await browser.close()
 
 
 async def scrape_manhuaplus(url: str) -> List[str]:

@@ -116,7 +116,6 @@ def post_images(post: dict) -> List[str]:
 
 
 _NOT_A_TITLE = re.compile(r"\d+\s*chap|\bchapters?\b|ongoing|complet|hiatus|season|episode|@|www|\.com|subscribe", re.I)
-_OCR_LOCK = asyncio.Semaphore(1)   # one picture at a time: the server's CPU is small
 
 
 def title_lines(results) -> List[str]:
@@ -154,7 +153,7 @@ async def title_from_image(url: str) -> Dict[str, object]:
     {"guess": text} for the biggest lettering when it isn't, {} for a
     picture with no lettering."""
     from scrapers.titlecheck import display_title, matches, search_many
-    from server import cache
+    from server import cache, heavy
 
     base = image_base(url)
     if not base:
@@ -164,7 +163,7 @@ async def title_from_image(url: str) -> Dict[str, object]:
         async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.get(base + IMAGE_SIZE)
             r.raise_for_status()
-            async with _OCR_LOCK:
+            async with heavy.SLOT:
                 results = await asyncio.to_thread(_ocr, r.content)
             names = title_lines(results)
             for name, options in zip(names, await search_many(client, names)):
