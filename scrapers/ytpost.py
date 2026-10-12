@@ -8,6 +8,7 @@ reads the post's text from its page and pulls out the titles it lists.
 """
 import asyncio
 import json
+import os
 import re
 from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -148,11 +149,32 @@ def _ocr(image: bytes):
     return results
 
 
-async def title_from_image(url: str) -> Dict[str, object]:
-    """{"title", "id"} when a line on the picture is a title AniList knows,
-    {"guess": text} for the biggest lettering when it isn't, {} for a
-    picture with no lettering."""
+async def title_from_lines(results) -> Dict[str, object]:
+    """{"title", "id"} when a line of a picture's text is a title AniList
+    knows, {"guess": text} for the biggest lettering when it isn't,
+    {"none": True} for a picture with no lettering."""
     from scrapers.titlecheck import display_title, matches, search_many
+
+    names = title_lines(results)
+    if names:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            for name, options in zip(names, await search_many(client, names)):
+                hit = next((m for m in options if matches(name, m)), None)
+                if hit:
+                    return {"title": display_title(hit), "id": hit["id"]}
+    return {"guess": names[0].title()} if names else {"none": True}
+
+
+def server_ocr_enabled() -> bool:
+    """Reading pictures here needs ~300MB on top of the app; the 512MB
+    free server was killed for it, so the reader's phone reads them
+    (ocr-worker.js) and sends the lines to title_from_lines. A server with
+    room sets SERVER_OCR=1."""
+    return os.environ.get("SERVER_OCR", "").strip() in ("1", "true", "yes")
+
+
+async def title_from_image(url: str) -> Dict[str, object]:
+    """title_from_lines for a picture this server reads itself."""
     from server import cache, heavy
 
     base = image_base(url)
@@ -163,14 +185,9 @@ async def title_from_image(url: str) -> Dict[str, object]:
         async with httpx.AsyncClient(timeout=20.0) as client:
             r = await client.get(base + IMAGE_SIZE)
             r.raise_for_status()
-            async with heavy.SLOT:
-                results = await asyncio.to_thread(_ocr, r.content)
-            names = title_lines(results)
-            for name, options in zip(names, await search_many(client, names)):
-                hit = next((m for m in options if matches(name, m)), None)
-                if hit:
-                    return {"title": display_title(hit), "id": hit["id"]}
-        return {"guess": names[0].title()} if names else {"none": True}
+        async with heavy.SLOT:
+            results = await asyncio.to_thread(_ocr, r.content)
+        return await title_from_lines(results)
 
     return await cache.cached("postimg", base, 30 * 24 * 3600, produce, miss_ttl=600)
 
