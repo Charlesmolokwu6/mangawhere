@@ -438,22 +438,23 @@ background:var(--surf2)}
 .watchwrap .frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .skel{width:100%;aspect-ratio:2/3;border-radius:9px;background:var(--surf2);animation:p 1.3s infinite}
 @keyframes p{0%,100%{opacity:.45}50%{opacity:.8}}
-/* Loading never looks frozen: MangaWhere's logo spinning above the words
+/* Loading never looks frozen: MangaWhere's logo pulsing above the words
    of anything being fetched (.spin blocks, .ldg lines; a ring on buttons
    marked .busy, where a mint logo would vanish on the mint button), and a
    thin moving bar along the top of the screen while any of them is on
    screen (watchLoading). */
 .ldg{display:block;text-align:center}
 .ldg::before{content:"";display:block;width:34px;height:34px;margin:4px auto 8px;
-background:url(icons/favicon.svg) center/contain no-repeat;animation:logospin 1.2s linear infinite}
+background:url(icons/favicon.svg) center/contain no-repeat;animation:logopulse 1.1s ease-in-out infinite}
 button.busy::before{content:"";display:inline-block;width:14px;height:14px;
 margin-right:8px;vertical-align:-2px;border:2px solid var(--line);border-top-color:var(--mint);
 border-radius:50%;animation:narrspin .8s linear infinite}
 /* The bigger loading blocks get a larger one (added to every .spin by
    watchLoading). */
 .spin .logoload{display:block;width:54px;height:54px;margin:0 auto 14px;
-animation:logospin 1.2s linear infinite}
-@keyframes logospin{to{transform:rotate(360deg)}}
+animation:logopulse 1.1s ease-in-out infinite}
+@keyframes logopulse{0%,100%{transform:scale(.88);opacity:.7;filter:drop-shadow(0 0 0 rgba(63,224,200,0))}
+50%{transform:scale(1.06);opacity:1;filter:drop-shadow(0 0 10px rgba(63,224,200,.55))}}
 button.busy::before{border-color:rgba(0,0,0,.2);border-top-color:currentColor}
 #loadbar{position:fixed;top:0;left:0;right:0;height:3px;z-index:9999;overflow:hidden;
 pointer-events:none;opacity:0;transition:opacity .25s}
@@ -463,7 +464,7 @@ background:var(--mint);animation:loadslide 1.1s ease-in-out infinite}
 @keyframes loadslide{to{left:100%}}
 @media (prefers-reduced-motion: reduce){
   button.busy::before{animation-duration:2.4s}
-  .ldg::before,.spin .logoload{animation-duration:3s}
+  .ldg::before,.spin .logoload{animation-duration:2.6s}
   #loadbar::before{animation:none;left:0;width:100%;opacity:.6}
 }
 .chips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px}
