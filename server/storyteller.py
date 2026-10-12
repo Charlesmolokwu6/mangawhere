@@ -37,6 +37,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from server import heavy
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 NARRATION_DIR = DATA_DIR / "narration"
 
@@ -769,7 +771,11 @@ async def _run(state: Dict[str, Any], chapter_url: str, images: List[str]) -> No
                 for i, url in enumerate(images):
                     state["done"] = i
                     image = await fetch_image(client, url, chapter_url)
-                    pages.append(await asyncio.to_thread(ocr_page, image) if image else [])
+                    if image:
+                        async with heavy.SLOT:   # takes turns with browsers (server/heavy.py)
+                            pages.append(await asyncio.to_thread(ocr_page, image))
+                    else:
+                        pages.append([])
             state["done"] = len(images)
 
             if not any(pages):

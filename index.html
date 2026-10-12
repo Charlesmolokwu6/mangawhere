@@ -2947,7 +2947,9 @@ function fillChapters(m, videoCh){
   // translation, etc). Every path that opens a detail page routes through
   // here, so this is the one place this needs to be wired up.
   findChapters(m.title, m.alts).then(function(res){
-    if(!res.ok) reportUnreadable(m);
+    // Only "not on any site" (404) says the title is unreadable; a timeout
+    // or a server restart says nothing about the title.
+    if(!res.ok && res.status===404) reportUnreadable(m);
     if(res.ok) reconcileChapterCount(res.d.chapters, res.d.domain);
     renderDetailChapters(m, res);
   });
@@ -3303,7 +3305,9 @@ function altParams(alts){
 
 function findChapters(title, alts){
   if(findCache[title]) return findCache[title];
-  var promise=fetch(READER_BASE+"/api/find?title="+encodeURIComponent(title)+altParams(alts))
+  // A live scrape takes up to ~40s; past 90s the server has died or hung,
+  // and waiting longer only leaves "Looking for a chapter list…" forever.
+  var promise=fetchTimeout(READER_BASE+"/api/find?title="+encodeURIComponent(title)+altParams(alts), null, 90000)
     .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, status:r.status, d:d}; }); })
     .catch(function(){ return {ok:false, status:0, d:null}; });
   findCache[title]=promise;
@@ -3398,7 +3402,16 @@ function renderDetailChapters(m, res){
     box.innerHTML='<div class="note"><p><strong>No chapter list yet</strong>'+
       (res.status===404
         ? "Couldn't find this title on any of the sites this app reads from."
-        : "Couldn't load the chapter list right now — try again.")+'</p></div>';
+        : "Couldn't load the chapter list right now.")+'</p>'+
+      (res.status===404 ? "" : '<button class="more" id="chretry">Try again</button>')+'</div>';
+    var retry=document.getElementById("chretry");
+    if(retry) retry.onclick=function(){
+      box.innerHTML='<p class="sub ldg" style="margin:0">Looking for a chapter list…</p>';
+      findChapters(m.title, m.alts).then(function(again){
+        if(again.ok) reconcileChapterCount(again.d.chapters, again.d.domain);
+        renderDetailChapters(m, again);
+      });
+    };
     return;
   }
   var chapters=res.d.chapters||[];
