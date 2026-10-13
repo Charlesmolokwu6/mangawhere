@@ -54,6 +54,11 @@ Optional environment variables (see `render.yaml`):
 - `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET` — enables "Continue with
   Facebook" (see below). The app ID is also needed in `index.html` (public);
   the secret stays here only. Left unset, that button just doesn't render.
+- `SCRAPER_URL`, `SCRAPER_TOKEN` — hand all scraping to a separate,
+  disposable node (see Separate scraper node below). Left unset, this
+  server scrapes itself, as it always has.
+- `PUBLIC_BACKEND_URL` — where a copy of the page served by this app finds
+  its backend (see Moving the backend below).
 
 ## Persistent storage (Turso)
 
@@ -447,6 +452,98 @@ picks the title and checks it against AniList. The free Render server ran
 out of memory reading pictures itself; a server with room (1GB+ spare)
 can set `SERVER_OCR=1` and `/api/post-image-title` reads them there, for
 phones that can't run the reader.
+
+## Backups
+
+`scripts/backup.py` writes one encrypted file holding the database (as SQL,
+minus cached scrapes and captchas, which rebuild themselves), the code and
+config at the current commit, and a manifest with row counts:
+
+```
+BACKUP_PASSPHRASE='a long passphrase' python scripts/backup.py --out backups --keep 14
+```
+
+It reads Turso when `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` are set, the
+local `data/mangawhere.db` otherwise, and keeps the newest `--keep` files in
+`--out`. Without `BACKUP_PASSPHRASE` it refuses to run (`--no-encrypt`
+writes a plain `.tar.gz`, for storage you fully trust).
+
+**Every 24 hours, automatically:** `.github/workflows/backup.yml` runs it
+daily and keeps each file as a workflow artifact for 30 days (Actions →
+Backup → a run → Artifacts). Add repository secrets `BACKUP_PASSPHRASE`,
+`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. Store the passphrase somewhere
+other than GitHub too: without it the backups can't be opened. To keep
+copies on your own machine or other cloud storage as well, run the script
+from cron there, e.g. `0 4 * * * cd /path/to/mangawhere && BACKUP_PASSPHRASE=... python scripts/backup.py --out ~/mangawhere-backups`,
+and sync that folder wherever you like; the files are encrypted, so any
+storage will do.
+
+What isn't in a backup: secrets set in the Render, Cloudflare and GitHub
+dashboards (`render.yaml` lists their names; keep the values in a password
+manager), and a SQLite database on Render's free disk, which GitHub can't
+reach (set up Turso).
+
+**Restoring:**
+
+```
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_PASSPHRASE \
+  -in mangawhere-YYYYMMDD-HHMMSS.tar.gz.enc | tar xz
+mkdir code && tar xf code.tar -C code       # the site at that commit
+sqlite3 data/mangawhere.db < database.sql   # a local database, or:
+turso db create mangawhere-restored --from-dump database.sql
+```
+
+## Separate scraper node
+
+Everything that fetches from the manga sites (and YouTube and Reddit) can
+run on a second, disposable server, so a site that flags or rate-limits an
+address only ever sees that node. If it's blocked, replace the node; the
+main server, accounts and database are never involved.
+
+1. Deploy a second copy of this app (another Render service, a cheap VPS,
+   anything that runs `uvicorn main:app`) with:
+   - `SCRAPER_ONLY=1` — serves only the scraping routes (`/api/find`,
+     `/api/scrape`, `/api/series`, `/api/trim`, `/api/narrate/page`,
+     `/api/health*`, the video/post/Reddit lookups), runs the title health
+     checks, and doesn't run the new-chapter poller.
+   - `SCRAPER_TOKEN` — a long random string (`python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+     The node refuses every request that doesn't carry it, so nobody can
+     use it directly or around the main server's per-address limits.
+   - `YOUTUBE_COOKIES` / `YOUTUBE_API_KEY` if you use them (the lookups run
+     here now). It doesn't need the Turso, mail, push or OAuth settings; its
+     own disposable SQLite file holds the scrape cache.
+2. On the main server set `SCRAPER_URL` to the node's address and the same
+   `SCRAPER_TOKEN`. It then forwards those routes there (readers' requests
+   are still limited per reader on the main server) and stops scraping and
+   running health checks itself. If the node can't be reached, readers get
+   "The reader is unavailable right now" and everything else keeps working.
+
+Moving to a fresh node is changing `SCRAPER_URL`. `render.yaml` has a
+commented-out service for it; on Render's free plan two services share the
+750 free hours, so the node there would sleep when idle.
+
+## Moving the backend
+
+The page finds its backend in one place, `config.js`:
+
+```js
+window.MANGAWHERE_CONFIG = { backend: "https://mangawhere.onrender.com" };
+```
+
+Every API call, the CORS proxy and the reader follow it. To move the backend
+to a new server or domain:
+
+- **Page on GitHub Pages:** edit that line in `config.js` and push.
+- **Page served by main.py:** set `PUBLIC_BACKEND_URL` on that server
+  instead; `/config.js` is then generated from it, no file edits.
+- **Cloudflare Worker** (`cloudflare/page-cache-worker.js`): set an `ORIGIN`
+  variable on the Worker (Settings → Variables).
+- **Keep-awake ping** (`.github/workflows/keep-awake.yml`): set a
+  `BACKEND_URL` repository variable.
+- If the page's own address changes too, add it to
+  `RESET_LINK_ORIGINS` (see Password reset).
+
+A visitor can still try another backend for themselves with `?api=...`.
 
 ## Tests
 

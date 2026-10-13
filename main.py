@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import os
 import re
@@ -21,21 +22,76 @@ from server import auth, banners, cache, captcha, comments, db, health, media, o
 BASE_DIR = Path(__file__).resolve().parent
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ---- scraper node (README.md -> Separate scraper node) ----
+#
+# Everything that fetches from the manga, YouTube and Reddit sites can run on
+# a second, disposable copy of this app, so a source site that blocks or
+# rate-limits an address only ever sees (and can only ever block) that node.
+# The main server then forwards those requests there and never contacts the
+# sites itself; swapping a flagged node for a fresh one is a change of
+# SCRAPER_URL. The node runs this same app with SCRAPER_ONLY=1, which turns
+# off everything but those routes.
+SCRAPER_URL = os.environ.get("SCRAPER_URL", "").strip().rstrip("/")
+SCRAPER_ONLY = _env_flag("SCRAPER_ONLY")
+# Shared by the main server and its scraper node. The node answers only
+# requests carrying it, so it can't be used directly, around the main
+# server's per-address limits.
+SCRAPER_TOKEN = os.environ.get("SCRAPER_TOKEN", "").strip()
+if SCRAPER_ONLY:
+    SCRAPER_URL = ""   # a node never forwards on again
+SCRAPER_PATHS = (
+    "/api/find", "/api/scrape", "/api/series", "/api/trim", "/api/narrate/page",
+    "/api/health",
+    "/api/video-lookup", "/api/post-lookup", "/api/reddit-lookup", "/api/reddit-read",
+    "/api/post-image-title", "/api/post-picture-title",
+)
+# Headers worth passing back from the node to the reader.
+SCRAPER_RESPONSE_HEADERS = ("content-type", "cache-control", "referrer-policy", "retry-after")
+# /api/find can take up to ~90s on a cold title; the reader waits that long too.
+SCRAPER_TIMEOUT = 120.0
+_scraper_client: Optional[httpx.AsyncClient] = None
+
+
+def _scraper_path(path: str) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in SCRAPER_PATHS)
+
+
+def _from_main_server(request: Request) -> bool:
+    return bool(SCRAPER_TOKEN) and hmac.compare_digest(
+        request.headers.get("x-scraper-token", ""), SCRAPER_TOKEN
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
     # A copy that only narrates (narrator/Dockerfile, on a Hugging Face
     # Space) leaves the site's background jobs to the main server.
-    narration_only = os.environ.get("NARRATION_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
-    if not narration_only:
+    narration_only = _env_flag("NARRATION_ONLY")
+    # The title health checks scrape the source sites, so they run wherever
+    # scraping does: here, unless SCRAPER_URL hands scraping to another node.
+    # New-chapter alerts need the accounts, so a scraper node never sends them.
+    run_health = not narration_only and not SCRAPER_URL
+    run_poller = not narration_only and not SCRAPER_ONLY
+    if SCRAPER_ONLY and not SCRAPER_TOKEN:
+        print("[scraper] SCRAPER_ONLY is set without SCRAPER_TOKEN: every request will be refused")
+    if run_poller:
         poller.start()
+    if run_health:
         health.start(find_title, scrape_cached, image_loads)
     yield
-    if not narration_only:
+    if run_health:
         await health.stop()
+    if run_poller:
         poller.stop()
     if _proxy_client is not None:
         await _proxy_client.aclose()
+    if _scraper_client is not None:
+        await _scraper_client.aclose()
 
 
 # One long-lived client for the proxy, so its connections to an image CDN
@@ -158,9 +214,57 @@ def _rate_group(method: str, path: str) -> Optional[str]:
     return None
 
 
+def _scraper_client_get() -> httpx.AsyncClient:
+    global _scraper_client
+    if _scraper_client is None:
+        _scraper_client = httpx.AsyncClient(
+            timeout=SCRAPER_TIMEOUT,
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
+        )
+    return _scraper_client
+
+
+# Sits inside the per-address limits below (so readers are still limited
+# here, by their own address) and outside CORS (so it adds that header itself).
+@app.middleware("http")
+async def _scraper_split(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if SCRAPER_ONLY:
+        if not _from_main_server(request):
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        if not (_scraper_path(path) or path == "/api/config"):
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+        return await call_next(request)
+    if not SCRAPER_URL or not _scraper_path(path):
+        return await call_next(request)
+
+    headers = {"X-Scraper-Token": SCRAPER_TOKEN}
+    if request.headers.get("content-type"):
+        headers["Content-Type"] = request.headers["content-type"]
+    try:
+        upstream = await _scraper_client_get().request(
+            request.method, SCRAPER_URL + path + ("?" + request.url.query if request.url.query else ""),
+            content=await request.body(), headers=headers,
+        )
+    except Exception as e:
+        print(f"[scraper] {path} failed to reach {SCRAPER_URL}: {e!r}")
+        return JSONResponse({"detail": "The reader is unavailable right now. Try again shortly."},
+                            status_code=503,
+                            headers={"Retry-After": "60", "Access-Control-Allow-Origin": "*"})
+    out = {k: upstream.headers[k] for k in SCRAPER_RESPONSE_HEADERS if k in upstream.headers}
+    out["Access-Control-Allow-Origin"] = "*"
+    return Response(content=upstream.content, status_code=upstream.status_code, headers=out)
+
+
 @app.middleware("http")
 async def _rate_limit(request: Request, call_next):
     group = _rate_group(request.method, request.url.path)
+    if group is not None and SCRAPER_ONLY and _from_main_server(request):
+        # Every reader arrives from the main server's one address; it has
+        # already limited each of them by their own.
+        group = None
     if group is None or request.method == "OPTIONS":
         return await call_next(request)
     address = request.client.host if request.client else "?"
@@ -1021,6 +1125,23 @@ async def api_comments_post(request: Request, authorization: Optional[str] = Hea
 @app.get("/index.html")
 async def serve_index_file():
     return FileResponse(BASE_DIR / "index.html")
+
+
+# Where the page finds its backend (config.js). On GitHub Pages that's the
+# file itself; a copy of the page served by this app can be re-pointed with
+# PUBLIC_BACKEND_URL instead, without editing any file.
+PUBLIC_BACKEND_URL = os.environ.get("PUBLIC_BACKEND_URL", "").strip().rstrip("/")
+
+
+@app.get("/config.js")
+async def serve_frontend_config():
+    if not PUBLIC_BACKEND_URL:
+        return FileResponse(BASE_DIR / "config.js", media_type="application/javascript",
+                            headers={"Cache-Control": "no-cache"})
+    return Response(
+        "window.MANGAWHERE_CONFIG = " + json.dumps({"backend": PUBLIC_BACKEND_URL}) + ";\n",
+        media_type="application/javascript", headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.get("/sw.js")
