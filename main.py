@@ -184,6 +184,23 @@ async def _rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
+# The site's Tor onion service (onion/, README.md). With ONION_ADDRESS set,
+# pages carry an Onion-Location header, so Tor Browser offers the .onion
+# copy of the page to anyone reading the normal site through Tor.
+ONION_ADDRESS = os.environ.get("ONION_ADDRESS", "").strip().lower().removeprefix("http://").rstrip("/")
+
+
+@app.middleware("http")
+async def _onion_location(request: Request, call_next):
+    response = await call_next(request)
+    if ONION_ADDRESS and response.headers.get("content-type", "").startswith("text/html"):
+        target = f"http://{ONION_ADDRESS}{request.url.path}"
+        if request.url.query:
+            target += f"?{request.url.query}"
+        response.headers["Onion-Location"] = target
+    return response
+
+
 async def _json_object(request: Request) -> dict:
     """The request's JSON body as an object; a 400, not a 500, for anything else."""
     try:

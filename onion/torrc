@@ -1,0 +1,10 @@
+# The mangawhere hidden service. Tor shares the proxy container's network
+# (docker-compose.yml), so 127.0.0.1:8080 is Caddy, which forwards to the
+# real site.
+SocksPort 0
+Log notice stdout
+DataDirectory /var/lib/tor
+
+HiddenServiceDir /var/lib/tor/hidden_service/
+HiddenServiceVersion 3
+HiddenServicePort 80 127.0.0.1:8080

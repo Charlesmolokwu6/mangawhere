@@ -88,3 +88,7 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Optional (see README.md, "Tor onion address") — the site's .onion
+      # address. Set it and Tor Browser offers visitors the onion copy.
+      - key: ONION_ADDRESS
+        sync: false

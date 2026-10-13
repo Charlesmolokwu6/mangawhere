@@ -1,0 +1,33 @@
+# Serves mangawhere as a Tor onion service. Run on any always-on machine
+# (a VPS, a Raspberry Pi, a home PC) — Render can't run tor itself.
+#
+#   UPSTREAM=https://your-app.onrender.com docker compose up -d
+#   docker compose exec tor cat /var/lib/tor/hidden_service/hostname
+#
+# See README.md ("Tor onion address").
+services:
+  proxy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      UPSTREAM: ${UPSTREAM:?set UPSTREAM to the site's https:// address}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+
+  tor:
+    build:
+      context: .
+      dockerfile: Dockerfile.tor
+    restart: unless-stopped
+    # Shares the proxy's network so the hidden service can point at
+    # 127.0.0.1:8080 and no port is ever published to the outside.
+    network_mode: "service:proxy"
+    depends_on:
+      - proxy
+    volumes:
+      # The onion address's private key lives here. Lose this volume and
+      # the address is gone for good — back it up.
+      - onion-keys:/var/lib/tor/hidden_service
+
+volumes:
+  onion-keys:

@@ -448,6 +448,45 @@ out of memory reading pictures itself; a server with room (1GB+ spare)
 can set `SERVER_OCR=1` and `/api/post-image-title` reads them there, for
 phones that can't run the reader.
 
+## Tor onion address
+
+`onion/` runs the site as a Tor onion service (a `.onion` address). Render
+can't run tor itself, so this runs on any other always-on machine with
+Docker (a cheap VPS, a Raspberry Pi, a home PC). Nothing on that machine is
+opened to the internet: tor only makes outgoing connections.
+
+```
+cd onion
+UPSTREAM=https://your-app.onrender.com docker compose up -d --build
+docker compose exec tor cat /var/lib/tor/hidden_service/hostname
+```
+
+That last command prints the address (56 characters ending `.onion`), ready
+to open in Tor Browser a minute or two later. Requests go Tor Browser → tor
+→ Caddy (`onion/Caddyfile`) → `UPSTREAM`, so the onion copy shows the same
+accounts, watch lists and comments as the normal site.
+
+Then set `ONION_ADDRESS` on Render to that address. Pages on the normal
+site then send an `Onion-Location` header, and Tor Browser offers its
+visitors the `.onion` version with a ".onion available" button.
+
+Things to know:
+- **Back up the key.** The address *is* the key in the `onion-keys` Docker
+  volume (`hs_ed25519_secret_key`). Lose it and the address is gone for
+  good; anyone who copies it can impersonate the site. Back it up with
+  `docker compose cp tor:/var/lib/tor/hidden_service ./onion-backup` and
+  keep that copy private (it's ignored by git). To restore, copy it back
+  into the volume before starting tor.
+- **Google / Facebook sign-in and Turnstile** check the page's address
+  against the one registered with them, so they may not work on the onion.
+  Email/password sign-up and the custom captcha do.
+- **Rate limits are shared.** Every onion visitor reaches the server from
+  the one onion machine, so they share the per-address request limits in `main.py`.
+- To skip Render entirely, run the app on the same machine
+  (`uvicorn main:app --port 8000`) and point `UPSTREAM` at
+  `http://host.docker.internal:8000` (add
+  `extra_hosts: ["host.docker.internal:host-gateway"]` to `proxy` on Linux).
+
 ## Tests
 
 ```

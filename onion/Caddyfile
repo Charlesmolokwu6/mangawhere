@@ -1,0 +1,17 @@
+{
+	admin off
+	auto_https off
+}
+
+# Only reachable from inside the tor container's network: nothing in
+# docker-compose.yml publishes this port.
+http://:8080 {
+	reverse_proxy {$UPSTREAM} {
+		# The upstream (Render) routes by hostname, so it must see its own
+		# name, not the .onion one.
+		header_up Host {upstream_hostport}
+		# Tor Browser ignores this on an onion site anyway; drop it so the
+		# onion never advertises itself.
+		header_down -Onion-Location
+	}
+}
