@@ -1,0 +1,67 @@
+# Daily encrypted backup of the database and the code/config
+# (scripts/backup.py, README.md -> Backups). Each run's file is kept as a
+# workflow artifact for 30 days: Actions > Backup > a run > Artifacts.
+#
+# Needs repository secrets (Settings > Secrets and variables > Actions):
+#   BACKUP_PASSPHRASE   required; without it nothing is written. Keep a copy
+#                       somewhere other than GitHub, or the backups can't be
+#                       opened.
+#   TURSO_DATABASE_URL, TURSO_AUTH_TOKEN
+#                       the live database. Without them only the code and
+#                       config are backed up: a database on Render's own disk
+#                       can't be reached from here (and is wiped on deploy).
+#
+# Artifacts of a public repository can be downloaded by any signed-in GitHub
+# user, which is why the file is always encrypted.
+name: Backup
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+    steps:
+      - name: Check the passphrase is set
+        run: |
+          if [ -z "$BACKUP_PASSPHRASE" ]; then
+            echo "::error::Set the BACKUP_PASSPHRASE repository secret to turn on backups."
+            exit 1
+          fi
+          if [ -z "$TURSO_DATABASE_URL" ]; then
+            echo "::warning::TURSO_DATABASE_URL isn't set: backing up code and config only."
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the database client
+        run: pip install libsql==0.1.11
+
+      - name: Back up
+        run: |
+          if [ -z "$TURSO_DATABASE_URL" ]; then
+            # Nothing live to read: back up an empty schema with the code.
+            python -c "from server import db; db.init_db()"
+          fi
+          python scripts/backup.py --out backups --keep 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mangawhere-backup-${{ github.run_number }}
+          path: backups/*.enc
+          retention-days: 30
+          if-no-files-found: error
