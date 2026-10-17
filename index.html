@@ -250,6 +250,9 @@ gap:16px 12px;width:auto}
 object-fit:cover;border-radius:9px;background:var(--surf2);transition:transform .13s}
 
 .rail.grid .tile img,.rail.grid .tile .ph,.rail.grid .tile .skel{width:100%;height:auto;aspect-ratio:2/3}
+/* A banner between the covers spans every column, on its own row. */
+.rail.grid .browsead{grid-column:1/-1;display:flex;justify-content:center;margin:2px 0}
+.rail.grid .browsead .adslot{margin:0}
 .tile:hover img{transform:translateY(-3px)}
 .tile h4{font-size:12px;font-weight:600;margin:7px 0 1px;line-height:1.3;
 display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -643,9 +646,11 @@ var ADS = {
   readerTop: "320x50",
   narration: "320x50",   // pinned to the top of the screen while storyteller mode reads
   readerPages: ["320x50", "320x50"],   // two thin strips together between pages
-  readerEnd: "320x50"
+  readerEnd: "320x50",
+  browseList: "320x50"   // between rows of the Manga/Manhwa/Manhua browse grid
 };
 var AD_EVERY_PAGES = 4;
+var BROWSE_AD_EVERY = 10;   // a banner after every this many titles in the grid
 var AD_NATIVE_HEIGHT = 300;
 var AD_SLOT_HTML = "";  // older single slot; used for `detail` if that's empty
 
@@ -1956,6 +1961,21 @@ function browseTile(m,i){
     (statusInfo(m.status).key==="complete"?' · done':"")+'</p></button>';
 }
 
+// A banner spanning the whole grid width, after every BROWSE_AD_EVERY
+// titles. `start` is the absolute index of the first title in `rows`, so
+// the spacing stays even as more pages load in.
+function browseTilesWithAds(rows, start){
+  return rows.map(function(m,i){
+    var at=start+i;   // 0-based position in the whole list
+    var html=browseTile(m, at);
+    if((at+1)%BROWSE_AD_EVERY===0){
+      var ad=adFrame(ADS.browseList);
+      if(ad) html+='<div class="browsead">'+ad+'</div>';
+    }
+    return html;
+  }).join("");
+}
+
 function wireBrowseTiles(from){
   var grid=document.getElementById("browsegrid");
   if(!grid) return;
@@ -1990,7 +2010,7 @@ function loadBrowse(){
       return '<button class="chip s" data-s="'+o[0]+'" aria-pressed="'+(browse.sort===o[0])+'">'+o[1]+'</button>';
     }).join("")+'</div>'+
     '<div class="rail grid"><div class="track" id="browsegrid">'+
-      (back ? browse.rows.map(browseTile).join("")
+      (back ? browseTilesWithAds(browse.rows, 0)
             : Array(9).fill('<div class="tile"><div class="skel"></div></div>').join(""))+
     '</div></div>'+
     '<p class="sub" id="browsemore" style="text-align:center;margin:16px 0"></p>';
@@ -2051,7 +2071,7 @@ function browseNext(){
       if(page===1) grid.innerHTML="";
       var start=browse.rows.length;
       browse.rows=browse.rows.concat(fresh);
-      grid.insertAdjacentHTML("beforeend", fresh.map(function(m,i){ return browseTile(m,start+i); }).join(""));
+      grid.insertAdjacentHTML("beforeend", browseTilesWithAds(fresh, start));
       wireBrowseTiles(start);
       if(!r.full){ browse.done=true; browseEnd(); return; }
       var m=document.getElementById("browsemore");
