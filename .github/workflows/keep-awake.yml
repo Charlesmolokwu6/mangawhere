@@ -3,7 +3,8 @@
 # poller stops while it's asleep. Pinging a cheap endpoint keeps it awake.
 # GitHub can start scheduled runs late, so this runs every 5 minutes to stay
 # well inside the 15. Free for a public repo; one always-on service fits in
-# Render's 750 free hours a month.
+# Render's 750 free hours a month. Moved the backend? Set a BACKEND_URL
+# repository variable (Settings > Secrets and variables > Actions > Variables).
 name: Keep Render awake
 
 on:
@@ -19,7 +20,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Ping the backend
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
         run: >-
           curl -fsS --retry 3 --retry-delay 20 --max-time 90 -o /dev/null
           -w "HTTP %{http_code} in %{time_total}s\n"
-          https://mangawhere.onrender.com/api/config
+          "${BACKEND_URL:-https://mangawhere.onrender.com}/api/config"

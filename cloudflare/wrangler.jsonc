@@ -4,5 +4,8 @@
 {
   "name": "mangawhere-pages",
   "main": "page-cache-worker.js",
-  "compatibility_date": "2026-09-01"
+  "compatibility_date": "2026-09-01",
+  // Keep variables set in the dashboard (ORIGIN, the backend's address)
+  // when a build deploys, rather than wiping them.
+  "keep_vars": true
 }

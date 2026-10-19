@@ -88,3 +88,36 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      # Optional (see README.md -> Separate scraper node) — hand scraping to
+      # a separate, disposable server so a source site that blocks an
+      # address never blocks this one. Both must match that node's.
+      - key: SCRAPER_URL
+        sync: false
+      - key: SCRAPER_TOKEN
+        sync: false
+      # Optional (see README.md -> Moving the backend) — the backend address
+      # the page gets when this server serves it (/config.js).
+      - key: PUBLIC_BACKEND_URL
+        sync: false
+
+  # The scraper node (README.md -> Separate scraper node). Uncomment to
+  # create it from this Blueprint, then set SCRAPER_URL to its address and
+  # the same SCRAPER_TOKEN on the service above. On the free plan it shares
+  # the 750 free hours with the service above, so it sleeps when idle.
+  # - type: web
+  #   name: mangawhere-scraper
+  #   runtime: python
+  #   plan: free
+  #   buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium
+  #   startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+  #   envVars:
+  #     - key: PYTHON_VERSION
+  #       value: 3.11.9
+  #     - key: PLAYWRIGHT_BROWSERS_PATH
+  #       value: "0"
+  #     - key: SCRAPER_ONLY
+  #       value: "1"
+  #     - key: SCRAPER_TOKEN
+  #       sync: false
+  #     - key: YOUTUBE_COOKIES
+  #       sync: false

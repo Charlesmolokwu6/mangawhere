@@ -16,7 +16,9 @@
 // Worker is connected to this repository (Settings > Builds, root directory
 // "cloudflare", see wrangler.jsonc), every change here deploys itself.
 
-const ORIGIN = "https://mangawhere.onrender.com";
+// The backend. Set an ORIGIN variable on the Worker (Settings > Variables)
+// to move it to a new server or domain without a code change.
+const DEFAULT_ORIGIN = "https://mangawhere.onrender.com";
 const PAGE_PATH = "/api/narrate/page";
 const PAGE_KEEP_SECONDS = 86400;
 
@@ -73,7 +75,8 @@ export default {
     if (request.method !== "GET") return new Response("Not found", { status: 404, headers: CORS });
 
     if (url.pathname === PAGE_PATH) {
-      const target = new Request(ORIGIN + PAGE_PATH + url.search);
+      const origin = String((env && env.ORIGIN) || DEFAULT_ORIGIN).replace(/\/$/, "");
+      const target = new Request(origin + PAGE_PATH + url.search);
       return cached(ctx, target, PAGE_KEEP_SECONDS, () => fetch(target));
     }
 
