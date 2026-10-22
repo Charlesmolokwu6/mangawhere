@@ -1,0 +1,45 @@
+# Run from the repository root:
+#   docker compose -f deploy/vps/docker-compose.yml up -d --build
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/vps/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Narration needs ~600MB on top of the app; leave it off on a 2GB
+      # machine unless .env turns it on.
+      NARRATION_ENABLED: ${NARRATION_ENABLED:-0}
+      HEAVY_SLOTS: ${HEAVY_SLOTS:-1}
+    volumes:
+      # Accounts, watch lists, comments and the scraper cache when Turso
+      # isn't set, plus push keys. Survives rebuilds.
+      - app-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  caddy:
+    image: caddy:2.8.4
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN in deploy/vps/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:

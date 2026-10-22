@@ -14,6 +14,11 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 Then open `http://localhost:8000/`.
 
+## Deploying to your own VPS
+
+`deploy/vps/` runs the same app in Docker with Caddy for HTTPS on any
+Linux server; [deploy/vps/README.md](deploy/vps/README.md) has the steps.
+
 ## Deploying to Render
 
 `render.yaml` defines a free-tier web service. In the Render dashboard:
