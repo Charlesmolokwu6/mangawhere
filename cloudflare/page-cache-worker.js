@@ -16,7 +16,9 @@
 // Worker is connected to this repository (Settings > Builds, root directory
 // "cloudflare", see wrangler.jsonc), every change here deploys itself.
 
-const ORIGIN = "https://mangawhere.onrender.com";
+// The backend. BACKEND_URL in wrangler.jsonc's "vars" overrides it, so moving
+// the backend means changing that setting, not this file.
+const DEFAULT_ORIGIN = "https://mangawhere-y9lw.onrender.com";
 const PAGE_PATH = "/api/narrate/page";
 const PAGE_KEEP_SECONDS = 86400;
 
@@ -73,7 +75,8 @@ export default {
     if (request.method !== "GET") return new Response("Not found", { status: 404, headers: CORS });
 
     if (url.pathname === PAGE_PATH) {
-      const target = new Request(ORIGIN + PAGE_PATH + url.search);
+      const origin = (env.BACKEND_URL || DEFAULT_ORIGIN).replace(/\/$/, "");
+      const target = new Request(origin + PAGE_PATH + url.search);
       return cached(ctx, target, PAGE_KEEP_SECONDS, () => fetch(target));
     }
 
