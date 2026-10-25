@@ -137,6 +137,12 @@ CREATE TABLE IF NOT EXISTS notice_candidates (
     tail TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
 """
 
 
@@ -283,6 +289,28 @@ def init_db() -> None:
             conn.sync()
         conn.executescript(SCHEMA)
         _migrate(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_setting(key):
+    """A single value from the simple key/value settings table, or None."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+    finally:
+        conn.close()
+
+
+def set_setting(key, value) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value, time.time()),
+        )
         conn.commit()
     finally:
         conn.close()

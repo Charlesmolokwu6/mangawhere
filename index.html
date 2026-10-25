@@ -658,13 +658,13 @@ var BROWSE_AD_EVERY = 10;   // a banner after every this many titles in the grid
 var AD_NATIVE_HEIGHT = 300;
 var AD_SLOT_HTML = "";  // older single slot; used for `detail` if that's empty
 
-/* The ad on/off switch, driven from a private Telegram bot via a Cloudflare
-   Worker (see cloudflare/ad-bot/). Point this at that Worker's URL and the
-   site asks it, on load, whether ads are currently switched off. Left empty,
-   ads always show. Fail-open: if the Worker can't be reached, ads show as
-   normal, so a problem there never blanks the site. */
-var AD_BOT_URL = "";
+/* Ad on/off switch, driven from the owner's private Telegram bot (served by
+   the backend; see server/adcontrol.py). The current state rides along in
+   /api/config, read on load, and is applied in adFrame() below. The last
+   answer is cached in localStorage so a reload applies it instantly.
+   Fail-open: until something says otherwise, ads show as normal. */
 var AD_STATE = { readerAds: true, allAds: true };
+try{ var _adcache=JSON.parse(localStorage.getItem("mw_adstate")); if(_adcache) AD_STATE=_adcache; }catch(e){}
 
 /* Cloudflare Turnstile — a free, privacy-friendly CAPTCHA replacement for
    the sign-up form's bot check. This is the *site key*, which is public
@@ -5217,21 +5217,13 @@ function getServerConfig(){
 // captcha, or every sign-up would fail its check.
 getServerConfig().then(function(cfg){
   if(cfg && cfg.turnstile===false) TURNSTILE_SITE_KEY="";
+  // Apply the ad on/off switch the backend reports (set from the owner's
+  // Telegram bot), and remember it so the next load applies instantly.
+  if(cfg && cfg.ads){
+    AD_STATE={ readerAds: cfg.ads.readerAds!==false, allAds: cfg.ads.allAds!==false };
+    try{ localStorage.setItem("mw_adstate", JSON.stringify(AD_STATE)); }catch(e){}
+  }
 });
-
-/* Ask the ad-control Worker whether ads are switched off right now. The last
-   answer is kept in localStorage so a reload applies it instantly, then a
-   fresh copy is fetched in the background. Any failure leaves ads on. */
-function loadAdState(){
-  try{ var c=JSON.parse(localStorage.getItem("mw_adstate")); if(c) AD_STATE=c; }catch(e){}
-  if(!AD_BOT_URL) return;
-  fetch(AD_BOT_URL.replace(/\/$/,"")+"/ad-state").then(function(r){ return r.json(); })
-    .then(function(d){
-      AD_STATE={ readerAds: d.readerAds!==false, allAds: d.allAds!==false };
-      try{ localStorage.setItem("mw_adstate", JSON.stringify(AD_STATE)); }catch(e){}
-    }).catch(function(){});
-}
-loadAdState();
 
 function forgotView(prefill){
   stopRail();

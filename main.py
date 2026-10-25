@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
 from scrapers.core import NotAPublicSite
 from scrapers import reddit, ytpost
-from server import auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
+from server import adcontrol, auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -785,7 +785,28 @@ async def api_config():
         # Storyteller mode on the listener's phone (/api/narrate/page and
         # /api/narrate/lines), wherever full narration isn't set up.
         "phone_narration": True,
+        # Whether ads are currently switched off (reader-only or all), as set
+        # from the owner's Telegram bot (server/adcontrol.py).
+        "ads": adcontrol.ad_state(),
     }
+
+
+@app.post("/api/telegram")
+async def api_telegram(
+    request: Request,
+    secret: Optional[str] = Header(None, alias="X-Telegram-Bot-Api-Secret-Token"),
+):
+    """Telegram webhook for the owner's ad-control bot. Verified by a shared
+    secret header; the update itself is handled in server/adcontrol.py, which
+    ignores anyone but the configured admin."""
+    if not adcontrol.verify_secret(secret):
+        raise HTTPException(status_code=403, detail="forbidden")
+    update = await _json_object(request)
+    try:
+        await adcontrol.handle_update(update)
+    except Exception as e:
+        print(f"[adcontrol] update failed: {e}")
+    return {"ok": True}
 
 
 @app.post("/api/narrate")
