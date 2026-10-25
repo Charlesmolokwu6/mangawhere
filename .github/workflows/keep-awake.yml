@@ -26,4 +26,4 @@ jobs:
         env:
           # Set a BACKEND_URL repository variable (Settings > Secrets and
           # variables > Actions > Variables) to ping a moved backend.
-          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://mangawhere.onrender.com' }}
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://mangawhere-y9lw.onrender.com' }}

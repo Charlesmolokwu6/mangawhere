@@ -18,7 +18,7 @@
 
 // The backend. BACKEND_URL in wrangler.jsonc's "vars" overrides it, so moving
 // the backend means changing that setting, not this file.
-const DEFAULT_ORIGIN = "https://mangawhere.onrender.com";
+const DEFAULT_ORIGIN = "https://mangawhere-y9lw.onrender.com";
 const PAGE_PATH = "/api/narrate/page";
 const PAGE_KEEP_SECONDS = 86400;
 

@@ -36,6 +36,7 @@ MIN_PASSWORD_LENGTH = 8
 DEFAULT_LINK_ORIGINS = (
     "https://charlesmolokwu6.github.io",
     "https://mangawhere.onrender.com",
+    "https://mangawhere-y9lw.onrender.com",
     "http://localhost:8000",
 )
 
