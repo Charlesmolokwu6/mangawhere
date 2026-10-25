@@ -658,6 +658,14 @@ var BROWSE_AD_EVERY = 10;   // a banner after every this many titles in the grid
 var AD_NATIVE_HEIGHT = 300;
 var AD_SLOT_HTML = "";  // older single slot; used for `detail` if that's empty
 
+/* The ad on/off switch, driven from a private Telegram bot via a Cloudflare
+   Worker (see cloudflare/ad-bot/). Point this at that Worker's URL and the
+   site asks it, on load, whether ads are currently switched off. Left empty,
+   ads always show. Fail-open: if the Worker can't be reached, ads show as
+   normal, so a problem there never blanks the site. */
+var AD_BOT_URL = "";
+var AD_STATE = { readerAds: true, allAds: true };
+
 /* Cloudflare Turnstile — a free, privacy-friendly CAPTCHA replacement for
    the sign-up form's bot check. This is the *site key*, which is public
    and safe to hardcode here (unlike its matching secret key, which stays
@@ -3349,14 +3357,18 @@ window.addEventListener("message", function(e){
   }
 });
 
-function adTop(code){
-  var html=adFrame(code);
+function adTop(code, zone){
+  var html=adFrame(code, zone);
   return html ? '<div class="adtop">'+html+'</div>' : "";
 }
-function adFrame(code){
+function adFrame(code, zone){
   if(!code) return "";
+  // Switched off from Telegram? "All ads off" hides everything; "reader ads
+  // off" hides only the slots shown while reading (zone === "reader").
+  if(!AD_STATE.allAds) return "";
+  if(zone==="reader" && !AD_STATE.readerAds) return "";
   // A list shows its ads together, one under the other.
-  if(Array.isArray(code)) return '<div class="adgroup">'+code.map(adFrame).join("")+'</div>';
+  if(Array.isArray(code)) return '<div class="adgroup">'+code.map(function(c){ return adFrame(c, zone); }).join("")+'</div>';
   if(AD_HOST && /^\d+x\d+$/.test(code)) return hostedAdFrame(code);
   var w=/['"]?width['"]?\s*:\s*(\d+)/.exec(code), h=/['"]?height['"]?\s*:\s*(\d+)/.exec(code);
   var width=w?parseInt(w[1],10):0, height=h?parseInt(h[1],10):AD_NATIVE_HEIGHT;
@@ -3680,7 +3692,7 @@ function readerView(url, exclude){
   openChapterDropdown=null;
   var view=document.getElementById("app");
   var hasChapters=!!readerState.chapters;
-  view.innerHTML=adTop(ADS.readerTop)+
+  view.innerHTML=adTop(ADS.readerTop, "reader")+
     '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'+
       '<button class="back" id="rbk" style="margin:0">← Back</button>'+
       (hasChapters?chapterPickerHtml():'')+
@@ -3736,10 +3748,10 @@ function readerView(url, exclude){
         'src="'+esc(pageSrc(src))+'" referrerpolicy="no-referrer" alt="">';
       // An ad after every AD_EVERY_PAGES pages — but not after the last
       // page, where readerEnd already sits.
-      if((i+1)%AD_EVERY_PAGES===0 && i<images.length-1) page+=adFrame(ADS.readerPages);
+      if((i+1)%AD_EVERY_PAGES===0 && i<images.length-1) page+=adFrame(ADS.readerPages, "reader");
       return page;
     }).join("");
-    document.getElementById("radend").innerHTML=adFrame(ADS.readerEnd);
+    document.getElementById("radend").innerHTML=adFrame(ADS.readerEnd, "reader");
     Array.prototype.forEach.call(document.querySelectorAll("#rpages .rpage"), function(img){
       var done=function(){ img.classList.add("loaded"); };
       if(img.complete && img.naturalWidth) done();
@@ -4282,7 +4294,7 @@ function showPhoneCaption(player, label, text){
 /* While it reads, a small ad stays pinned to the top of the screen, just
    under the header when that's showing. */
 function showPhoneTopAd(st){
-  var html=adFrame(ADS.narration);
+  var html=adFrame(ADS.narration, "reader");
   if(!html) return;
   var bar=document.createElement("div");
   bar.className="narr-topad";
@@ -5206,6 +5218,20 @@ function getServerConfig(){
 getServerConfig().then(function(cfg){
   if(cfg && cfg.turnstile===false) TURNSTILE_SITE_KEY="";
 });
+
+/* Ask the ad-control Worker whether ads are switched off right now. The last
+   answer is kept in localStorage so a reload applies it instantly, then a
+   fresh copy is fetched in the background. Any failure leaves ads on. */
+function loadAdState(){
+  try{ var c=JSON.parse(localStorage.getItem("mw_adstate")); if(c) AD_STATE=c; }catch(e){}
+  if(!AD_BOT_URL) return;
+  fetch(AD_BOT_URL.replace(/\/$/,"")+"/ad-state").then(function(r){ return r.json(); })
+    .then(function(d){
+      AD_STATE={ readerAds: d.readerAds!==false, allAds: d.allAds!==false };
+      try{ localStorage.setItem("mw_adstate", JSON.stringify(AD_STATE)); }catch(e){}
+    }).catch(function(){});
+}
+loadAdState();
 
 function forgotView(prefill){
   stopRail();
