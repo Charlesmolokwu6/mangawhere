@@ -585,6 +585,10 @@ padding:6px 0 0;cursor:pointer}
 </div>
 
 <script>
+/* The deployed backend (main.py). Change this one line to move it — PROXY
+   and API_BASE below both use it. */
+var BACKEND_URL = "https://mangawhere.onrender.com";
+
 /* ================= proxy =================
    MangaUpdates and TikTok refuse browser requests (no CORS headers), and
    they hold the two pieces of data this product is built on: the current
@@ -602,7 +606,7 @@ padding:6px 0 0;cursor:pointer}
        pointing a local index.html at a local `uvicorn main:app` instead)
    Leave it empty and the app still runs — it just can't show chapter
    counts for ongoing series.                                            */
-var PROXY = "https://mangawhere.onrender.com";
+var PROXY = BACKEND_URL;
 
 /* Adult titles. Off means everything shows, which is how AniList and
    MyAnimeList work too. Flip to true if you ever need to hide them —
@@ -722,7 +726,7 @@ function via(url){
 // GitHub Pages, main.py runs on Render — different origins, so there's no
 // same-origin default that reaches it. Override with ?api=... (e.g. to
 // point a local index.html at a local `uvicorn main:app`).
-var API_BASE = "https://mangawhere.onrender.com";
+var API_BASE = BACKEND_URL;
 (function(){
   var q=new URLSearchParams(location.search).get("api");
   if(q) API_BASE=q.replace(/\/$/,"");

@@ -4,5 +4,7 @@
 {
   "name": "mangawhere-pages",
   "main": "page-cache-worker.js",
-  "compatibility_date": "2026-09-01"
+  "compatibility_date": "2026-09-01",
+  // The backend the Worker fetches storyteller pages from.
+  "vars": { "BACKEND_URL": "https://mangawhere.onrender.com" }
 }

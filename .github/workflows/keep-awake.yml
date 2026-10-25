@@ -22,4 +22,8 @@ jobs:
         run: >-
           curl -fsS --retry 3 --retry-delay 20 --max-time 90 -o /dev/null
           -w "HTTP %{http_code} in %{time_total}s\n"
-          https://mangawhere.onrender.com/api/config
+          "$BACKEND_URL/api/config"
+        env:
+          # Set a BACKEND_URL repository variable (Settings > Secrets and
+          # variables > Actions > Variables) to ping a moved backend.
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://mangawhere.onrender.com' }}

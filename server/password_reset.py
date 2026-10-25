@@ -70,6 +70,11 @@ def available() -> bool:
 
 def _allowed_origins():
     extra = [o.strip().rstrip("/") for o in os.environ.get("RESET_LINK_ORIGINS", "").split(",") if o.strip()]
+    # Render sets this to the service's own address, so a copy deployed
+    # under another account or name allows itself without a code change.
+    own = os.environ.get("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+    if own:
+        extra.append(own)
     return set(DEFAULT_LINK_ORIGINS) | set(extra)
 
 
