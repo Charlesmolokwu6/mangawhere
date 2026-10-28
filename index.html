@@ -3537,10 +3537,18 @@ function renderDetailChapters(m, res){
   var back=function(){ showDetail(m, null); };
   var newestFirst=chapters.slice().reverse();
 
+  // How many chapters can actually be read here right now. A brand-new
+  // series' English source often lags the "latest chapter" trackers
+  // (WEBTOON / MangaUpdates) by a lot — the header can say "up to ch.34"
+  // while only a couple are posted to read — so state the readable count
+  // plainly, right above the list, so the two numbers can't be confused.
+  var availNote='<p class="sub" style="margin:0 0 8px">'+chapters.length+
+    ' chapter'+(chapters.length===1?'':'s')+' available to read here</p>';
+
   // Every chapter, but scrollable within its own box rather than either
   // dumping all of a 200+ chapter series into the page's own scroll or
   // gating most of them behind a "show more" tap.
-  box.innerHTML='<div style="max-height:420px;overflow-y:auto">'+
+  box.innerHTML=availNote+'<div style="max-height:420px;overflow-y:auto">'+
     newestFirst.map(function(c){
       var subtitle=chapterSubtitle(c);
       return '<button class="read chrow" data-url="'+esc(c.url)+'">'+
