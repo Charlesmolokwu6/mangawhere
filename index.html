@@ -1401,13 +1401,20 @@ function muRespell(q){
     // scores 0.43, unrelated suggestions ("xyzzy foo" -> "Foo Fighter
     // Fuji") about 0.2.
     var bare=function(t){ return t.toLowerCase().replace(/^the\s+/,"").replace(/[^a-z0-9]/g,""); };
+    var bq=bare(q);
     var best=null, bestScore=0.4;
     ((j&&j.results)||[]).forEach(function(x){
       var rec=x.record||x;
       if(!rec || !rec.title || !isComic(rec)) return;
       var t=String(rec.title).replace(/<[^>]*>/g,"");
-      var sc=similar(bare(q),bare(t));
-      if(sc>=bestScore && bare(t)!==bare(q)){ best=t; bestScore=sc; }
+      var bt=bare(t);
+      // Bigram similarity alone treats "Drache Heart" and "Heartache" as a
+      // match (same letters, scrambled order), which suggests a wrong title
+      // for a name that simply isn't indexed anywhere. A real misspelling
+      // keeps the opening letters, so also require the first two to agree.
+      if(bt.slice(0,2)!==bq.slice(0,2)) return;
+      var sc=similar(bq,bt);
+      if(sc>=bestScore && bt!==bq){ best=t; bestScore=sc; }
     });
     return best;
   });
