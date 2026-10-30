@@ -29,17 +29,22 @@ const OPTS = {
   renameGlobals: false,
   identifierNamesGenerator: 'mangled-shuffled',
   stringArray: true,
-  stringArrayThreshold: 0.6,
+  stringArrayThreshold: 0.75,
   stringArrayRotate: true,
   stringArrayShuffle: true,
-  stringArrayEncoding: [],
+  // Medium: strings are base64-encoded (hidden, not just moved to an array),
+  // and selfDefending makes the code break if someone runs it through a
+  // "beautifier" to un-minify it. Still no control-flow flattening or
+  // dead-code injection — those are what actually slow a site down, and the
+  // base64 bloat compresses away over gzip, so this stays mobile-fast.
+  stringArrayEncoding: ['base64'],
   splitStrings: false,
   controlFlowFlattening: false,
   deadCodeInjection: false,
   numbersToExpressions: false,
   transformObjectKeys: false,
   unicodeEscapeSequence: false,
-  selfDefending: false,
+  selfDefending: true,
 };
 
 function obf(code) {
