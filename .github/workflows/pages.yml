@@ -1,0 +1,59 @@
+# Builds the site with its JavaScript obfuscated (npm run build -> _site/) and
+# deploys that to GitHub Pages. The readable source stays in the repo; only the
+# scrambled _site/ is published, and the Python backend files are never served.
+#
+# One-time switch: repo Settings -> Pages -> Build and deployment -> Source ->
+# "GitHub Actions". Until that's set, the live site keeps serving from the
+# branch as before (so nothing breaks while you flip it).
+name: Deploy obfuscated site to Pages
+
+on:
+  push:
+    branches: [main]
+    # Only rebuild when something the site is built from changes.
+    paths:
+      - index.html
+      - ocr-worker.js
+      - sw.js
+      - manifest.json
+      - icons/**
+      - build/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/pages.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at once; let a newer one supersede an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
