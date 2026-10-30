@@ -2403,12 +2403,19 @@ function run(){
     : isLink
     ? oembed(raw).then(function(meta){
         var p=parseCaption(meta.caption);
-        if(p.title) return search(p.title).then(function(rows){
+        // A *confident* caption name is used directly. A weak, prose-y guess
+        // (recap channels title their clips "He Was Reborn An Evil Labubu…"
+        // while naming the real manga only in the description, e.g.
+        // "Manhwa Name: Drache Heart") must NOT pre-empt that description
+        // label — it's far more reliable. So for a low-confidence caption,
+        // fall through to deepenTitle(), which checks the explicit label
+        // first and still returns the caption's own guess when there's none.
+        if(p.title && p.confidence!=="low") return search(p.title).then(function(rows){
           return {kind:"results",rows:rows,parsed:p,caption:meta.caption,
                   author:meta.author,platform:meta.platform,
                   embedUrl:meta.embedUrl,embedTall:meta.embedTall};});
-        // The caption alone didn't name it — try the description/audio
-        // before giving up.
+        // The caption alone didn't confidently name it — try the
+        // description/audio (and its explicit label) before giving up.
         return deepenTitle(raw, meta.caption).then(function(deep){
           if(!deep.title) return {kind:"noTitle",caption:meta.caption,
             embedUrl:meta.embedUrl,embedTall:meta.embedTall};
