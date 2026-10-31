@@ -1,0 +1,13 @@
+{
+  "name": "mangawhere-site-build",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Builds the public site into _site/ with its JS obfuscated. Source stays readable; the deployed copy is scrambled.",
+  "scripts": {
+    "build": "node build/obfuscate.mjs"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "4.1.1"
+  }
+}
