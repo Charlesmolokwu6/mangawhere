@@ -948,6 +948,8 @@ def _detect_domain(url: str) -> str:
         return "mangakatana"
     if "weebcentral" in lowered:
         return "weebcentral"
+    if "mgeko" in lowered:
+        return "mgeko"
     return "unknown"
 
 
@@ -1307,6 +1309,48 @@ async def search_comizy(title: str) -> Optional[str]:
     return None
 
 
+async def search_mgeko(title: str) -> Optional[str]:
+    """Find the best-matching series on mgeko.cc (MangaGeko) — a plainly
+    server-rendered aggregator with broad, up-to-date manhwa/manhua coverage
+    and no Cloudflare challenge. Its search cards carry the series name in the
+    anchor's own `title` attribute, which _best_match() already reads."""
+    search_url = f"https://www.mgeko.cc/search/?search={quote(title)}"
+    try:
+        html = await fetch_html_httpx(search_url)
+    except Exception as e:
+        print(f"[mgeko] search fetch failed ({e})")
+        return None
+    return _best_match(html, "a[title][href*='/manga/']", search_url, title, use_alt=False)
+
+
+async def scrape_mgeko_chapter_list(url: str) -> List[Dict[str, Any]]:
+    """List chapters from a MangaGeko series. The series page links out to a
+    full /all-chapters/ page; each row is a /reader/en/...-chapter-N-... link
+    the number reads straight from."""
+    all_chapters = url.rstrip("/") + "/all-chapters/"
+    try:
+        html = await fetch_html_httpx(all_chapters)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(all_chapters)
+        except Exception:
+            html = ""
+    return extract_chapter_list(html or "", "a[href*='/reader/']", all_chapters)
+
+
+async def scrape_mgeko(url: str) -> List[str]:
+    """Scrape a MangaGeko reader page's images — plain <img class="mgr-page">
+    tags whose CDN (imgsrv5) serves without a referer check, so no proxying."""
+    try:
+        html = await fetch_html_httpx(url)
+    except Exception:
+        try:
+            html = await fetch_html_playwright(url)
+        except Exception:
+            html = ""
+    return extract_image_urls_from_html(html or "", ["img.mgr-page"])
+
+
 SOURCES = {
     "toongod": (search_toongod, scrape_toongod_chapter_list),
     "asurascans": (search_asurascans, scrape_asurascans_chapter_list),
@@ -1321,6 +1365,7 @@ SOURCES = {
     # no longer searched.
     "mangakatana": (search_mangakatana, scrape_mangakatana_chapter_list),
     "weebcentral": (search_weebcentral, scrape_weebcentral_chapter_list),
+    "mgeko": (search_mgeko, scrape_mgeko_chapter_list),
 }
 
 
@@ -1577,6 +1622,8 @@ async def scrape_chapter(url: str) -> Dict[str, Any]:
         images = await scrape_mangakatana(url)
     elif domain == "weebcentral":
         images = await scrape_weebcentral(url)
+    elif domain == "mgeko":
+        images = await scrape_mgeko(url)
     else:
         images = []
 
