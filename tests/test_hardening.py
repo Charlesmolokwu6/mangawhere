@@ -90,6 +90,50 @@ class ApiTests(unittest.TestCase):
         # Other groups, and reading, aren't affected.
         self.assertNotEqual(self.client.get("/api/comments", params={"key": "x"}).status_code, 429)
 
+    def test_security_headers_are_on_every_response(self):
+        r = self.client.get("/api/me")
+        self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
+        self.assertEqual(r.headers["X-Frame-Options"], "DENY")
+        self.assertIn("frame-ancestors 'none'", r.headers["Content-Security-Policy"])
+        self.assertIn("Permissions-Policy", r.headers)
+
+    def test_new_passwords_are_hashed_with_argon2(self):
+        auth.register({"email": "argon@example.com", "password": "password123", "elapsed": 5},
+                      lambda *_: True)
+        conn = db.get_connection()
+        try:
+            row = conn.execute("SELECT password_hash FROM users WHERE email = ?",
+                               ("argon@example.com",)).fetchone()
+        finally:
+            conn.close()
+        self.assertTrue(row["password_hash"].startswith("$argon2"))
+
+    def test_a_legacy_pbkdf2_account_still_logs_in_and_is_upgraded(self):
+        # An account created in the old PBKDF2 scheme, seeded directly.
+        salt = "cd" * 16
+        conn = db.get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO users (email, name, password_hash, salt, created_at) VALUES (?, ?, ?, ?, ?)",
+                ("legacy@example.com", "legacy", auth._hash_password("old-password-1", salt), salt, 0.0),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        # It still signs in with its original password...
+        self.assertIn("token", auth.login({"email": "legacy@example.com", "password": "old-password-1"}))
+        self.assertIn("error", auth.login({"email": "legacy@example.com", "password": "wrong-password"}))
+        # ...and signing in has transparently re-hashed it to argon2, which
+        # still verifies the same password afterwards.
+        conn = db.get_connection()
+        try:
+            row = conn.execute("SELECT password_hash FROM users WHERE email = ?",
+                               ("legacy@example.com",)).fetchone()
+        finally:
+            conn.close()
+        self.assertTrue(row["password_hash"].startswith("$argon2"))
+        self.assertIn("token", auth.login({"email": "legacy@example.com", "password": "old-password-1"}))
+
 
 if __name__ == "__main__":
     unittest.main()

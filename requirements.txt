@@ -13,3 +13,4 @@ lameenc==1.8.4
 rapidocr-onnxruntime==1.4.4
 pillow==12.3.0
 wordninja==2.0.0
+argon2-cffi==25.1.0
