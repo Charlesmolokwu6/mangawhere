@@ -973,8 +973,32 @@ function trail(t){if(!t)return[t,null];var m=t.trim().match(/^(.*?)[\s#:-]+(\d{1
 function prose(t){if(!t)return false;var w=t.toLowerCase().split(/\s+/);
  if(w.length<4)return false;if(SENT.has(w[0]))return true;
  return w.filter(function(x){return SENT.has(x);}).length>=2;}
+/* Recap channels tag the real series name after a pipe:
+   "He Was a Spider Demon… (Part 1+2) | Monster Eater". exTitle() can miss it
+   — a "Part N" marker reads as a chapter and cuts everything after it off, and
+   the hook before it wins on length — so the clean name in the last pipe
+   segment is pulled out separately. A leftover "(Part 1+2)" or chapter number
+   is stripped, generic words (recap/manhwa/…) are trimmed from the ends, and a
+   segment that's a sentence (a continued hook, not a title) is rejected. */
+function pipeTitle(c){
+ var t=clean(c).replace(/#\w+/g," ").replace(/@\w+/g," ").replace(/https?:\/\/\S+/g," ");
+ if(!/[|｜]/.test(t))return null;
+ var parts=t.split(/[|｜]/).map(function(s){return s.trim();}).filter(Boolean);
+ if(parts.length<2)return null;
+ var last=parts[parts.length-1]
+   .replace(/\(?\bparts?\s*\d+(\s*[+&,]\s*\d+)*\)?/ig," ")
+   .replace(/\b(?:ch|chapter|ep|episode)s?\s*[.:#-]?\s*\d+/ig," ").trim();
+ var w=(last.match(/[\w']+/g)||[]);
+ while(w.length&&NOISE.has(w[0].toLowerCase()))w.shift();
+ while(w.length&&NOISE.has(w[w.length-1].toLowerCase()))w.pop();
+ var s=w.join(" ").trim();
+ return (s.length<3||/^\d+$/.test(s)||prose(s))?null:s;}
 function parseCaption(c){var t=exTitle(c),ch=exCh(c);
  if(ch===null&&t){var r=trail(t);t=r[0];if(r[1]!==null)ch=r[1];}
+ // A clean series name in the channel's "… | Title" tag beats the descriptive
+ // hook exTitle falls back to when the caption itself is a prose sentence.
+ var pt=pipeTitle(c);
+ if(pt&&(!t||prose(t)))return {title:pt,chapter:ch,confidence:"medium"};
  var p=prose(t);
  return {title:t,chapter:ch,confidence:p?"low":(t&&ch?"high":(t?"medium":"none"))};}
 
