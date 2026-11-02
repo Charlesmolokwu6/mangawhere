@@ -184,6 +184,32 @@ async def _rate_limit(request: Request, call_next):
     return await call_next(request)
 
 
+# ---- security headers on every response ----
+#
+# Defense-in-depth: stop the page being framed (clickjacking), stop a browser
+# MIME-sniffing a response into something executable, keep referrers off
+# outbound requests, and switch off device APIs the app never uses. The CSP is
+# deliberately narrow — frame-ancestors / object-src / base-uri only — so it
+# hardens without having to allow-list every ad network and image host the
+# page legitimately loads. setdefault() leaves alone any header a specific
+# response already set (e.g. the scrapers' own Referrer-Policy: no-referrer).
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=()",
+    "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
+}
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
+
 async def _json_object(request: Request) -> dict:
     """The request's JSON body as an object; a 400, not a 500, for anything else."""
     try:

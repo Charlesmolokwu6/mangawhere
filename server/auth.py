@@ -3,7 +3,10 @@ import hmac
 import re
 import secrets
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
+
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 from . import db
 
@@ -13,10 +16,61 @@ PBKDF2_ITERATIONS = 200_000
 GENERIC_ERROR = "Something went wrong. Try again."
 
 
+# Legacy scheme — kept only to verify accounts made before the argon2 switch.
+# New and changed passwords go through hash_password() (argon2id) below; a
+# legacy account is re-hashed to argon2 the next time its owner signs in.
 def _hash_password(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), bytes.fromhex(salt), PBKDF2_ITERATIONS
     ).hex()
+
+
+# argon2id (memory-hard, far harder to crack on GPUs than PBKDF2). argon2 bakes
+# its own salt into the hash string, so the separate `salt` column is left empty
+# for these rows and is read only by the legacy PBKDF2 path above.
+_argon2 = PasswordHasher()
+
+
+def hash_password(password: str) -> Tuple[str, str]:
+    """(password_hash, salt) to store for a new or changed password."""
+    return _argon2.hash(password), ""
+
+
+def verify_password(password: str, stored_hash: Optional[str], salt: Optional[str]) -> Tuple[bool, bool]:
+    """(ok, needs_upgrade): whether the password matches, and whether the
+    stored hash should be replaced with a fresh argon2 one — a legacy PBKDF2
+    row, or an argon2 row whose cost parameters are now out of date."""
+    if stored_hash and stored_hash.startswith("$argon2"):
+        try:
+            _argon2.verify(stored_hash, password)
+        except (VerifyMismatchError, VerificationError, InvalidHashError):
+            return False, False
+        try:
+            return True, _argon2.check_needs_rehash(stored_hash)
+        except Exception:
+            return True, False
+    if not stored_hash or not salt:
+        return False, False
+    ok = hmac.compare_digest(_hash_password(password, salt), stored_hash)
+    return ok, ok  # a legacy row that checks out gets upgraded to argon2
+
+
+def _upgrade_password(user_id: int, password: str) -> None:
+    """Replace a user's stored hash with a fresh argon2 one. Best-effort: a
+    failure here must never block an otherwise-valid sign-in."""
+    try:
+        new_hash, new_salt = hash_password(password)
+        conn = db.get_connection()
+        try:
+            conn.execute(
+                "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+                (new_hash, new_salt, user_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[auth] password re-hash for user {user_id} failed: {e!r}")
 
 
 def _hash_token(token: str) -> str:
@@ -75,8 +129,7 @@ def register(
         if existing:
             return {"error": "An account with that email already exists."}
 
-        salt = secrets.token_hex(16)
-        password_hash = _hash_password(password, salt)
+        password_hash, salt = hash_password(password)
         name = email.split("@", 1)[0]
         now = time.time()
         cur = conn.execute(
@@ -166,15 +219,17 @@ def login(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if not row:
         return {"error": "Incorrect email or password."}
-    if not row["password_hash"] or not row["salt"]:
+    if not row["password_hash"]:
         # Made with Google/Facebook, so there's no password to check —
         # this used to crash on the missing salt instead of answering.
         return {"error": "This account signs in with Google or Facebook. "
                          "Use that button, or reset the password to add one."}
 
-    candidate = _hash_password(password, row["salt"])
-    if not hmac.compare_digest(candidate, row["password_hash"]):
+    ok, needs_upgrade = verify_password(password, row["password_hash"], row["salt"])
+    if not ok:
         return {"error": "Incorrect email or password."}
+    if needs_upgrade:
+        _upgrade_password(row["id"], password)
 
     token = create_session(row["id"])
     return {

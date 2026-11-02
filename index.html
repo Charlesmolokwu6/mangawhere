@@ -3,6 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- Hardening for the GitHub Pages copy, which can't set real HTTP headers.
+     Narrow on purpose: blocks <object>/<embed> plugins and <base> hijacking
+     without restricting the scripts, images, ads and iframes the page loads.
+     (Clickjacking/frame-ancestors can only come from a real header, set on
+     the backend-served copy; a <meta> CSP can't express it.) -->
+<meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'">
 <title>Manga Where</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#12101c">

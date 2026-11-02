@@ -219,10 +219,10 @@ def reset_password(token: str, password: str) -> Dict[str, Any]:
         if not user:
             return {"error": BAD_LINK_MESSAGE}
 
-        salt = secrets.token_hex(16)
+        new_hash, new_salt = auth.hash_password(password)
         conn.execute(
             "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
-            (auth._hash_password(password, salt), salt, user["id"]),
+            (new_hash, new_salt, user["id"]),
         )
         # One link, one use — and every other link for this account goes too.
         conn.execute("UPDATE password_resets SET used = 1 WHERE user_id = ?", (user["id"],))
