@@ -13,7 +13,7 @@ from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Upload
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from scrapers import find_best_source, lookup_video, scrape_chapter, scrape_series
+from scrapers import aliases_for, find_best_source, lookup_video, scrape_chapter, scrape_series
 from scrapers.core import NotAPublicSite
 from scrapers import reddit, ytpost
 from server import adcontrol, auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
@@ -396,12 +396,28 @@ MAX_FIND_ALTS = 3
 
 
 def _find_names(title: str, alts: Sequence[str]) -> List[str]:
-    """The title first, then up to MAX_FIND_ALTS other names it's known by.
-    Names with no Latin letters (native Japanese/Korean/Chinese) are skipped:
-    none of the sources index those, so they'd only cost a full search."""
-    names = [title.strip()]
-    seen = {names[0].lower()}
-    for alt in alts:
+    """The title first, then up to MAX_FIND_ALTS other names it's known by:
+    any curated aliases first (names a clip uses that no reader indexes under
+    — see scrapers/aliases.py), then the caller's alternate names. Aliases go
+    first because they're the names a mis-captioned clip is actually readable
+    under, so they're likeliest to turn the title up. Names with no Latin
+    letters (native Japanese/Korean/Chinese) are skipped: none of the sources
+    index those, so they'd only cost a full search."""
+    title = title.strip()
+    names = [title]
+    seen = {title.lower()}
+
+    # Any curated alias of the title or of a caller-supplied name pulls in the
+    # whole group; those come before the generic alts in the search order.
+    alias_names: List[str] = []
+    alias_seen = set()
+    for base in [title, *alts]:
+        for alias in aliases_for(base):
+            if alias.lower() not in alias_seen:
+                alias_names.append(alias)
+                alias_seen.add(alias.lower())
+
+    for alt in [*alias_names, *alts]:
         alt = (alt or "").strip()
         if not alt or len(alt) > 200 or alt.lower() in seen or not re.search(r"[A-Za-z]", alt):
             continue

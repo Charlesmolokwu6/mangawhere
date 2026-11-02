@@ -41,10 +41,12 @@ from .core import (
     search_toongod,
     search_weebcentral,
 )
+from .aliases import aliases_for
 from .matching import similar
 from .video import lookup as lookup_video
 
 __all__ = [
+    "aliases_for",
     "clean_image_urls",
     "extract_chapter_list",
     "extract_image_urls_from_html",

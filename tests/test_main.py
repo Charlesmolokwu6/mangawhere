@@ -433,6 +433,29 @@ class FindApiTests(MainTestCase):
         names = main._find_names("Main", ["A1", "a1", "B2", "C3", "D4", "E5"])
         self.assertEqual(names, ["Main", "A1", "B2", "C3"])
 
+    def test_curated_aliases_are_searched_and_come_first(self):
+        import main
+
+        # A clip's caption name no reader indexes pulls in the name they do,
+        # ahead of the caller's generic alternate names.
+        names = main._find_names("Drache Heart", ["Some Other Name"])
+        self.assertEqual(names[0], "Drache Heart")
+        self.assertIn("I Have a Dragon's Heart", names)
+        self.assertLess(
+            names.index("I Have a Dragon's Heart"), names.index("Some Other Name")
+        )
+
+    def test_alias_lookup_is_punctuation_insensitive(self):
+        from scrapers import aliases_for
+
+        # Same series whether the name arrives spaced, hyphenated or lowercased.
+        for spelling in ("Draco Heart", "draco-heart", "DRACO HEART"):
+            self.assertIn("I Have a Dragon's Heart", aliases_for(spelling))
+        # The passed-in name is never echoed back as its own alias.
+        self.assertNotIn("Drache Heart", aliases_for("Drache Heart"))
+        # An unknown title has no curated aliases.
+        self.assertEqual(aliases_for("One Piece"), [])
+
 
 class ImageCheckTests(unittest.IsolatedAsyncioTestCase):
     async def test_mangadex_images_are_not_fetched_from_the_server(self):
