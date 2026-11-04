@@ -4874,6 +4874,44 @@ function fallbackCopy(text, done){
   document.body.removeChild(t);
 }
 
+/* Invite-a-friend nudge. Shares the site itself (not a single title), via the
+   native share sheet where there is one — the WhatsApp/TikTok/Telegram path
+   most people use — and the clipboard everywhere else. Prefers the clean
+   public address (TITLE_PAGE_BASE) over whatever path the app is open at. */
+function inviteUrl(){
+  return (typeof TITLE_PAGE_BASE!=="undefined" && TITLE_PAGE_BASE)
+    ? TITLE_PAGE_BASE : (location.origin+location.pathname);
+}
+function inviteCard(){
+  return '<div class="card invite">'+
+    '<h4 style="margin:0 0 5px">Enjoying MangaWhere?</h4>'+
+    '<p class="t" style="margin:0 0 12px;color:var(--dim);font-size:13px">'+
+      'Send it to a friend who’s always asking “what manga is this?”</p>'+
+    '<button class="primary" id="invitebtn" style="margin-top:0">Invite friends</button>'+
+  '</div>';
+}
+function wireInvite(){
+  var b=document.getElementById("invitebtn");
+  if(!b) return;
+  var orig=b.textContent;
+  b.onclick=function(){
+    var url=inviteUrl();
+    if(navigator.share){
+      navigator.share({title:"MangaWhere",
+        text:"Find what manhwa any TikTok or YouTube clip is from — and read it, free:",
+        url:url}).catch(function(){});
+      return;
+    }
+    var done=function(){
+      b.textContent="Link copied ✓";
+      setTimeout(function(){ b.textContent=orig; },1800);
+    };
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(done).catch(function(){ fallbackCopy(url,done); });
+    } else fallbackCopy(url,done);
+  };
+}
+
 /* Opens the series named in the URL, so a shared link lands on the page
    itself instead of the home screen. */
 function openFromUrl(){
@@ -5524,8 +5562,10 @@ function accountView(){
         '<button class="primary" id="go-signup">Create an account</button>'+
         '<button class="danger" id="go-login">I already have one</button>'+
       '</div>'+
+      inviteCard()+
       storytellerSettingsHtml();
     wireStorytellerSettings();
+    wireInvite();
     document.getElementById("ab").onclick=function(){ navBack(function(){ setTab("home"); }); };
     document.getElementById("go-signup").onclick=function(){ authView("signup"); };
     document.getElementById("go-login").onclick=function(){ authView("login"); };
@@ -5560,11 +5600,13 @@ function accountView(){
       '<button class="nbtn" id="nbtn" hidden>Turn on</button>'+
     '</div>'+
     storytellerSettingsHtml()+
+    inviteCard()+
     '<p class="hint">Sign in with the same email on any other phone or laptop '+
       'and your list is there.</p>'+
     '<button class="danger" id="signout">Sign out</button>';
 
   wireStorytellerSettings();
+  wireInvite();
   document.getElementById("ab").onclick=function(){ navBack(function(){ setTab("home"); }); };
   document.getElementById("signout").onclick=signOut;
   wireAvatarUpload();
