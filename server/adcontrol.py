@@ -89,7 +89,8 @@ def _main_menu() -> dict:
         [{"text": "🔴 Turn OFF reader ads", "callback_data": "off:reader"}],
         [{"text": "🔴 Turn OFF all ads", "callback_data": "off:all"}],
         [{"text": "🟢 Turn everything ON", "callback_data": "on"}],
-        [{"text": "📊 Status", "callback_data": "status"}],
+        [{"text": "📊 Ad status", "callback_data": "status"}],
+        [{"text": "📈 Users & growth", "callback_data": "growth"}],
     ]}
 
 
@@ -130,6 +131,63 @@ def _status_text(state: dict) -> str:
                              _slot_line(state.get("all"), now)))
 
 
+# ---- users & growth (the first-100 onboarding tracker) ----
+
+_GOAL = 100  # the first-100 onboarding goal shown on the bar
+
+
+def growth_stats() -> dict:
+    """Counts straight from the database for the /stats view. Each count is
+    independent, so a single failing query returns 0 for that line rather than
+    breaking the whole report."""
+    now = time.time()
+    conn = db.get_connection()
+
+    def scalar(sql: str, params=()) -> int:
+        try:
+            row = conn.execute(sql, params).fetchone()
+            return int((row["n"] if row else 0) or 0)
+        except Exception as e:
+            print("[adcontrol] stat query failed: %s" % e)
+            return 0
+
+    try:
+        return {
+            "users": scalar("SELECT COUNT(*) AS n FROM users"),
+            "new_1d": scalar("SELECT COUNT(*) AS n FROM users WHERE created_at > ?", (now - _DAY,)),
+            "new_7d": scalar("SELECT COUNT(*) AS n FROM users WHERE created_at > ?", (now - 7 * _DAY,)),
+            "tracked": scalar("SELECT COUNT(*) AS n FROM watches"),
+            "reachable": scalar(
+                "SELECT COUNT(DISTINCT user_id) AS n FROM push_subscriptions WHERE user_id IS NOT NULL"
+            ),
+            "comments": scalar("SELECT COUNT(*) AS n FROM comments"),
+        }
+    finally:
+        conn.close()
+
+
+def _progress_bar(value: int, goal: int, width: int = 10) -> str:
+    if goal <= 0:
+        return ""
+    filled = max(0, min(width, int(round(width * value / goal))))
+    return "▓" * filled + "░" * (width - filled)
+
+
+def _growth_text(s: dict) -> str:
+    users = s["users"]
+    pct = min(100, round(users * 100 / _GOAL)) if _GOAL else 0
+    return ("MangaWhere — users & growth\n\n"
+            "👥 Accounts: %d / %d  (%d%%)\n"
+            "%s\n\n"
+            "🆕 New today: %d\n"
+            "🆕 New this week: %d\n"
+            "🔖 Titles being tracked: %d\n"
+            "🔔 Reachable by notification: %d\n"
+            "💬 Comments posted: %d"
+            % (users, _GOAL, pct, _progress_bar(users, _GOAL),
+               s["new_1d"], s["new_7d"], s["tracked"], s["reachable"], s["comments"]))
+
+
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
@@ -159,8 +217,14 @@ async def handle_update(update: dict) -> None:
         return
 
     if msg and not cb:
+        text = (msg.get("text") or "").strip().lower()
+        if text in ("/stats", "stats", "/growth", "/users"):
+            await _tg("sendMessage", {"chat_id": frm["id"],
+                                      "text": _growth_text(growth_stats()),
+                                      "reply_markup": _main_menu()})
+            return
         await _tg("sendMessage", {"chat_id": frm["id"],
-                                  "text": "MangaWhere ad control — choose:",
+                                  "text": "MangaWhere control — choose:",
                                   "reply_markup": _main_menu()})
         return
 
@@ -178,6 +242,8 @@ async def handle_update(update: dict) -> None:
             await edit("MangaWhere ad control — choose:", _main_menu())
         elif data == "status":
             await edit(_status_text(_read()), _main_menu())
+        elif data == "growth":
+            await edit(_growth_text(growth_stats()), _main_menu())
         elif data == "on":
             _write({})
             await edit("🟢 All ads are back ON.", _main_menu())
