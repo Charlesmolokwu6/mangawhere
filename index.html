@@ -2847,21 +2847,24 @@ function render(r){
     ? '<div class="cap">'+(r.platform?esc(r.platform)+(r.author?" · @"+esc(r.author):"")+' &rarr; ':"")
       +esc(r.caption)+'</div>'
     : "";
-  if(!rows.length){
-    // Came from a link: the caption parsed into *something* (r.parsed.title),
-    // it's just that nothing on Jikan/AniList matched it -- likely the
-    // extracted title is wrong, not that the manga doesn't exist. Showing
-    // the caption and what was searched for lets someone actually act on
-    // that, instead of "try a shorter search" (which makes no sense when
-    // you pasted a link, not typed a query).
+  var scored=rows.map(function(m){return {m:m,s:score(m,r.parsed.title,r.caption||r.parsed.title)};})
+                 .sort(function(a,b){return b.s-a.s;});
+  // Nothing matched, or even the best catalogue match is too weak to be the
+  // real one. An obscure title that only lives on a reading source, not on
+  // AniList/MAL/MangaDex (e.g. "Fight Change"), drags back a few loose
+  // word-matches that all score low — showing those as "which one is it?"
+  // just misleads. So say plainly we couldn't find it and show what was read,
+  // the same as a straight no-results miss, instead of a pile of wrong guesses.
+  // (Came from a link: r.parsed.title is what got pulled from the caption, so
+  // naming it lets someone act on it rather than "try a shorter search".)
+  var WEAK_MATCH=0.5;  // the same bar the backend uses for "is this the same title"
+  if(!scored.length || scored[0].s < WEAK_MATCH){
     out.innerHTML=head+watchHtml(r)+'<div class="note"><p><strong>Nothing found for "'+
       esc(r.parsed.title)+'"</strong>'+(r.caption
         ? "That's what got pulled from the caption above — if it's wrong, type the real manga name instead."
         : "Try a shorter search — two or three words is usually enough, and the "+
           "suggestions appear as you type.")+
       '</p></div>'; return;}
-  var scored=rows.map(function(m){return {m:m,s:score(m,r.parsed.title,r.caption||r.parsed.title)};})
-                 .sort(function(a,b){return b.s-a.s;});
   var top=scored[0], next=scored[1]?scored[1].s:0;
   var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
   // A title opened from a search gets a Back button like every other page:
@@ -2881,7 +2884,7 @@ function render(r){
     'pick the right title.</p></div>'+
     picks.map(function(x,i){var m=x.m;
       return '<button class="pick" data-i="'+i+'">'+
-        (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'">':'<div class="ph"></div>')+
+        (m.cover?'<img loading="lazy" alt="" src="'+esc(m.cover)+'" referrerpolicy="no-referrer">':'<div class="ph"></div>')+
         '<div><h4>'+esc(m.title)+'</h4><p class="meta">'+esc(m.kind||"")+' · '+
         (m.chapters?m.chapters+" ch":"? ch")+' · '+esc(statusInfo(m.status).label)+'</p>'+
         '<p class="avail" id="pickavail-'+i+'">Checking if it\'s readable here…</p>'+
