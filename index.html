@@ -690,6 +690,9 @@ var AD_SLOT_HTML = "";  // older single slot; used for `detail` if that's empty
    answer is cached in localStorage so a reload applies it instantly.
    Fail-open: until something says otherwise, ads show as normal. */
 var AD_STATE = { readerAds: true, allAds: true };
+// Whether the backend's AI "identify from the plot" fallback is configured
+// (set from /api/config). Off until the server says it has a model key.
+var IDENTIFY_ON = false;
 try{ var _adcache=JSON.parse(localStorage.getItem("mw_adstate")); if(_adcache) AD_STATE=_adcache; }catch(e){}
 
 /* Cloudflare Turnstile — a free, privacy-friendly CAPTCHA replacement for
@@ -1810,18 +1813,36 @@ function deepenTitle(url, existingCaption){
   }).then(function(d){
     var all=[existingCaption,d.title,d.description,d.transcript].filter(Boolean).join("\n");
     var ch=exCh(all);
+    // The story itself (description + audio), kept for the AI "identify from
+    // the plot" fallback if a title search comes up empty.
+    var plot=[d.description,d.transcript].filter(Boolean).join("\n").trim();
     var labeled=extractLabeledTitle(d.description)||extractLabeledTitle(d.transcript);
     if(labeled) return {title:labeled, chapter:ch, confidence:"medium",
-                         caption:existingCaption||d.title||""};
+                         caption:existingCaption||d.title||"", plot:plot};
     // No explicit label -- safe to run the generic heuristic only on the
     // short pieces, never the raw description (see extractLabeledTitle's
     // comment above for why).
     var p=parseCaption([existingCaption,d.title,d.transcript].filter(Boolean).join("\n"));
     return {title:p.title, chapter:p.chapter===null?ch:p.chapter, confidence:p.confidence,
-            caption:existingCaption||d.title||""};
+            caption:existingCaption||d.title||"", plot:plot};
   }).catch(function(){
     return {title:null, chapter:null, confidence:"none", caption:existingCaption||""};
   });
+}
+
+/* Last resort when a title never turned up any real match: ask the backend's
+   AI to name the series from the plot text (its caption/description). Off
+   unless the server reports a model key (IDENTIFY_ON); returns a plain title
+   string or null. The caller still searches whatever comes back, so a wrong
+   guess just finds nothing — it's never shown on trust. */
+function identifyFromPlot(text){
+  if(!IDENTIFY_ON || !text || !text.trim()) return Promise.resolve(null);
+  return fetchTimeout(API_BASE+"/api/identify",
+    {method:"POST", headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({text:text.slice(0,2000)})}, 22000)
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){ return (d && d.title) || null; })
+    .catch(function(){ return null; });
 }
 
 /* ================= ui ================= */
@@ -2859,12 +2880,33 @@ function render(r){
   // naming it lets someone act on it rather than "try a shorter search".)
   var WEAK_MATCH=0.5;  // the same bar the backend uses for "is this the same title"
   if(!scored.length || scored[0].s < WEAK_MATCH){
-    out.innerHTML=head+watchHtml(r)+'<div class="note"><p><strong>Nothing found for "'+
-      esc(r.parsed.title)+'"</strong>'+(r.caption
-        ? "That's what got pulled from the caption above — if it's wrong, type the real manga name instead."
-        : "Try a shorter search — two or three words is usually enough, and the "+
-          "suggestions appear as you type.")+
-      '</p></div>'; return;}
+    var miss=function(){
+      out.innerHTML=head+watchHtml(r)+'<div class="note"><p><strong>Nothing found for "'+
+        esc(r.parsed.title)+'"</strong>'+(r.caption
+          ? "That's what got pulled from the caption above — if it's wrong, type the real manga name instead."
+          : "Try a shorter search — two or three words is usually enough, and the "+
+            "suggestions appear as you type.")+
+        '</p></div>';
+    };
+    // Haven't asked the AI yet, and it's switched on: let it name the series
+    // from the plot before giving up. Whatever it returns is searched like any
+    // other title, so a wrong guess just lands back here (identified:true then
+    // stops it asking twice).
+    var plot=(r.parsed&&r.parsed.plot)||r.caption||"";
+    if(IDENTIFY_ON && !r.identified && plot.trim()){
+      out.innerHTML=head+'<div class="spin">Trying to recognise it from the story…</div>';
+      identifyFromPlot(plot).then(function(guess){
+        if(!guess || guess.toLowerCase()===(r.parsed.title||"").toLowerCase()){ miss(); return; }
+        return search(guess).then(function(rows2){
+          render({kind:"results", rows:rows2, identified:true,
+                  parsed:{title:guess, chapter:r.parsed.chapter, confidence:"medium", plot:plot},
+                  caption:r.caption, author:r.author, platform:r.platform,
+                  embedUrl:r.embedUrl, embedTall:r.embedTall});
+        });
+      }).catch(miss);
+      return;
+    }
+    miss(); return;}
   var top=scored[0], next=scored[1]?scored[1].s:0;
   var sure=top.s>=.82 && (top.s-next)>=.08 && r.parsed.confidence!=="low";
   // A title opened from a search gets a Back button like every other page:
@@ -5396,6 +5438,7 @@ function getServerConfig(){
 // captcha, or every sign-up would fail its check.
 getServerConfig().then(function(cfg){
   if(cfg && cfg.turnstile===false) TURNSTILE_SITE_KEY="";
+  IDENTIFY_ON = !!(cfg && cfg.identify);
   // Apply the ad on/off switch the backend reports (set from the owner's
   // Telegram bot), and remember it so the next load applies instantly.
   if(cfg && cfg.ads){

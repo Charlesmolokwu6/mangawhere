@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from scrapers import aliases_for, find_best_source, lookup_video, scrape_chapter, scrape_series
 from scrapers.core import NotAPublicSite
 from scrapers import reddit, ytpost
-from server import adcontrol, auth, banners, cache, captcha, comments, db, health, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
+from server import adcontrol, auth, banners, cache, captcha, comments, db, health, identify, media, oauth, password_reset, poller, push, storyteller, title_pages, turnstile, watch
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -138,7 +138,7 @@ def _require_user(authorization: Optional[str]):
 # Limits are per minute, per address, per group of endpoints.
 RATE_LIMITS = {
     "scrape": (120, ("/api/find", "/api/scrape", "/api/series", "/api/trim", "/api/narrate/")),
-    "lookup": (60, ("/api/video-lookup", "/api/post-lookup", "/api/reddit-", "/api/post-image-title")),
+    "lookup": (60, ("/api/video-lookup", "/api/post-lookup", "/api/reddit-", "/api/post-image-title", "/api/identify")),
     "pictures": (240, ("/api/post-picture-title",)),
     "account": (20, ("/api/register", "/api/login", "/api/forgot-password", "/api/reset-password",
                      "/api/oauth/", "/api/avatar")),
@@ -645,6 +645,19 @@ async def api_post_image_title(url: str = Query(..., description="A YouTube post
     return JSONResponse(content=result, headers={"Cache-Control": "public, max-age=86400"})
 
 
+@app.post("/api/identify")
+async def api_identify(payload: dict):
+    """Last resort when the caption, the description's label and a title
+    search have all missed: name the series from the plot text with a
+    language model (server/identify.py). Returns {"title": null} when the
+    feature isn't configured or the model isn't confident."""
+    text = str((payload or {}).get("text") or "")
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Missing text")
+    title = await identify.identify_from_plot(text)
+    return JSONResponse({"title": title})
+
+
 @app.post("/api/client-log")
 async def api_client_log(payload: dict):
     """Something that failed on a reader's phone (the text reader not
@@ -830,6 +843,9 @@ async def api_config():
         # Whether ads are currently switched off (reader-only or all), as set
         # from the owner's Telegram bot (server/adcontrol.py).
         "ads": adcontrol.ad_state(),
+        # Whether the AI "identify from the plot" fallback is configured
+        # (LLM_API_KEY set); the page only tries it when this is true.
+        "identify": identify.available(),
     }
 
 
